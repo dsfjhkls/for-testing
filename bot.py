@@ -1,3 +1,22 @@
+from flask import Flask
+from threading import Thread
+
+# 렌더 포트 검사를 통과하기 위한 가짜 웹 서버
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Mafia Bot is running!"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+# 봇이 실행되기 전에 웹 서버를 먼저 켜줌
+keep_alive()
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -392,4 +411,5 @@ async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # 봇 토큰 입력
-bot.run(os.getenv('DISCORD_TOKEN'))
+import os
+bot.run(os.getenv("DISCORD_TOKEN"))
