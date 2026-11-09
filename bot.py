@@ -38,7 +38,16 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("🚨 [경고] SUPABASE_URL 또는 SUPABASE_KEY 환경 변수가 설정되지 않았습니다!")
+    supabase = None
+else:
+    try:
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("✅ Supabase 데이터베이스 연결 성공!")
+    except Exception as e:
+        print(f"🚨 Supabase 연결 실패: {e}")
+        supabase = None
 
 # ==========================================
 # 🚨 [점검 모드 설정 스위치]
@@ -47,6 +56,19 @@ MAINTENANCE_MODE = False
 
 # 쿨타임 관리를 위한 메모리 사전 (유저ID: 다음 수행 가능 시간)
 mission_cooldowns = {}
+
+# === 🎖️ 명예 포인트에 따른 직급 계산 함수 ===
+def get_user_rank(honor: int) -> str:
+    if honor >= 200:
+        return "👑 패밀리 언더보스"
+    elif honor >= 150:
+        return "⚔️ 간부 (지휘관)"
+    elif honor >= 100:
+        return "🥇 행동대장"
+    elif honor >= 50:
+        return "🥈 정식 행동대원"
+    else:
+        return "🥉 신입 행동대원"
 
 # === 🗺️ 4대 지역 정보 데이터 ===
 LOCATIONS = {
@@ -99,6 +121,9 @@ BLACK_MARKET_ITEMS = {
 # === 🗄️ Supabase DB 연동 함수들 ===
 def get_user_data(user_id: int) -> dict:
     str_id = str(user_id)
+    if not supabase:
+        return {"user_id": str_id, "money": 1000, "honor": 0, "location": "레벤하임", "inventory": {}}
+
     try:
         response = supabase.table("user_data").select("*").eq("user_id", str_id).execute()
         if response.data:
@@ -107,7 +132,6 @@ def get_user_data(user_id: int) -> dict:
                 user_info["inventory"] = {}
             return user_info
         
-        # 데이터가 없는 신규 유저 데이터 생성
         default_data = {
             "user_id": str_id,
             "money": 1000,
@@ -123,6 +147,7 @@ def get_user_data(user_id: int) -> dict:
 
 def update_user_stats(user_id: int, money_add: int, honor_add: int):
     str_id = str(user_id)
+    if not supabase: return
     user_info = get_user_data(user_id)
     
     new_money = user_info["money"] + money_add
@@ -135,12 +160,14 @@ def update_user_stats(user_id: int, money_add: int, honor_add: int):
 
 def update_user_location(user_id: int, new_location: str):
     str_id = str(user_id)
+    if not supabase: return
     supabase.table("user_data").update({
         "location": new_location
     }).eq("user_id", str_id).execute()
 
 def update_user_market_purchase(user_id: int, new_money: int, new_honor: int, inventory: dict):
     str_id = str(user_id)
+    if not supabase: return
     supabase.table("user_data").update({
         "money": new_money,
         "honor": new_honor,
@@ -193,6 +220,7 @@ class SelfJoinView(discord.ui.View):
 
         await user.add_roles(role)
         user_stats = get_user_data(user.id)
+        current_rank = get_user_rank(user_stats['honor'])
 
         embed = discord.Embed(
             title="🕶️ [패밀리 입단 환영]",
@@ -201,7 +229,7 @@ class SelfJoinView(discord.ui.View):
         )
         if user.avatar:
             embed.set_thumbnail(url=user.avatar.url)
-        embed.add_field(name="🗡️ 초기 직급", value="신입 행동대원", inline=True)
+        embed.add_field(name="🗡️ 초기 직급", value=current_rank, inline=True)
         embed.add_field(name="💰 초기 자금", value=f"${user_stats['money']:,}", inline=True)
         embed.add_field(name="🏆 조직 명예", value=f"{user_stats['honor']} pt", inline=True)
         embed.add_field(name="📍 시작 거점", value=user_stats['location'], inline=False)
@@ -250,7 +278,7 @@ class LeaveConfirmView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=self)
 
-# === 3. 임무 선택 뷰 (Supabase DB 아이템 버프 적용) ===
+# === 3. 임무 선택 뷰 (승급 알림 기능 포함) ===
 class MissionSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
         self.owner = owner
@@ -283,6 +311,7 @@ class MissionSelect(discord.ui.Select):
 
         user = interaction.user
         user_stats = get_user_data(user.id)
+        old_rank = get_user_rank(user_stats.get("honor", 0))
         inventory = user_stats.get("inventory", {})
 
         now = datetime.now()
@@ -294,11 +323,11 @@ class MissionSelect(discord.ui.Select):
                 await interaction.response.send_message(f"⏳ 체력을 회복 중입니다. **{mins}분 {secs}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
                 return
 
-        cooldown_seconds = 10
+        cooldown_minutes = 10
         if "⏱️ 고급 크로노그래프 시계" in inventory or "🛵 통신용 특수 바이크" in inventory:
-            cooldown_seconds = 5
+            cooldown_minutes = 5
 
-        mission_cooldowns[user.id] = now + timedelta(seconds=cooldown_seconds)
+        mission_cooldowns[user.id] = now + timedelta(minutes=cooldown_minutes)
 
         mission_data = {
             "mission_1": {"title": "🕶️ 타 조직 구역 비밀 조사", "success_rate": 80, "reward": (300, 700), "honor": 10},
@@ -336,8 +365,8 @@ class MissionSelect(discord.ui.Select):
         if "🍾 밀수된 고급 양주" in inventory:
             honor_mult += 1.0
             active_buffs.append("🍾 양주 (명예 2배)")
-        if cooldown_seconds == 5:
-            active_buffs.append("⏱️ 시간/이동 장비 (쿨타임 5초 적용)")
+        if cooldown_minutes == 5:
+            active_buffs.append("⏱️ 시간/이동 장비 (쿨타임 5분 적용)")
 
         final_success_rate = min(98, selected["success_rate"] + success_bonus)
         is_success = random.randint(1, 100) <= final_success_rate
@@ -351,6 +380,11 @@ class MissionSelect(discord.ui.Select):
             
             update_user_stats(user.id, earned_money, earned_honor)
             current_stats = get_user_data(user.id)
+            new_rank = get_user_rank(current_stats["honor"])
+
+            rank_up_msg = ""
+            if old_rank != new_rank:
+                rank_up_msg = f"\n\n🎉 **[조직 승급 축하]** **{old_rank}** ➔ **{new_rank}**(으)로 승급하셨습니다!"
 
             embed = discord.Embed(
                 title=f"🎯 [{current_loc}] 임무 성공",
@@ -359,8 +393,9 @@ class MissionSelect(discord.ui.Select):
                             f"📍 **수행 구역:** {current_loc}\n"
                             f"💰 **획득 보상금:** `${earned_money:,}`\n"
                             f"🏆 **획득 명예:** `+{earned_honor} pt`\n\n"
+                            f"🗡️ **현재 직급:** `{new_rank}`\n"
                             f"🏦 **보유 자금:** `${current_stats['money']:,}`\n"
-                            f"🏅 **총 명예:** `{current_stats['honor']} pt`",
+                            f"🏅 **총 명예:** `{current_stats['honor']} pt`{rank_up_msg}",
                 color=discord.Color.green()
             )
         else:
@@ -370,12 +405,14 @@ class MissionSelect(discord.ui.Select):
                 fail_msg = "⚠️ 경비대에 적발되어 임무 보상을 얻지 못했습니다."
 
             current_stats = get_user_data(user.id)
+            current_rank = get_user_rank(current_stats["honor"])
             embed = discord.Embed(
                 title=f"💥 [{current_loc}] 임무 실패",
                 description=f"**{user.mention}** 님이 선택하신 작전 도중 문제가 발생했습니다!{buff_desc}\n\n"
                             f"📌 **작전명:** {selected['title']}\n"
                             f"📍 **수행 구역:** {current_loc}\n"
                             f"{fail_msg}\n\n"
+                            f"🗡️ **현재 직급:** `{current_rank}`\n"
                             f"🏦 **보유 자금:** `${current_stats['money']:,}`\n"
                             f"🏅 **총 명예:** `{current_stats['honor']} pt`",
                 color=discord.Color.red()
@@ -423,10 +460,10 @@ class MarketSelect(discord.ui.Select):
             return
 
         user_info = get_user_data(interaction.user.id)
+        old_rank = get_user_rank(user_info.get("honor", 0))
         inventory = user_info.get("inventory", {})
         item_name = f"{target_item['emoji']} {target_item['name']}"
 
-        # 중복 구매 방지
         if inventory.get(item_name, 0) >= 1:
             await interaction.response.send_message(
                 f"⚠️ **{item_name}**은(는) 이미 소지 중입니다! 암시장 물품은 1개만 보유할 수 있습니다.", 
@@ -434,7 +471,6 @@ class MarketSelect(discord.ui.Select):
             )
             return
 
-        # 자금 부족 검사
         if user_info["money"] < target_item["price"]:
             await interaction.response.send_message(
                 f"❌ 자금이 부족합니다! (필요 자금: ${target_item['price']:,} / 보유 자금: ${user_info['money']:,})", 
@@ -442,7 +478,6 @@ class MarketSelect(discord.ui.Select):
             )
             return
 
-        # 결제 및 DB 저장
         new_money = user_info["money"] - target_item["price"]
         new_honor = user_info["honor"]
         inventory[item_name] = 1
@@ -456,14 +491,19 @@ class MarketSelect(discord.ui.Select):
                 del mission_cooldowns[interaction.user.id]
             special_effect_text = "\n⚡ **특수 효과:** 임무 쿨타임이 **즉시 초기화**되었습니다!"
 
-        # Supabase 클라우드 데이터베이스에 최종 업데이트
         update_user_market_purchase(interaction.user.id, new_money, new_honor, inventory)
+
+        new_rank = get_user_rank(new_honor)
+        rank_up_msg = ""
+        if old_rank != new_rank:
+            rank_up_msg = f"\n🎉 **[조직 승급]** 명예 상승으로 **{new_rank}**(으)로 승급하셨습니다!"
 
         embed = discord.Embed(
             title="💰 [암시장 거래 성사]",
-            description=f"**{interaction.user.mention}** 님이 **{item_name}**을(를) 구매하셨습니다!{special_effect_text}\n\n"
+            description=f"**{interaction.user.mention}** 님이 **{item_name}**을(를) 구매하셨습니다!{special_effect_text}{rank_up_msg}\n\n"
                         f"💵 **결제 금액:** `${target_item['price']:,}`\n"
                         f"🏦 **남은 자금:** `${new_money:,}`\n"
+                        f"🏆 **현재 명예:** `{new_honor} pt`\n"
                         f"🎒 **보유 상태:** `소지 중 (Supabase DB 영구 저장완료)`",
             color=discord.Color.gold()
         )
@@ -544,6 +584,7 @@ async def profile(interaction: discord.Interaction):
 
     user = interaction.user
     user_stats = get_user_data(user.id)
+    user_rank = get_user_rank(user_stats.get("honor", 0))
 
     embed = discord.Embed(
         title="🕵️‍♂️ [패밀리 비밀 문서] 조직원 신원 조회",
@@ -554,7 +595,7 @@ async def profile(interaction: discord.Interaction):
         embed.set_thumbnail(url=user.avatar.url)
 
     embed.add_field(name="📜 조직원명", value=user.mention, inline=True)
-    embed.add_field(name="🗡️ 직급", value="신입 행동대원", inline=True)
+    embed.add_field(name="🗡️ 현재 직급", value=user_rank, inline=True)
     embed.add_field(name="💰 보유 자금", value=f"${user_stats['money']:,}", inline=True)
     embed.add_field(name="🏆 조직 명예", value=f"{user_stats['honor']} pt", inline=True)
     embed.add_field(name="📍 현재 거점", value=user_stats.get('location', '레벤하임'), inline=False)
