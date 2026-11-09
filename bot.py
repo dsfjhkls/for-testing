@@ -323,11 +323,11 @@ class MissionSelect(discord.ui.Select):
                 await interaction.response.send_message(f"⏳ 체력을 회복 중입니다. **{mins}분 {secs}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
                 return
 
-        cooldown_minutes = 10
+        cooldown_seconds = 10
         if "⏱️ 고급 크로노그래프 시계" in inventory or "🛵 통신용 특수 바이크" in inventory:
-            cooldown_minutes = 5
+            cooldown_seconds = 5
 
-        mission_cooldowns[user.id] = now + timedelta(minutes=cooldown_minutes)
+        mission_cooldowns[user.id] = now + timedelta(seconds=cooldown_seconds)
 
         mission_data = {
             "mission_1": {"title": "🕶️ 타 조직 구역 비밀 조사", "success_rate": 80, "reward": (300, 700), "honor": 10},
@@ -365,8 +365,8 @@ class MissionSelect(discord.ui.Select):
         if "🍾 밀수된 고급 양주" in inventory:
             honor_mult += 1.0
             active_buffs.append("🍾 양주 (명예 2배)")
-        if cooldown_minutes == 5:
-            active_buffs.append("⏱️ 시간/이동 장비 (쿨타임 5분 적용)")
+        if cooldown_seconds == 5:
+            active_buffs.append("⏱️ 시간/이동 장비 (쿨타임 5초 적용)")
 
         final_success_rate = min(98, selected["success_rate"] + success_bonus)
         is_success = random.randint(1, 100) <= final_success_rate
