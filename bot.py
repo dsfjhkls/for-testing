@@ -294,7 +294,7 @@ class MissionSelect(discord.ui.Select):
                 await interaction.response.send_message(f"⏳ 체력을 회복 중입니다. **{mins}분 {secs}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
                 return
 
-        mission_cooldowns[user.id] = now + timedelta(minutes=10)
+        mission_cooldowns[user.id] = now + timedelta(seconds=30)
 
         mission_data = {
             "mission_1": {"title": "🕶️ 타 조직 구역 비밀 조사", "success_rate": 80, "reward": (300, 700), "honor": 10},
