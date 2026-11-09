@@ -1,12 +1,15 @@
 from flask import Flask
 from threading import Thread
+import os
+import random
+from datetime import datetime, timedelta
 
 # 렌더 포트 검사를 통과하기 위한 가짜 웹 서버
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Mafia Bot is running!"
+    return "Mafia Bot is running with Supabase DB!"
 
 def run():
     app.run(host='0.0.0.0', port=8080)
@@ -15,16 +18,12 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# 봇이 실행되기 전에 웹 서버를 먼저 켜줌
 keep_alive()
 
 import discord
 from discord.ext import commands
 from discord import app_commands
-import random
-import json
-import os
-from datetime import datetime, timedelta
+from supabase import create_client, Client
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -34,16 +33,20 @@ intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # ==========================================
+# 🌐 [Supabase DB 클라이언트 연결]
+# ==========================================
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ==========================================
 # 🚨 [점검 모드 설정 스위치]
 # ==========================================
 MAINTENANCE_MODE = False 
-# ==========================================
 
-# 쿨타임 관리를 위한 사전 (유저ID: 다음 수행 가능 시간)
+# 쿨타임 관리를 위한 메모리 사전 (유저ID: 다음 수행 가능 시간)
 mission_cooldowns = {}
-
-# 데이터 파일 경로
-DATA_FILE = "user_data.json"
 
 # === 🗺️ 4대 지역 정보 데이터 ===
 LOCATIONS = {
@@ -69,84 +72,80 @@ LOCATIONS = {
     }
 }
 
-# === 🛒 지역별 암시장 확장 아이템 목록 (확률 증가 아이템 추가) ===
+# === 🛒 지역별 암시장 아이템 목록 ===
 BLACK_MARKET_ITEMS = {
     "레벤하임": [
-        {"id": "gov_pass", "name": "치안국 위조 신분증", "price": 1200, "desc": "임무 실패 시 감시망을 피하는 신분증", "emoji": "🪪"},
-        {"id": "vip_cigar", "name": "고급 시가 패키지", "price": 500, "desc": "구매 즉시 조직 명예 +15 pt 획득", "emoji": "🚬"},
-        {"id": "pinstripe_suit", "name": "핀스트라이프 슈트", "price": 1800, "desc": "고위층 인맥 보너스로 임무 성공률 +12%", "emoji": "👔"}
+        {"id": "gov_pass", "name": "치안국 위조 신분증", "price": 1200, "desc": "실패 시 수배 방어", "emoji": "🪪"},
+        {"id": "vip_cigar", "name": "고급 시가 패키지", "price": 500, "desc": "즉시 명예 +15 pt", "emoji": "🚬"},
+        {"id": "chrono_watch", "name": "고급 크로노그래프 시계", "price": 2000, "desc": "임무 쿨타임 50% 단축 (5분)", "emoji": "⏱️"}
     ],
     "던베르크": [
-        {"id": "heavy_glove", "name": "강화 작업용 장갑", "price": 800, "desc": "임무 성공 시 획득 보상금 15% 증가", "emoji": "🥊"},
-        {"id": "boost_drink", "name": "고농축 자양강장제", "price": 400, "desc": "구매 즉시 임무 쿨타임 100% 초기화", "emoji": "🧪"},
-        {"id": "welding_mask", "name": "산업용 용접 마스크", "price": 1100, "desc": "치밀한 작업 지원으로 임무 성공률 +8%", "emoji": "⚙️"}
+        {"id": "heavy_glove", "name": "강화 작업용 장갑", "price": 800, "desc": "임무 보상금 +15%", "emoji": "🥊"},
+        {"id": "boost_drink", "name": "고농축 자양강장제", "price": 400, "desc": "쿨타임 즉시 초기화", "emoji": "🧪"},
+        {"id": "quick_bike", "name": "통신용 특수 바이크", "price": 2200, "desc": "기동력 상승으로 쿨타임 50% 단축 (5분)", "emoji": "🛵"}
     ],
     "블랙워드": [
-        {"id": "lockpick", "name": "녹슨 락픽 세트", "price": 300, "desc": "모든 비밀 임무 성공 확률 +10% 증가", "emoji": "🔑"},
-        {"id": "black_hood", "name": "익명의 덮개", "price": 600, "desc": "신원을 숨겨 임무 성공 확률 +10% 증가", "emoji": "🥷"},
-        {"id": "night_goggles", "name": "암시장 야시경", "price": 1500, "desc": "야간 침투 정확도로 임무 성공률 +15%", "emoji": "🗡️"}
+        {"id": "lockpick", "name": "녹슨 락픽 세트", "price": 300, "desc": "임무 성공률 +10%", "emoji": "🔑"},
+        {"id": "black_hood", "name": "익명의 덮개", "price": 600, "desc": "임무 성공률 +10%", "emoji": "🥷"},
+        {"id": "night_goggles", "name": "암시장 야시경", "price": 1500, "desc": "임무 성공률 +15%", "emoji": "🗡️"}
     ],
     "에르느코항": [
-        {"id": "smuggled_rum", "name": "밀수된 고급 양주", "price": 1500, "desc": "임무 성공 시 획득 명예 포인트 2배", "emoji": "🍾"},
-        {"id": "stealth_sonar", "name": "해상 무전 도청기", "price": 2000, "desc": "임무 성공률 +15% & 보상금 +10% 추가", "emoji": "📻"},
-        {"id": "pirate_map", "name": "해적 비밀 항해 지도", "price": 2500, "desc": "은밀한 우회 루트로 임무 성공률 +20%", "emoji": "🗺️"}
+        {"id": "smuggled_rum", "name": "밀수된 고급 양주", "price": 1500, "desc": "임무 명예 보상 2배", "emoji": "🍾"},
+        {"id": "stealth_sonar", "name": "해상 무전 도청기", "price": 2000, "desc": "성공률 +15% & 자금 +10%", "emoji": "📻"},
+        {"id": "pirate_map", "name": "해적 비밀 항해 지도", "price": 2500, "desc": "임무 성공률 +20%", "emoji": "🗺️"}
     ]
 }
 
-# === 📁 유저 데이터 불러오기 및 저장 함수 ===
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
+# === 🗄️ Supabase DB 연동 함수들 ===
 def get_user_data(user_id: int) -> dict:
-    data = load_data()
     str_id = str(user_id)
-    if str_id not in data:
-        data[str_id] = {"money": 1000, "honor": 0, "location": "레벤하임", "inventory": {}}
-        save_data(data)
-    
-    if isinstance(data[str_id], int):
-        data[str_id] = {"money": data[str_id], "honor": 0, "location": "레벤하임", "inventory": {}}
-        save_data(data)
-    if not isinstance(data[str_id], dict):
-        data[str_id] = {"money": 1000, "honor": 0, "location": "레벤하임", "inventory": {}}
-        save_data(data)
-    if "honor" not in data[str_id]:
-        data[str_id]["honor"] = 0
-        save_data(data)
-    if "location" not in data[str_id]:
-        data[str_id]["location"] = "레벤하임"
-        save_data(data)
-    if "inventory" not in data[str_id]:
-        data[str_id]["inventory"] = {}
-        save_data(data)
+    try:
+        response = supabase.table("user_data").select("*").eq("user_id", str_id).execute()
+        if response.data:
+            user_info = response.data[0]
+            if "inventory" not in user_info or user_info["inventory"] is None:
+                user_info["inventory"] = {}
+            return user_info
         
-    return data[str_id]
+        # 데이터가 없는 신규 유저 데이터 생성
+        default_data = {
+            "user_id": str_id,
+            "money": 1000,
+            "honor": 0,
+            "location": "레벤하임",
+            "inventory": {}
+        }
+        supabase.table("user_data").insert(default_data).execute()
+        return default_data
+    except Exception as e:
+        print(f"DB Error (get_user_data): {e}")
+        return {"user_id": str_id, "money": 1000, "honor": 0, "location": "레벤하임", "inventory": {}}
 
 def update_user_stats(user_id: int, money_add: int, honor_add: int):
-    data = load_data()
     str_id = str(user_id)
     user_info = get_user_data(user_id)
     
-    user_info["money"] += money_add
-    user_info["honor"] += honor_add
-    data[str_id] = user_info
-    save_data(data)
+    new_money = user_info["money"] + money_add
+    new_honor = user_info["honor"] + honor_add
+    
+    supabase.table("user_data").update({
+        "money": new_money,
+        "honor": new_honor
+    }).eq("user_id", str_id).execute()
 
 def update_user_location(user_id: int, new_location: str):
-    data = load_data()
     str_id = str(user_id)
-    user_info = get_user_data(user_id)
-    
-    user_info["location"] = new_location
-    data[str_id] = user_info
-    save_data(data)
+    supabase.table("user_data").update({
+        "location": new_location
+    }).eq("user_id", str_id).execute()
+
+def update_user_market_purchase(user_id: int, new_money: int, new_honor: int, inventory: dict):
+    str_id = str(user_id)
+    supabase.table("user_data").update({
+        "money": new_money,
+        "honor": new_honor,
+        "inventory": inventory
+    }).eq("user_id", str_id).execute()
 
 @bot.event
 async def on_ready():
@@ -193,7 +192,6 @@ class SelfJoinView(discord.ui.View):
             return
 
         await user.add_roles(role)
-        
         user_stats = get_user_data(user.id)
 
         embed = discord.Embed(
@@ -252,7 +250,7 @@ class LeaveConfirmView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=self)
 
-# === 3. 확률을 숨긴 드롭다운 메뉴 (확률 보너스 통합 계산) ===
+# === 3. 임무 선택 뷰 (Supabase DB 아이템 버프 적용) ===
 class MissionSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
         self.owner = owner
@@ -284,6 +282,8 @@ class MissionSelect(discord.ui.Select):
             return
 
         user = interaction.user
+        user_stats = get_user_data(user.id)
+        inventory = user_stats.get("inventory", {})
 
         now = datetime.now()
         if user.id in mission_cooldowns:
@@ -294,7 +294,11 @@ class MissionSelect(discord.ui.Select):
                 await interaction.response.send_message(f"⏳ 체력을 회복 중입니다. **{mins}분 {secs}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
                 return
 
-        mission_cooldowns[user.id] = now + timedelta(seconds=30)
+        cooldown_minutes = 10
+        if "⏱️ 고급 크로노그래프 시계" in inventory or "🛵 통신용 특수 바이크" in inventory:
+            cooldown_minutes = 5
+
+        mission_cooldowns[user.id] = now + timedelta(minutes=cooldown_minutes)
 
         mission_data = {
             "mission_1": {"title": "🕶️ 타 조직 구역 비밀 조사", "success_rate": 80, "reward": (300, 700), "honor": 10},
@@ -303,11 +307,8 @@ class MissionSelect(discord.ui.Select):
         }
 
         selected = mission_data[self.values[0]]
-        user_stats = get_user_data(user.id)
-        inventory = user_stats.get("inventory", {})
         current_loc = user_stats.get("location", "레벤하임")
 
-        # ⚡ [암시장 소지 아이템에 따른 실제 임무 버프 계산]
         success_bonus = 0
         money_mult = 1.0
         honor_mult = 1.0
@@ -319,12 +320,6 @@ class MissionSelect(discord.ui.Select):
         if "🥷 익명의 덮개" in inventory:
             success_bonus += 10
             active_buffs.append("🥷 덮개 (+10%)")
-        if "👔 핀스트라이프 슈트" in inventory:
-            success_bonus += 12
-            active_buffs.append("👔 슈트 (+12%)")
-        if "⚙️ 산업용 용접 마스크" in inventory:
-            success_bonus += 8
-            active_buffs.append("⚙️ 마스크 (+8%)")
         if "🗡️ 암시장 야시경" in inventory:
             success_bonus += 15
             active_buffs.append("🗡️ 야시경 (+15%)")
@@ -341,6 +336,8 @@ class MissionSelect(discord.ui.Select):
         if "🍾 밀수된 고급 양주" in inventory:
             honor_mult += 1.0
             active_buffs.append("🍾 양주 (명예 2배)")
+        if cooldown_minutes == 5:
+            active_buffs.append("⏱️ 시간/이동 장비 (쿨타임 5분 적용)")
 
         final_success_rate = min(98, selected["success_rate"] + success_bonus)
         is_success = random.randint(1, 100) <= final_success_rate
@@ -394,7 +391,7 @@ class MissionView(discord.ui.View):
         super().__init__(timeout=60)
         self.add_item(MissionSelect(owner=owner))
 
-# === 4. 암시장 드롭다운 및 중복 구매 방지 뷰 ===
+# === 4. 암시장 드롭다운 및 Supabase DB 저장 뷰 ===
 class MarketSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member, location: str):
         self.owner = owner
@@ -425,13 +422,11 @@ class MarketSelect(discord.ui.Select):
             await interaction.response.send_message("❌ 존재하지 않는 아이템입니다.", ephemeral=True)
             return
 
-        user_id = str(interaction.user.id)
-        data = load_data()
         user_info = get_user_data(interaction.user.id)
         inventory = user_info.get("inventory", {})
         item_name = f"{target_item['emoji']} {target_item['name']}"
 
-        # 🚫 [중복 구매 불가능 체크]
+        # 중복 구매 방지
         if inventory.get(item_name, 0) >= 1:
             await interaction.response.send_message(
                 f"⚠️ **{item_name}**은(는) 이미 소지 중입니다! 암시장 물품은 1개만 보유할 수 있습니다.", 
@@ -439,7 +434,7 @@ class MarketSelect(discord.ui.Select):
             )
             return
 
-        # 💰 자금 부족 검사
+        # 자금 부족 검사
         if user_info["money"] < target_item["price"]:
             await interaction.response.send_message(
                 f"❌ 자금이 부족합니다! (필요 자금: ${target_item['price']:,} / 보유 자금: ${user_info['money']:,})", 
@@ -447,30 +442,29 @@ class MarketSelect(discord.ui.Select):
             )
             return
 
-        # 결제 처리
-        user_info["money"] -= target_item["price"]
-        user_info["inventory"][item_name] = 1
+        # 결제 및 DB 저장
+        new_money = user_info["money"] - target_item["price"]
+        new_honor = user_info["honor"]
+        inventory[item_name] = 1
         
         special_effect_text = ""
-
-        # ⚡ 구매 즉시 적용 아이템
         if target_item['id'] == "vip_cigar":
-            user_info["honor"] += 15
+            new_honor += 15
             special_effect_text = "\n✨ **특수 효과:** 명예 포인트가 즉시 **+15 pt** 증가했습니다!"
         elif target_item['id'] == "boost_drink":
             if interaction.user.id in mission_cooldowns:
                 del mission_cooldowns[interaction.user.id]
             special_effect_text = "\n⚡ **특수 효과:** 임무 쿨타임이 **즉시 초기화**되었습니다!"
 
-        data[user_id] = user_info
-        save_data(data)
+        # Supabase 클라우드 데이터베이스에 최종 업데이트
+        update_user_market_purchase(interaction.user.id, new_money, new_honor, inventory)
 
         embed = discord.Embed(
             title="💰 [암시장 거래 성사]",
             description=f"**{interaction.user.mention}** 님이 **{item_name}**을(를) 구매하셨습니다!{special_effect_text}\n\n"
                         f"💵 **결제 금액:** `${target_item['price']:,}`\n"
-                        f"🏦 **남은 자금:** `${user_info['money']:,}`\n"
-                        f"🎒 **보유 상태:** `소지 중 (중복 구매 불가)`",
+                        f"🏦 **남은 자금:** `${new_money:,}`\n"
+                        f"🎒 **보유 상태:** `소지 중 (Supabase DB 영구 저장완료)`",
             color=discord.Color.gold()
         )
         if interaction.user.avatar:
@@ -576,7 +570,7 @@ async def profile(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed)
 
-# === 9. `/인벤토리` 명령어 ===
+# === 9. 🎒 `/인벤토리` 명령어 ===
 @bot.tree.command(name="인벤토리", description="[마피아 GM] 자신이 소지한 암시장 아이템과 적용 효과를 확인합니다.")
 async def show_inventory(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
@@ -601,6 +595,15 @@ async def show_inventory(interaction: discord.Interaction):
         inv_list = [f"• **{item}** `[보유 중]`" for item in inventory.keys()]
         
         embed.add_field(name="📦 보유 중인 전용 장비", value="\n".join(inv_list), inline=False)
+        embed.add_field(
+            name="💡 보유 아이템 주요 보너스 효과",
+            value="• **⏱️ 시계 / 🛵 바이크**: 임무 쿨타임 50% 단축 (5분)\n"
+                  "• **🔑 락픽 / 🥷 덮개 / 🗡️ 야시경 / 🗺️ 지도**: 성공 확률 증가 (+10% ~ +20%)\n"
+                  "• **📻 도청기**: 성공률 +15% & 보상 자금 +10%\n"
+                  "• **🥊 장갑**: 임무 성공 보상 자금 +15%\n"
+                  "• **🧪 자양강장제**: 구매 시 쿨타임 즉시 초기화",
+            inline=False
+        )
     else:
         embed.add_field(name="📦 소지 아이템 목록", value="*가방이 비어 있습니다. `/암시장`에서 전용 장비를 구해보세요!*", inline=False)
 
@@ -662,12 +665,18 @@ async def open_market(interaction: discord.Interaction):
     user_stats = get_user_data(user.id)
     current_loc = user_stats.get("location", "레벤하임")
     loc_emoji = LOCATIONS.get(current_loc, {}).get("emoji", "📍")
+    items = BLACK_MARKET_ITEMS.get(current_loc, [])
+
+    item_details = []
+    for item in items:
+        item_details.append(f"• **{item['emoji']} {item['name']}** (`${item['price']:,}`)\n  └ {item['desc']}")
 
     embed = discord.Embed(
         title=f"🕵️‍♂️ {loc_emoji} [{current_loc} 비밀 암시장]",
         description=f"**{user.name}** 님, 은밀한 음지 거래소에 오신 것을 환영합니다.\n"
                     f"현재 보유 자금: **${user_stats['money']:,}**\n\n"
-                    f"⚠️ *암시장 물품은 중복 보유가 불가능하며 종류별로 1개만 구매 가능합니다.*",
+                    f"📜 **[판매 물품 목록 및 상세 효과]**\n" + "\n".join(item_details) + "\n\n"
+                    f"⚠️ *암시장 물품은 중복 보유가 불가능하며 종류별 1개만 구매 가능합니다.*",
         color=discord.Color.gold()
     )
     if user.avatar:
@@ -732,5 +741,4 @@ async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # 봇 토큰 입력
-import os
 bot.run(os.getenv("DISCORD_TOKEN"))
