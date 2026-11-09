@@ -69,23 +69,23 @@ LOCATIONS = {
     }
 }
 
-# === 🛒 지역별 암시장 아이템 목록 ===
+# === 🛒 지역별 암시장 아이템 목록 및 실제 효과 정의 ===
 BLACK_MARKET_ITEMS = {
     "레벤하임": [
-        {"id": "gov_pass", "name": "치안국 위조 신분증", "price": 1200, "desc": "치안국의 감시를 피하는 위조 신분증", "emoji": "🪪"},
-        {"id": "vip_cigar", "name": "고급 시가 패키지", "price": 500, "desc": "고위층 커넥션용 기품 있는 시가", "emoji": "🚬"}
+        {"id": "gov_pass", "name": "치안국 위조 신분증", "price": 1200, "desc": "임무 실패 시 감시망을 피하는 신분증", "emoji": "🪪"},
+        {"id": "vip_cigar", "name": "고급 시가 패키지", "price": 500, "desc": "구매 즉시 조직 명예 +15 pt 획득", "emoji": "🚬"}
     ],
     "던베르크": [
-        {"id": "heavy_glove", "name": "강화 작업용 장갑", "price": 800, "desc": "공업지대의 묵직한 작업용 장갑", "emoji": "🥊"},
-        {"id": "boost_drink", "name": "고농축 자양강장제", "price": 400, "desc": "체력을 단숨에 회복시키는 특수 음료", "emoji": "🧪"}
+        {"id": "heavy_glove", "name": "강화 작업용 장갑", "price": 800, "desc": "임무 성공 시 획득 보상금 15% 증가", "emoji": "🥊"},
+        {"id": "boost_drink", "name": "고농축 자양강장제", "price": 400, "desc": "구매 즉시 임무 쿨타임 100% 초기화", "emoji": "🧪"}
     ],
     "블랙워드": [
-        {"id": "lockpick", "name": "녹슨 락픽 세트", "price": 300, "desc": "뒷골목 도둑들이 즐겨 쓰는 해킹 툴", "emoji": "🔑"},
-        {"id": "black_hood", "name": "익명의 덮개", "price": 600, "desc": "신원을 완벽히 은폐해 주는 검은 후드", "emoji": "🥷"}
+        {"id": "lockpick", "name": "녹슨 락픽 세트", "price": 300, "desc": "모든 비밀 임무 성공 확률 +10% 증가", "emoji": "🔑"},
+        {"id": "black_hood", "name": "익명의 덮개", "price": 600, "desc": "신원을 숨겨 임무 실패 위험도 -10% 감소", "emoji": "🥷"}
     ],
     "에르느코항": [
-        {"id": "smuggled_rum", "name": "밀수된 고급 양주", "price": 1500, "desc": "해상 선적을 통해 몰래 들어온 양주", "emoji": "🍾"},
-        {"id": "stealth_sonar", "name": "해상 무전 도청기", "price": 2000, "desc": "해상 정보와 주파수를 감청하는 장치", "emoji": "📻"}
+        {"id": "smuggled_rum", "name": "밀수된 고급 양주", "price": 1500, "desc": "임무 성공 시 획득 명예 포인트 2배", "emoji": "🍾"},
+        {"id": "stealth_sonar", "name": "해상 무전 도청기", "price": 2000, "desc": "임무 성공률 +15% & 보상금 +10% 추가", "emoji": "📻"}
     ]
 }
 
@@ -107,7 +107,6 @@ def get_user_data(user_id: int) -> dict:
         data[str_id] = {"money": 1000, "honor": 0, "location": "레벤하임", "inventory": {}}
         save_data(data)
     
-    # 기존 데이터 구조 호환성 및 미흡한 필드 자동 보완
     if isinstance(data[str_id], int):
         data[str_id] = {"money": data[str_id], "honor": 0, "location": "레벤하임", "inventory": {}}
         save_data(data)
@@ -249,7 +248,7 @@ class LeaveConfirmView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=self)
 
-# === 3. 확률을 숨긴 드롭다운 메뉴 (Select Menu) ===
+# === 3. 확률을 숨긴 드롭다운 메뉴 (Select Menu + 아이템 버프 시스템 연동) ===
 class MissionSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
         self.owner = owner
@@ -300,21 +299,49 @@ class MissionSelect(discord.ui.Select):
         }
 
         selected = mission_data[self.values[0]]
-        is_success = random.randint(1, 100) <= selected["success_rate"]
-        
         user_stats = get_user_data(user.id)
+        inventory = user_stats.get("inventory", {})
         current_loc = user_stats.get("location", "레벤하임")
 
+        # ⚡ [암시장 인벤토리 보유 아이템 특수 효과 계산]
+        success_bonus = 0
+        money_mult = 1.0
+        honor_mult = 1.0
+        active_buffs = []
+
+        if "🔑 녹슨 락픽 세트" in inventory:
+            success_bonus += 10
+            active_buffs.append("🔑 락픽 (+10% 성공률)")
+        if "🥷 익명의 덮개" in inventory:
+            success_bonus += 10
+            active_buffs.append("🥷 익명 덮개 (+10% 성공률)")
+        if "📻 해상 무전 도청기" in inventory:
+            success_bonus += 15
+            money_mult += 0.10
+            active_buffs.append("📻 무전 도청기 (+15% 성공률 & +10% 자금)")
+        if "🥊 강화 작업용 장갑" in inventory:
+            money_mult += 0.15
+            active_buffs.append("🥊 강화 장갑 (+15% 자금)")
+        if "🍾 밀수된 고급 양주" in inventory:
+            honor_mult += 1.0
+            active_buffs.append("🍾 고급 양주 (명예 2배)")
+
+        final_success_rate = min(95, selected["success_rate"] + success_bonus)
+        is_success = random.randint(1, 100) <= final_success_rate
+
+        buff_desc = f"\n✨ **적용된 아이템 효과:** {', '.join(active_buffs)}" if active_buffs else ""
+
         if is_success:
-            earned_money = random.randint(*selected["reward"])
-            earned_honor = selected["honor"]
+            base_money = random.randint(*selected["reward"])
+            earned_money = int(base_money * money_mult)
+            earned_honor = int(selected["honor"] * honor_mult)
             
             update_user_stats(user.id, earned_money, earned_honor)
             current_stats = get_user_data(user.id)
 
             embed = discord.Embed(
                 title=f"🎯 [{current_loc}] 임무 성공",
-                description=f"**{user.mention}** 님이 선택하신 작전을 완벽하게 완수했습니다!\n\n"
+                description=f"**{user.mention}** 님이 선택하신 작전을 완벽하게 완수했습니다!{buff_desc}\n\n"
                             f"📌 **작전명:** {selected['title']}\n"
                             f"📍 **수행 구역:** {current_loc}\n"
                             f"💰 **획득 보상금:** `${earned_money:,}`\n"
@@ -324,13 +351,19 @@ class MissionSelect(discord.ui.Select):
                 color=discord.Color.green()
             )
         else:
+            # 🪪 위조 신분증 보유 시 방어 효과
+            if "🪪 치안국 위조 신분증" in inventory:
+                fail_msg = "⚠️ 임무에 실패했으나 **🪪 치안국 위조 신분증** 덕분에 무사히 수배를 면했습니다!"
+            else:
+                fail_msg = "⚠️ 경비대에 적발되어 임무 보상을 얻지 못했습니다."
+
             current_stats = get_user_data(user.id)
             embed = discord.Embed(
                 title=f"💥 [{current_loc}] 임무 실패",
-                description=f"**{user.mention}** 님이 선택하신 작전 도중 경비대에 적발되었습니다!\n\n"
+                description=f"**{user.mention}** 님이 선택하신 작전 도중 문제가 발생했습니다!{buff_desc}\n\n"
                             f"📌 **작전명:** {selected['title']}\n"
                             f"📍 **수행 구역:** {current_loc}\n"
-                            f"⚠️ 보상과 명예를 얻지 못했습니다.\n\n"
+                            f"{fail_msg}\n\n"
                             f"🏦 **보유 자금:** `${current_stats['money']:,}`\n"
                             f"🏅 **총 명예:** `{current_stats['honor']} pt`",
                 color=discord.Color.red()
@@ -346,7 +379,7 @@ class MissionView(discord.ui.View):
         super().__init__(timeout=60)
         self.add_item(MissionSelect(owner=owner))
 
-# === 4. 암시장 드롭다운 및 뷰 ===
+# === 4. 암시장 드롭다운 및 구매 처리 뷰 ===
 class MarketSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member, location: str):
         self.owner = owner
@@ -381,6 +414,7 @@ class MarketSelect(discord.ui.Select):
         data = load_data()
         user_info = get_user_data(interaction.user.id)
 
+        # 자금 부족 검사
         if user_info["money"] < target_item["price"]:
             await interaction.response.send_message(
                 f"❌ 자금이 부족합니다! (필요 자금: ${target_item['price']:,} / 보유 자금: ${user_info['money']:,})", 
@@ -388,6 +422,7 @@ class MarketSelect(discord.ui.Select):
             )
             return
 
+        # 결제 진행
         user_info["money"] -= target_item["price"]
         
         if "inventory" not in user_info:
@@ -396,12 +431,23 @@ class MarketSelect(discord.ui.Select):
         item_name = f"{target_item['emoji']} {target_item['name']}"
         user_info["inventory"][item_name] = user_info["inventory"].get(item_name, 0) + 1
         
+        special_effect_text = ""
+
+        # ⚡ 구매 즉시 적용되는 특수 아이템 로직
+        if target_item['id'] == "vip_cigar":
+            user_info["honor"] += 15
+            special_effect_text = "\n✨ **특수 효과:** 명예 포인트가 즉시 **+15 pt** 증가했습니다!"
+        elif target_item['id'] == "boost_drink":
+            if interaction.user.id in mission_cooldowns:
+                del mission_cooldowns[interaction.user.id]
+            special_effect_text = "\n⚡ **특수 효과:** 임무 쿨타임이 **즉시 초기화**되었습니다!"
+
         data[user_id] = user_info
         save_data(data)
 
         embed = discord.Embed(
             title="💰 [암시장 거래 성사]",
-            description=f"**{interaction.user.mention}** 님이 **{item_name}**을(를) 구매하셨습니다!\n\n"
+            description=f"**{interaction.user.mention}** 님이 **{item_name}**을(를) 구매하셨습니다!{special_effect_text}\n\n"
                         f"💵 **결제 금액:** `${target_item['price']:,}`\n"
                         f"🏦 **남은 자금:** `${user_info['money']:,}`\n"
                         f"🎒 **보유 수량:** `{user_info['inventory'][item_name]}개`",
@@ -468,7 +514,7 @@ async def execute_mission(interaction: discord.Interaction):
     embed = discord.Embed(
         title=f"📂 [{current_loc}] 비밀 임무 작전 하달",
         description=f"**{user.mention}** 님, 현재 거점인 **{current_loc}**에서 수행할 작전을 직접 선택해 주십시오.\n\n"
-                    "⚠️ **주의:** 난이도가 높을수록 위험하지만 큰 보상과 높은 명예를 얻습니다.",
+                    "⚠️ **주의:** 소지한 암시장 아이템 효과가 작전 수행 시 자동으로 반영됩니다.",
         color=discord.Color.dark_purple()
     )
     if user.avatar:
@@ -499,7 +545,6 @@ async def profile(interaction: discord.Interaction):
     embed.add_field(name="🏆 조직 명예", value=f"{user_stats['honor']} pt", inline=True)
     embed.add_field(name="📍 현재 거점", value=user_stats.get('location', '레벤하임'), inline=False)
     
-    # 인벤토리 항목 가공
     inventory = user_stats.get("inventory", {})
     if inventory:
         inv_text = "\n".join([f"• **{item}**: `{count}개`" for item, count in inventory.items()])
