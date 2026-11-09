@@ -392,4 +392,4 @@ async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # 봇 토큰 입력
-bot.run('MTU2OTI1NTQ4MzE0NjEwOTA2OQ.G0Fpku.39bOSuGsuLTDVOqI7eWt_FUDxFLxLEPeq3oass')
+bot.run(os.getenv('DISCORD_TOKEN'))
