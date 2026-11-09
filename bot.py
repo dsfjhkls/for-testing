@@ -69,6 +69,26 @@ LOCATIONS = {
     }
 }
 
+# === 🛒 지역별 암시장 아이템 목록 ===
+BLACK_MARKET_ITEMS = {
+    "레벤하임": [
+        {"id": "gov_pass", "name": "치안국 위조 신분증", "price": 1200, "desc": "치안국의 감시를 피하는 위조 신분증", "emoji": "🪪"},
+        {"id": "vip_cigar", "name": "고급 시가 패키지", "price": 500, "desc": "고위층 커넥션용 기품 있는 시가", "emoji": "🚬"}
+    ],
+    "던베르크": [
+        {"id": "heavy_glove", "name": "강화 작업용 장갑", "price": 800, "desc": "공업지대의 묵직한 작업용 장갑", "emoji": "🥊"},
+        {"id": "boost_drink", "name": "고농축 자양강장제", "price": 400, "desc": "체력을 단숨에 회복시키는 특수 음료", "emoji": "🧪"}
+    ],
+    "블랙워드": [
+        {"id": "lockpick", "name": "녹슨 락픽 세트", "price": 300, "desc": "뒷골목 도둑들이 즐겨 쓰는 해킹 툴", "emoji": "🔑"},
+        {"id": "black_hood", "name": "익명의 덮개", "price": 600, "desc": "신원을 완벽히 은폐해 주는 검은 후드", "emoji": "🥷"}
+    ],
+    "에르느코항": [
+        {"id": "smuggled_rum", "name": "밀수된 고급 양주", "price": 1500, "desc": "해상 선적을 통해 몰래 들어온 양주", "emoji": "🍾"},
+        {"id": "stealth_sonar", "name": "해상 무전 도청기", "price": 2000, "desc": "해상 정보와 주파수를 감청하는 장치", "emoji": "📻"}
+    ]
+}
+
 # === 📁 유저 데이터 불러오기 및 저장 함수 ===
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -84,22 +104,24 @@ def get_user_data(user_id: int) -> dict:
     data = load_data()
     str_id = str(user_id)
     if str_id not in data:
-        # 초기 자금 $1,000, 명예 0pt, 기본 위치 레벤하임
-        data[str_id] = {"money": 1000, "honor": 0, "location": "레벤하임"}
+        data[str_id] = {"money": 1000, "honor": 0, "location": "레벤하임", "inventory": {}}
         save_data(data)
     
     # 기존 데이터 구조 호환성 및 미흡한 필드 자동 보완
     if isinstance(data[str_id], int):
-        data[str_id] = {"money": data[str_id], "honor": 0, "location": "레벤하임"}
+        data[str_id] = {"money": data[str_id], "honor": 0, "location": "레벤하임", "inventory": {}}
         save_data(data)
     if not isinstance(data[str_id], dict):
-        data[str_id] = {"money": 1000, "honor": 0, "location": "레벤하임"}
+        data[str_id] = {"money": 1000, "honor": 0, "location": "레벤하임", "inventory": {}}
         save_data(data)
     if "honor" not in data[str_id]:
         data[str_id]["honor"] = 0
         save_data(data)
     if "location" not in data[str_id]:
         data[str_id]["location"] = "레벤하임"
+        save_data(data)
+    if "inventory" not in data[str_id]:
+        data[str_id]["inventory"] = {}
         save_data(data)
         
     return data[str_id]
@@ -324,7 +346,78 @@ class MissionView(discord.ui.View):
         super().__init__(timeout=60)
         self.add_item(MissionSelect(owner=owner))
 
-# === 4. `/가입` 명령어 ===
+# === 4. 암시장 드롭다운 및 뷰 ===
+class MarketSelect(discord.ui.Select):
+    def __init__(self, owner: discord.Member, location: str):
+        self.owner = owner
+        self.location = location
+        items = BLACK_MARKET_ITEMS.get(location, [])
+        
+        options = []
+        for item in items:
+            options.append(discord.SelectOption(
+                label=f"{item['name']} (${item['price']:,})",
+                description=item['desc'],
+                emoji=item['emoji'],
+                value=item['id']
+            ))
+            
+        super().__init__(placeholder=f"🛒 {location} 암시장 상품을 선택하세요...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user != self.owner:
+            await interaction.response.send_message("❌ 타인의 거래 창은 조작할 수 없습니다.", ephemeral=True)
+            return
+
+        selected_id = self.values[0]
+        items = BLACK_MARKET_ITEMS.get(self.location, [])
+        target_item = next((item for item in items if item['id'] == selected_id), None)
+
+        if not target_item:
+            await interaction.response.send_message("❌ 존재하지 않는 아이템입니다.", ephemeral=True)
+            return
+
+        user_id = str(interaction.user.id)
+        data = load_data()
+        user_info = get_user_data(interaction.user.id)
+
+        if user_info["money"] < target_item["price"]:
+            await interaction.response.send_message(
+                f"❌ 자금이 부족합니다! (필요 자금: ${target_item['price']:,} / 보유 자금: ${user_info['money']:,})", 
+                ephemeral=True
+            )
+            return
+
+        user_info["money"] -= target_item["price"]
+        
+        if "inventory" not in user_info:
+            user_info["inventory"] = {}
+
+        item_name = f"{target_item['emoji']} {target_item['name']}"
+        user_info["inventory"][item_name] = user_info["inventory"].get(item_name, 0) + 1
+        
+        data[user_id] = user_info
+        save_data(data)
+
+        embed = discord.Embed(
+            title="💰 [암시장 거래 성사]",
+            description=f"**{interaction.user.mention}** 님이 **{item_name}**을(를) 구매하셨습니다!\n\n"
+                        f"💵 **결제 금액:** `${target_item['price']:,}`\n"
+                        f"🏦 **남은 자금:** `${user_info['money']:,}`\n"
+                        f"🎒 **보유 수량:** `{user_info['inventory'][item_name]}개`",
+            color=discord.Color.gold()
+        )
+        if interaction.user.avatar:
+            embed.set_thumbnail(url=interaction.user.avatar.url)
+
+        await interaction.response.edit_message(embed=embed, view=None)
+
+class MarketView(discord.ui.View):
+    def __init__(self, owner: discord.Member, location: str):
+        super().__init__(timeout=60)
+        self.add_item(MarketSelect(owner=owner, location=location))
+
+# === 5. `/가입` 명령어 ===
 @bot.tree.command(name="가입", description="[마피아 GM] 패밀리 가입 버튼을 소환합니다.")
 async def join_family(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
@@ -337,7 +430,7 @@ async def join_family(interaction: discord.Interaction):
     view = SelfJoinView()
     await interaction.response.send_message(embed=embed, view=view)
 
-# === 5. `/탈퇴` 명령어 ===
+# === 6. `/탈퇴` 명령어 ===
 @bot.tree.command(name="탈퇴", description="[마피아 GM] 패밀리 탈퇴 절차를 진행합니다.")
 async def leave_family(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
@@ -357,7 +450,7 @@ async def leave_family(interaction: discord.Interaction):
     view = LeaveConfirmView(target_user=user)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-# === 6. `/임무` 명령어 ===
+# === 7. `/임무` 명령어 ===
 @bot.tree.command(name="임무", description="[조직원 전용] 원하는 비밀 임무를 직접 선택하여 수행합니다.")
 async def execute_mission(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
@@ -384,8 +477,8 @@ async def execute_mission(interaction: discord.Interaction):
     view = MissionView(owner=user)
     await interaction.response.send_message(embed=embed, view=view)
 
-# === 7. `/프로필` 명령어 ===
-@bot.tree.command(name="프로필", description="[마피아 GM] 패밀리 조직원 신원 조회 서류를 확인합니다.")
+# === 8. `/프로필` 명령어 (인벤토리 표기 연동) ===
+@bot.tree.command(name="프로필", description="[마피아 GM] 패밀리 조직원 신원 조회 서류 및 인벤토리를 확인합니다.")
 async def profile(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
 
@@ -405,11 +498,20 @@ async def profile(interaction: discord.Interaction):
     embed.add_field(name="💰 보유 자금", value=f"${user_stats['money']:,}", inline=True)
     embed.add_field(name="🏆 조직 명예", value=f"{user_stats['honor']} pt", inline=True)
     embed.add_field(name="📍 현재 거점", value=user_stats.get('location', '레벤하임'), inline=False)
+    
+    # 인벤토리 항목 가공
+    inventory = user_stats.get("inventory", {})
+    if inventory:
+        inv_text = "\n".join([f"• **{item}**: `{count}개`" for item, count in inventory.items()])
+    else:
+        inv_text = "*소지한 아이템이 없습니다.*"
+        
+    embed.add_field(name="🎒 소지품 (인벤토리)", value=inv_text, inline=False)
     embed.set_footer(text=f"문서 요청자: {user.name}")
 
     await interaction.response.send_message(embed=embed)
 
-# === 8. 🆕 `/이동` 명령어 추가 ===
+# === 9. `/이동` 명령어 ===
 @bot.tree.command(name="이동", description="[마피아 GM] 칼렌데 내의 다른 지역으로 이동합니다.")
 @app_commands.choices(지역=[
     app_commands.Choice(name="🏛️ 레벤하임 (수도 / 시작 지점)", value="레벤하임"),
@@ -430,7 +532,6 @@ async def move_location(interaction: discord.Interaction, 지역: app_commands.C
     selected_loc = 지역.value
     loc_info = LOCATIONS[selected_loc]
 
-    # 위치 정보 업데이터
     update_user_location(user.id, selected_loc)
 
     embed = discord.Embed(
@@ -447,7 +548,36 @@ async def move_location(interaction: discord.Interaction, 지역: app_commands.C
 
     await interaction.response.send_message(embed=embed)
 
-# === 9. `/추방` 명령어 ===
+# === 10. `/암시장` 명령어 ===
+@bot.tree.command(name="암시장", description="[조직원 전용] 현재 위치한 지역의 밀거래 암시장에 입장합니다.")
+async def open_market(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+
+    user = interaction.user
+    role = discord.utils.get(interaction.guild.roles, name="조직원")
+
+    if not role or role not in user.roles:
+        await interaction.response.send_message("❌ 패밀리 조직원만 암시장에 접근할 수 있습니다. `/가입`을 먼저 해주세요.", ephemeral=True)
+        return
+
+    user_stats = get_user_data(user.id)
+    current_loc = user_stats.get("location", "레벤하임")
+    loc_emoji = LOCATIONS.get(current_loc, {}).get("emoji", "📍")
+
+    embed = discord.Embed(
+        title=f"🕵️‍♂️ {loc_emoji} [{current_loc} 비밀 암시장]",
+        description=f"**{user.name}** 님, 은밀한 음지 거래소에 오신 것을 환영합니다.\n"
+                    f"현재 보유 자금: **${user_stats['money']:,}**\n\n"
+                    f"아래 메뉴에서 물품을 선택하여 구매할 수 있습니다.",
+        color=discord.Color.gold()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+
+    view = MarketView(owner=user, location=current_loc)
+    await interaction.response.send_message(embed=embed, view=view)
+
+# === 11. `/추방` 명령어 ===
 @bot.tree.command(name="추방", description="[간부 전용] 규칙을 어긴 조직원을 패밀리에서 강제로 추방합니다.")
 @app_commands.describe(member="추방할 조직원", reason="추방 사유 (선택 사항)")
 async def kick_member(interaction: discord.Interaction, member: discord.Member, reason: str = "규율 위반 및 배신"):
@@ -478,7 +608,7 @@ async def kick_member(interaction: discord.Interaction, member: discord.Member, 
 
     await interaction.response.send_message(embed=embed)
 
-# === 10. `/도움말` 명령어 ===
+# === 12. `/도움말` 명령어 ===
 @bot.tree.command(name="도움말", description="[마피아 GM] 봇의 명령어 가이드를 확인합니다.")
 async def help_command(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
@@ -490,9 +620,10 @@ async def help_command(interaction: discord.Interaction):
     )
     embed.add_field(name="🔫 `/가입`", value="패밀리 입단 신청 버튼을 불러옵니다.", inline=False)
     embed.add_field(name="🚪 `/탈퇴`", value="패밀리 탈퇴 경고 확인 후 역할을 해임합니다.", inline=False)
-    embed.add_field(name="📍 `/이동`", value="칼렌데 내부 4개 핵심 거점(레벤하임, 던베르크, 블랙워드, 에르느코항)으로 이동합니다.", inline=False)
+    embed.add_field(name="📍 `/이동`", value="칼렌데 내부 4개 핵심 거점으로 이동합니다.", inline=False)
+    embed.add_field(name="🕵️‍♂️ `/암시장`", value="현재 머무는 거점의 비밀 암시장에서 특수 밀수품을 거래합니다.", inline=False)
     embed.add_field(name="🗡️ `/임무`", value="원하는 비밀 작전을 직접 선택하여 수행합니다. (10분 쿨타임)", inline=False)
-    embed.add_field(name="🕵️‍♂️ `/프로필`", value="나의 조직원 신원 서류, 보유 자금, 명예 및 현재 위치를 확인합니다.", inline=False)
+    embed.add_field(name="🕵️‍♂️ `/프로필`", value="나의 조직원 신원 서류, 자금, 명예, 위치 및 소지품을 확인합니다.", inline=False)
     embed.add_field(name="⚖️ `/추방 [유저]`", value="[간부 전용] 대상 조직원을 강제 추방합니다.", inline=False)
     embed.add_field(name="❓ `/도움말`", value="봇의 명령어 가이드를 확인합니다.", inline=False)
     
