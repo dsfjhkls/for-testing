@@ -69,23 +69,27 @@ LOCATIONS = {
     }
 }
 
-# === 🛒 지역별 암시장 아이템 목록 및 실제 효과 정의 ===
+# === 🛒 지역별 암시장 확장 아이템 목록 (확률 증가 아이템 추가) ===
 BLACK_MARKET_ITEMS = {
     "레벤하임": [
         {"id": "gov_pass", "name": "치안국 위조 신분증", "price": 1200, "desc": "임무 실패 시 감시망을 피하는 신분증", "emoji": "🪪"},
-        {"id": "vip_cigar", "name": "고급 시가 패키지", "price": 500, "desc": "구매 즉시 조직 명예 +15 pt 획득", "emoji": "🚬"}
+        {"id": "vip_cigar", "name": "고급 시가 패키지", "price": 500, "desc": "구매 즉시 조직 명예 +15 pt 획득", "emoji": "🚬"},
+        {"id": "pinstripe_suit", "name": "핀스트라이프 슈트", "price": 1800, "desc": "고위층 인맥 보너스로 임무 성공률 +12%", "emoji": "👔"}
     ],
     "던베르크": [
         {"id": "heavy_glove", "name": "강화 작업용 장갑", "price": 800, "desc": "임무 성공 시 획득 보상금 15% 증가", "emoji": "🥊"},
-        {"id": "boost_drink", "name": "고농축 자양강장제", "price": 400, "desc": "구매 즉시 임무 쿨타임 100% 초기화", "emoji": "🧪"}
+        {"id": "boost_drink", "name": "고농축 자양강장제", "price": 400, "desc": "구매 즉시 임무 쿨타임 100% 초기화", "emoji": "🧪"},
+        {"id": "welding_mask", "name": "산업용 용접 마스크", "price": 1100, "desc": "치밀한 작업 지원으로 임무 성공률 +8%", "emoji": "⚙️"}
     ],
     "블랙워드": [
         {"id": "lockpick", "name": "녹슨 락픽 세트", "price": 300, "desc": "모든 비밀 임무 성공 확률 +10% 증가", "emoji": "🔑"},
-        {"id": "black_hood", "name": "익명의 덮개", "price": 600, "desc": "신원을 숨겨 임무 실패 위험도 -10% 감소", "emoji": "🥷"}
+        {"id": "black_hood", "name": "익명의 덮개", "price": 600, "desc": "신원을 숨겨 임무 성공 확률 +10% 증가", "emoji": "🥷"},
+        {"id": "night_goggles", "name": "암시장 야시경", "price": 1500, "desc": "야간 침투 정확도로 임무 성공률 +15%", "emoji": "🗡️"}
     ],
     "에르느코항": [
         {"id": "smuggled_rum", "name": "밀수된 고급 양주", "price": 1500, "desc": "임무 성공 시 획득 명예 포인트 2배", "emoji": "🍾"},
-        {"id": "stealth_sonar", "name": "해상 무전 도청기", "price": 2000, "desc": "임무 성공률 +15% & 보상금 +10% 추가", "emoji": "📻"}
+        {"id": "stealth_sonar", "name": "해상 무전 도청기", "price": 2000, "desc": "임무 성공률 +15% & 보상금 +10% 추가", "emoji": "📻"},
+        {"id": "pirate_map", "name": "해적 비밀 항해 지도", "price": 2500, "desc": "은밀한 우회 루트로 임무 성공률 +20%", "emoji": "🗺️"}
     ]
 }
 
@@ -248,7 +252,7 @@ class LeaveConfirmView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=self)
 
-# === 3. 확률을 숨긴 드롭다운 메뉴 (Select Menu + 아이템 버프 시스템 연동) ===
+# === 3. 확률을 숨긴 드롭다운 메뉴 (확률 보너스 통합 계산) ===
 class MissionSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
         self.owner = owner
@@ -303,7 +307,7 @@ class MissionSelect(discord.ui.Select):
         inventory = user_stats.get("inventory", {})
         current_loc = user_stats.get("location", "레벤하임")
 
-        # ⚡ [암시장 인벤토리 보유 아이템 특수 효과 계산]
+        # ⚡ [암시장 소지 아이템에 따른 실제 임무 버프 계산]
         success_bonus = 0
         money_mult = 1.0
         honor_mult = 1.0
@@ -311,25 +315,37 @@ class MissionSelect(discord.ui.Select):
 
         if "🔑 녹슨 락픽 세트" in inventory:
             success_bonus += 10
-            active_buffs.append("🔑 락픽 (+10% 성공률)")
+            active_buffs.append("🔑 락픽 (+10%)")
         if "🥷 익명의 덮개" in inventory:
             success_bonus += 10
-            active_buffs.append("🥷 익명 덮개 (+10% 성공률)")
+            active_buffs.append("🥷 덮개 (+10%)")
+        if "👔 핀스트라이프 슈트" in inventory:
+            success_bonus += 12
+            active_buffs.append("👔 슈트 (+12%)")
+        if "⚙️ 산업용 용접 마스크" in inventory:
+            success_bonus += 8
+            active_buffs.append("⚙️ 마스크 (+8%)")
+        if "🗡️ 암시장 야시경" in inventory:
+            success_bonus += 15
+            active_buffs.append("🗡️ 야시경 (+15%)")
+        if "🗺️ 해적 비밀 항해 지도" in inventory:
+            success_bonus += 20
+            active_buffs.append("🗺️ 항해 지도 (+20%)")
         if "📻 해상 무전 도청기" in inventory:
             success_bonus += 15
             money_mult += 0.10
-            active_buffs.append("📻 무전 도청기 (+15% 성공률 & +10% 자금)")
+            active_buffs.append("📻 도청기 (+15% 성공률 & +10% 자금)")
         if "🥊 강화 작업용 장갑" in inventory:
             money_mult += 0.15
-            active_buffs.append("🥊 강화 장갑 (+15% 자금)")
+            active_buffs.append("🥊 장갑 (+15% 자금)")
         if "🍾 밀수된 고급 양주" in inventory:
             honor_mult += 1.0
-            active_buffs.append("🍾 고급 양주 (명예 2배)")
+            active_buffs.append("🍾 양주 (명예 2배)")
 
-        final_success_rate = min(95, selected["success_rate"] + success_bonus)
+        final_success_rate = min(98, selected["success_rate"] + success_bonus)
         is_success = random.randint(1, 100) <= final_success_rate
 
-        buff_desc = f"\n✨ **적용된 아이템 효과:** {', '.join(active_buffs)}" if active_buffs else ""
+        buff_desc = f"\n✨ **적용된 보너스:** {', '.join(active_buffs)}" if active_buffs else ""
 
         if is_success:
             base_money = random.randint(*selected["reward"])
@@ -378,7 +394,7 @@ class MissionView(discord.ui.View):
         super().__init__(timeout=60)
         self.add_item(MissionSelect(owner=owner))
 
-# === 4. 암시장 드롭다운 및 구매 처리 뷰 ===
+# === 4. 암시장 드롭다운 및 중복 구매 방지 뷰 ===
 class MarketSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member, location: str):
         self.owner = owner
@@ -412,7 +428,18 @@ class MarketSelect(discord.ui.Select):
         user_id = str(interaction.user.id)
         data = load_data()
         user_info = get_user_data(interaction.user.id)
+        inventory = user_info.get("inventory", {})
+        item_name = f"{target_item['emoji']} {target_item['name']}"
 
+        # 🚫 [중복 구매 불가능 체크]
+        if inventory.get(item_name, 0) >= 1:
+            await interaction.response.send_message(
+                f"⚠️ **{item_name}**은(는) 이미 소지 중입니다! 암시장 물품은 1개만 보유할 수 있습니다.", 
+                ephemeral=True
+            )
+            return
+
+        # 💰 자금 부족 검사
         if user_info["money"] < target_item["price"]:
             await interaction.response.send_message(
                 f"❌ 자금이 부족합니다! (필요 자금: ${target_item['price']:,} / 보유 자금: ${user_info['money']:,})", 
@@ -420,16 +447,13 @@ class MarketSelect(discord.ui.Select):
             )
             return
 
+        # 결제 처리
         user_info["money"] -= target_item["price"]
-        
-        if "inventory" not in user_info:
-            user_info["inventory"] = {}
-
-        item_name = f"{target_item['emoji']} {target_item['name']}"
-        user_info["inventory"][item_name] = user_info["inventory"].get(item_name, 0) + 1
+        user_info["inventory"][item_name] = 1
         
         special_effect_text = ""
 
+        # ⚡ 구매 즉시 적용 아이템
         if target_item['id'] == "vip_cigar":
             user_info["honor"] += 15
             special_effect_text = "\n✨ **특수 효과:** 명예 포인트가 즉시 **+15 pt** 증가했습니다!"
@@ -446,7 +470,7 @@ class MarketSelect(discord.ui.Select):
             description=f"**{interaction.user.mention}** 님이 **{item_name}**을(를) 구매하셨습니다!{special_effect_text}\n\n"
                         f"💵 **결제 금액:** `${target_item['price']:,}`\n"
                         f"🏦 **남은 자금:** `${user_info['money']:,}`\n"
-                        f"🎒 **보유 수량:** `{user_info['inventory'][item_name]}개`",
+                        f"🎒 **보유 상태:** `소지 중 (중복 구매 불가)`",
             color=discord.Color.gold()
         )
         if interaction.user.avatar:
@@ -543,7 +567,7 @@ async def profile(interaction: discord.Interaction):
     
     inventory = user_stats.get("inventory", {})
     if inventory:
-        inv_text = "\n".join([f"• **{item}**: `{count}개`" for item, count in inventory.items()])
+        inv_text = "\n".join([f"• **{item}**: `소지 중`" for item in inventory.keys()])
     else:
         inv_text = "*소지한 아이템이 없습니다.*"
         
@@ -553,7 +577,7 @@ async def profile(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 # === 9. `/인벤토리` 명령어 ===
-@bot.tree.command(name="인벤토리", description="[마피아 GM] 자신이 소지한 암시장 아이템과 보유 수량을 확인합니다.")
+@bot.tree.command(name="인벤토리", description="[마피아 GM] 자신이 소지한 암시장 아이템과 적용 효과를 확인합니다.")
 async def show_inventory(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
 
@@ -569,27 +593,24 @@ async def show_inventory(interaction: discord.Interaction):
 
     embed = discord.Embed(
         title=f"🎒 [{user.name} 님의 장비 가방]",
-        description=f"현재 **${user_stats['money']:,}** 자금을 보유 중이며, 아래는 소지 중인 밀수품 목록입니다.\n",
+        description=f"현재 **${user_stats['money']:,}** 자금을 보유 중이며, 암시장 장비는 **중복 소지가 불가능**합니다.\n",
         color=discord.Color.dark_green()
     )
 
     if inventory:
-        inv_list = []
-        for item_name, count in inventory.items():
-            inv_list.append(f"• **{item_name}**: `{count}개`")
+        inv_list = [f"• **{item}** `[보유 중]`" for item in inventory.keys()]
         
-        embed.add_field(name="📦 소지 아이템 목록", value="\n".join(inv_list), inline=False)
+        embed.add_field(name="📦 보유 중인 전용 장비", value="\n".join(inv_list), inline=False)
         embed.add_field(
-            name="💡 아이템 효과 안내",
-            value="• **🪪 신분증**: 임무 실패 시 수배 방어\n"
-                  "• **🥊 장갑**: 임무 자금 +15%\n"
-                  "• **🔑 락픽 / 🥷 덮개**: 임무 성공률 +10%\n"
-                  "• **📻 도청기**: 성공률 +15% & 자금 +10%\n"
-                  "• **🍾 양주**: 임무 성공 명예 2배",
+            name="💡 보유 아이템 주요 보너스 효과",
+            value="• **👔 슈트 / ⚙️ 마스크 / 🔑 락픽 / 🥷 덮개 / 🗡️ 야시경 / 🗺️ 지도**: 임무 성공 확률 크게 증가 (+8% ~ +20%)\n"
+                  "• **📻 도청기**: 성공률 +15% & 보상 자금 +10%\n"
+                  "• **🥊 장갑**: 임무 성공 보상 자금 +15%\n"
+                  "• **🍾 양주**: 임무 성공 명예 포인트 2배",
             inline=False
         )
     else:
-        embed.add_field(name="📦 소지 아이템 목록", value="*가방이 비어 있습니다. `/암시장`에서 아이템을 구매해 보세요!*", inline=False)
+        embed.add_field(name="📦 소지 아이템 목록", value="*가방이 비어 있습니다. `/암시장`에서 전용 장비를 구해보세요!*", inline=False)
 
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
@@ -654,7 +675,7 @@ async def open_market(interaction: discord.Interaction):
         title=f"🕵️‍♂️ {loc_emoji} [{current_loc} 비밀 암시장]",
         description=f"**{user.name}** 님, 은밀한 음지 거래소에 오신 것을 환영합니다.\n"
                     f"현재 보유 자금: **${user_stats['money']:,}**\n\n"
-                    f"아래 메뉴에서 물품을 선택하여 구매할 수 있습니다.",
+                    f"⚠️ *암시장 물품은 중복 보유가 불가능하며 종류별로 1개만 구매 가능합니다.*",
         color=discord.Color.gold()
     )
     if user.avatar:
@@ -707,9 +728,9 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(name="🔫 `/가입`", value="패밀리 입단 신청 버튼을 불러옵니다.", inline=False)
     embed.add_field(name="🚪 `/탈퇴`", value="패밀리 탈퇴 경고 확인 후 역할을 해임합니다.", inline=False)
     embed.add_field(name="📍 `/이동`", value="칼렌데 내부 4개 핵심 거점으로 이동합니다.", inline=False)
-    embed.add_field(name="🕵️‍♂️ `/암시장`", value="현재 머무는 거점의 비밀 암시장에서 특수 밀수품을 거래합니다.", inline=False)
+    embed.add_field(name="🕵️‍♂️ `/암시장`", value="현재 거점의 비밀 암시장에서 고성능 밀수품을 거래합니다.", inline=False)
     embed.add_field(name="🎒 `/인벤토리`", value="소지 중인 암시장 장비와 적용 중인 특수 효과를 확인합니다.", inline=False)
-    embed.add_field(name="🗡️ `/임무`", value="원하는 비밀 작전을 직접 선택하여 수행합니다. (10분 쿨타임)", inline=False)
+    embed.add_field(name="🗡️ `/임무`", value="원하는 비밀 작전을 선택하여 수행합니다. (보유 아이템 버프 자동 적용)", inline=False)
     embed.add_field(name="🕵️‍♂️ `/프로필`", value="나의 조직원 신원 서류, 자금, 명예, 위치 및 소지품을 확인합니다.", inline=False)
     embed.add_field(name="⚖️ `/추방 [유저]`", value="[간부 전용] 대상 조직원을 강제 추방합니다.", inline=False)
     embed.add_field(name="❓ `/도움말`", value="봇의 명령어 가이드를 확인합니다.", inline=False)
