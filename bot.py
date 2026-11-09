@@ -601,14 +601,6 @@ async def show_inventory(interaction: discord.Interaction):
         inv_list = [f"• **{item}** `[보유 중]`" for item in inventory.keys()]
         
         embed.add_field(name="📦 보유 중인 전용 장비", value="\n".join(inv_list), inline=False)
-        embed.add_field(
-            name="💡 보유 아이템 주요 보너스 효과",
-            value="• **👔 슈트 / ⚙️ 마스크 / 🔑 락픽 / 🥷 덮개 / 🗡️ 야시경 / 🗺️ 지도**: 임무 성공 확률 크게 증가 (+8% ~ +20%)\n"
-                  "• **📻 도청기**: 성공률 +15% & 보상 자금 +10%\n"
-                  "• **🥊 장갑**: 임무 성공 보상 자금 +15%\n"
-                  "• **🍾 양주**: 임무 성공 명예 포인트 2배",
-            inline=False
-        )
     else:
         embed.add_field(name="📦 소지 아이템 목록", value="*가방이 비어 있습니다. `/암시장`에서 전용 장비를 구해보세요!*", inline=False)
 
