@@ -391,59 +391,107 @@ async def check_membership(interaction: discord.Interaction) -> bool:
         return False
     return True
 
+# === 시민 전용 아르바이트 쿨타임 사전 ===
+parttime_cooldowns = {}
+
+@bot.tree.command(name="아르바이트", description="[시민/공용] 합법적인 일거리를 통해 안전하게 소량의 자금을 벌어듭니다.")
+async def part_time_job(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+
+    await interaction.response.defer()
+    user = interaction.user
+
+    now = datetime.now()
+    if user.id in parttime_cooldowns:
+        next_available = parttime_cooldowns[user.id]
+        if now < next_available:
+            remaining = int((next_available - now).total_seconds())
+            await interaction.followup.send(f"⏳ 피로를 푸는 중입니다. **{remaining}초** 뒤에 다시 일할 수 있습니다.", ephemeral=True)
+            return
+
+    parttime_cooldowns[user.id] = now + timedelta(seconds=10)
+
+    jobs = [
+        {"title": "🏪 편의점 야간 알바", "reward": (100, 250)},
+        {"title": "📦 물류 센터 상하차", "reward": (200, 350)},
+        {"title": "☕ 도시 카페 서빙", "reward": (120, 280)},
+        {"title": "🧹 중앙 광장 청소", "reward": (100, 200)}
+    ]
+    
+    selected_job = random.choice(jobs)
+    earned_money = random.randint(*selected_job["reward"])
+
+    # DB 자금 갱신 (명예는 변하지 않음)
+    update_user_stats(user.id, earned_money, 0)
+    user_stats = get_user_data(user.id)
+
+    embed = discord.Embed(
+        title=f"🛠️ [{selected_job['title']}] 완료",
+        description=f"**{user.mention}** 님이 정직한 노동으로 자금을 벌었습니다!\n\n"
+                    f"💰 **획득 급여:** `${earned_money:,}`\n"
+                    f"🏦 **현재 보유 자금:** `${user_stats['money']:,}`",
+        color=discord.Color.blue()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+
+    await interaction.followup.send(embed=embed)
+
 # === 1. 셀프 가입 버튼 뷰 (시민 -> 조직원 승급) ===
 class SelfJoinView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🔫 마피아 조직 가입하기", style=discord.ButtonStyle.green, custom_id="self_join_btn")
-    async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    # 1. 마피아 가입 버튼
+    @discord.ui.button(label="🔫 마피아 조직 입단", style=discord.ButtonStyle.danger, custom_id="join_mafia_btn")
+    async def join_mafia(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_join(interaction, target_role_name="조직원", rank_title="마피아 조직원")
+
+    # 2. 경찰 가입 버튼
+    @discord.ui.button(label="🚔 치안국 경찰 임용", style=discord.ButtonStyle.primary, custom_id="join_police_btn")
+    async def join_police(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_join(interaction, target_role_name="경찰", rank_title="순경")
+
+    async def process_join(self, interaction: discord.Interaction, target_role_name: str, rank_title: str):
         if MAINTENANCE_MODE and not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("🛠️ 현재 점검 중이어서 가입 버튼을 누를 수 없습니다.", ephemeral=True)
+            await interaction.response.send_message("🛠️ 현재 점검 중입니다.", ephemeral=True)
             return
 
         user = interaction.user
         citizen_role = discord.utils.get(interaction.guild.roles, name="시민")
-        mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
+        target_role = discord.utils.get(interaction.guild.roles, name=target_role_name)
         
-        if not mafia_role:
-            await interaction.response.send_message("❌ 서버에 '조직원' 역할이 없습니다! 관리자에게 문의하세요.", ephemeral=True)
+        if not target_role:
+            await interaction.response.send_message(f"❌ 서버에 '{target_role_name}' 역할이 없습니다! 관리자에게 문의하세요.", ephemeral=True)
             return
 
-        if mafia_role in user.roles:
-            await interaction.response.send_message("⚠️ 당신은 이미 정식 마피아 조직원입니다!", ephemeral=True)
+        mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
+        police_role = discord.utils.get(interaction.guild.roles, name="경찰")
+
+        if (mafia_role and mafia_role in user.roles) or (police_role and police_role in user.roles):
+            await interaction.response.send_message("⚠️ 당신은 이미 소속(마피아 또는 경찰)이 결정되었습니다!", ephemeral=True)
             return
 
         try:
             if citizen_role and citizen_role in user.roles:
                 await user.remove_roles(citizen_role)
-            await user.add_roles(mafia_role)
+            await user.add_roles(target_role)
         except discord.Forbidden:
-            await interaction.response.send_message(
-                "🚨 역할 변경 권한이 없습니다. 서버 설정 > 역할에서 봇의 역할을 상위로 올려주세요.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("🚨 봇의 역할 권한 순서를 올려주세요.", ephemeral=True)
             return
 
         user_stats = get_user_data(user.id)
-        current_rank = get_user_rank(user_stats['honor'])
 
         embed = discord.Embed(
-            title="🕶️ [마피아 패밀리 입단]",
-            description=(
-                f"**{user.mention}** 님이 일반 시민의 삶을 버리고 마피아 패밀리의 조직원으로 합류했습니다!\n\n"
-                f"🏷️ **신분 변화:** `시민` ➔ `마피아 (조직원)`"
-            ),
-            color=discord.Color.dark_red()
+            title=f"📜 [{rank_title} 발령/입단]",
+            description=f"**{user.mention}** 님이 시민의 삶을 마치고 **{target_role_name}**(으)로 새로운 활동을 시작합니다!\n\n"
+                        f"🏷️ **신분 변화:** `시민` ➔ `{target_role_name}`",
+            color=discord.Color.gold()
         )
         if user.avatar:
             embed.set_thumbnail(url=user.avatar.url)
-        embed.add_field(name="🗡️ 초기 직급", value=current_rank, inline=True)
-        embed.add_field(name="💰 초기 자금", value=f"${user_stats['money']:,}", inline=True)
-        embed.add_field(name="🏆 조직 명예", value=f"{user_stats['honor']} pt", inline=True)
-        embed.set_footer(text=f"{interaction.guild.name} · 조직에 오신 것을 환영합니다")
 
-        await interaction.response.send_message(embed=embed, ephemeral=False)
+        await interaction.response.send_message(embed=embed)
 
 # === 2. 탈퇴 확인/취소 버튼 뷰 (DB 데이터 삭제 및 시민 복귀) ===
 class LeaveConfirmView(discord.ui.View):
