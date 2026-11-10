@@ -192,6 +192,15 @@ BLACK_MARKET_ITEMS = {
     ]
 }
 
+# === 🔫 (위장된) 무기 상점 아이템 목록 ===
+WEAPON_SHOP_ITEMS = [
+    {"id": "lucky_charm", "name": "🗡️ 단검", "price": 500, "desc": "평범한 단검이다"},
+    {"id": "fake_mustache", "name": "🔫 권총", "price": 1500, "desc": "평범한 권총이다"},
+    {"id": "magic_mirror", "name": "🏏 몽둥이", "price": 3000, "desc": "평범한 몽둥이이다"},
+    {"id": "rubber_chicken", "name": "💉 수상한 주사기", "price": 5500, "desc": "뭔가 수상한 주사기이다"},
+    {"id": "golden_brick", "name": "👊🏻 슈퍼 울트라 주먹", "price": 10000, "desc": "슈퍼 울트라 주먹."},
+]
+
 # === 🗄️ Supabase DB 연동 함수들 ===
 def get_user_data(user_id: int) -> dict:
     str_id = str(user_id)
@@ -1198,6 +1207,186 @@ async def gamble_rules(interaction: discord.Interaction):
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+# 쿨타임 관리를 위한 사전
+duel_cooldowns = {}
+
+@bot.tree.command(name="결투", description="[조직원 전용] 다른 조직원과 1:1 결투를 벌여 명예를 겁니다.")
+@app_commands.describe(member="결투를 신청할 상대 조직원", 베팅명예="걸고 싸울 명예 포인트 (기본 10pt)")
+async def duel_member(interaction: discord.Interaction, member: discord.Member, 베팅명예: int = 10):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+
+    # 자기 자신과의 결투 방지
+    if member.id == user.id:
+        await interaction.response.send_message("❌ 자기 자신과는 결투할 수 없습니다!", ephemeral=True)
+        return
+
+    # 봇과의 결투 방지
+    if member.bot:
+        await interaction.response.send_message("❌ 봇과는 결투할 수 없습니다.", ephemeral=True)
+        return
+
+    # 쿨타임 확인 (예: 30초)
+    now = datetime.now()
+    if user.id in duel_cooldowns:
+        remaining = int((duel_cooldowns[user.id] - now).total_seconds())
+        if remaining > 0:
+            await interaction.response.send_message(f"⏳ 결투 여파로 지쳐 있습니다. **{remaining}초** 뒤에 다시 도전자할 수 있습니다.", ephemeral=True)
+            return
+
+    duel_cooldowns[user.id] = now + timedelta(seconds=30)
+
+    # 상대방 소속 및 감옥 여부 확인
+    mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
+    if not mafia_role or mafia_role not in member.roles:
+        await interaction.response.send_message(f"⚠️ {member.mention} 님은 조직원이 아니므로 결투할 수 없습니다.", ephemeral=True)
+        return
+
+    if member.id in jail_list and now < jail_list[member.id]:
+        await interaction.response.send_message(f"❌ {member.mention} 님은 현재 감옥에 수감 중이어서 결투할 수 없습니다.", ephemeral=True)
+        return
+
+    # 양측 데이터 불러오기
+    user_stats = get_user_data(user.id)
+    target_stats = get_user_data(member.id)
+
+    if user_stats["honor"] < 베팅명예:
+        await interaction.response.send_message(f"❌ 보유한 명예 포인트가 부족합니다! (현재 명예: {user_stats['honor']} pt)", ephemeral=True)
+        return
+    if target_stats["honor"] < 베팅명예:
+        await interaction.response.send_message(f"❌ 상대방의 명예 포인트가 부족하여 해당 금액으로 결투할 수 없습니다.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    # 무기 보정치 계산
+    def get_weapon_bonus(inventory: dict) -> int:
+        bonus = 0
+        if "🎯 스나이퍼" in inventory: bonus += 30
+        elif "🔥 기관총" in inventory: bonus += 20
+        elif "⚔️ 장검" in inventory: bonus += 15
+        elif "🔫 권총" in inventory: bonus += 10
+        elif "🗡️ 단검" in inventory: bonus += 5
+        return bonus
+
+    user_weapon_bonus = get_weapon_bonus(user_stats.get("inventory", {}))
+    target_weapon_bonus = get_weapon_bonus(target_stats.get("inventory", {}))
+
+    # 최종 승리 확률 계산 (기본 50% + 명예 차이 보정 + 무기 보정 차이)
+    honor_diff = (user_stats["honor"] - target_stats["honor"]) * 0.1
+    weapon_diff = user_weapon_bonus - target_weapon_bonus
+    
+    user_win_rate = max(10, min(90, 50 + honor_diff + weapon_diff))
+    
+    is_user_win = random.randint(1, 100) <= user_win_rate
+
+    # 결과에 따른 명예 정산
+    winner = user if is_user_win else member
+    loser = member if is_user_win else user
+    winner_stats = user_stats if is_user_win else target_stats
+    loser_stats = target_stats if is_user_win else user_stats
+    winner_id = user.id if is_user_win else member.id
+    loser_id = member.id if is_user_win else user.id
+
+    new_winner_honor = winner_stats["honor"] + 베팅명예
+    new_loser_honor = max(0, loser_stats["honor"] - 베팅명예)
+
+    try:
+        _require_db()
+        # 승자 명예 갱신
+        supabase.table("user_data").update({"honor": new_winner_honor}).eq("user_id", str(winner_id)).execute()
+        # 패자 명예 갱신
+        supabase.table("user_data").update({"honor": new_loser_honor}).eq("user_id", str(loser_id)).execute()
+    except Exception as e:
+        print(f"DB Error (duel): {e}")
+        await interaction.followup.send("🚨 결투 정산 중 데이터베이스 오류가 발생했습니다.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="⚔️ [패밀리 혈투: 1:1 결투 결과]",
+        description=f"**{user.mention}** 님과 **{member.mention}** 님의 피비린내 나는 결투가 끝났습니다!\n\n"
+                    f"🏆 **승리자:** {winner.mention} (승률 판정: `{user_win_rate:.1f}%`)\n\n"
+                    f"📈 **명예 변동:**\n"
+                    f"• {winner.mention} `+{베팅명예} pt` (총 {new_winner_honor} pt)\n"
+                    f"• {loser.mention} `-{베팅명예} pt` (총 {new_loser_honor} pt)",
+        color=discord.Color.gold() if is_user_win else discord.Color.dark_red()
+    )
+    if winner.avatar:
+        embed.set_thumbnail(url=winner.avatar.url)
+
+    await interaction.followup.send(embed=embed)
+class WeaponShopSelect(discord.ui.Select):
+    def __init__(self, owner: discord.Member):
+        self.owner = owner
+        options = [
+            discord.SelectOption(
+                label=item["name"],
+                description=f"가격: ${item['price']:,} | {item['desc']}",
+                value=item["id"]
+            ) for item in WEAPON_SHOP_ITEMS
+        ]
+        super().__init__(placeholder="🛒 구매할 물품을 선택하세요...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        if interaction.user != self.owner:
+            await interaction.followup.send("❌ 다른 사람의 상점 메뉴는 조작할 수 없습니다.", ephemeral=True)
+            return
+
+        user = interaction.user
+        user_stats = get_user_data(user.id)
+        current_money = user_stats.get("money", 0)
+        inventory = user_stats.get("inventory", {})
+
+        # 선택한 아이템 찾기
+        target_item = next((item for item in WEAPON_SHOP_ITEMS if item["id"] == self.values[0]), None)
+        if not target_item:
+            await interaction.followup.send("❌ 존재하지 않는 아이템입니다.", ephemeral=True)
+            return
+
+        item_name = target_item["name"]
+        item_price = target_item["price"]
+
+        if current_money < item_price:
+            await interaction.followup.send(f"❌ 자금이 부족합니다! (필요: `${item_price:,}`, 보유: `${current_money:,}`)", ephemeral=True)
+            return
+
+        # 구매 처리
+        current_money -= item_price
+        inventory[item_name] = inventory.get(item_name, 0) + 1
+
+        try:
+            _require_db()
+            supabase.table("user_data").update({
+                "money": current_money,
+                "inventory": inventory
+            }).eq("user_id", str(user.id)).execute()
+        except Exception as e:
+            print(f"DB Error (weapon shop buy): {e}")
+            await interaction.followup.send("🚨 구매 처리 중 DB 오류가 발생했습니다.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🛍️ [무기 상점] 구매 완료",
+            description=f"**{user.mention}** 님이 **{item_name}**을(를) 구매하셨습니다!\n\n"
+                        f"💳 **지불 금액:** `${item_price:,}`\n"
+                        f"🏦 **잔여 자금:** `${current_money:,}`\n"
+                        f"🎒 **효과:** `{target_item['desc']}`",
+            color=discord.Color.green()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+class WeaponShopView(discord.ui.View):
+    def __init__(self, owner: discord.Member):
+        super().__init__(timeout=60)
+        self.add_item(WeaponShopSelect(owner))
+        
+    
 # === 1. 셀프 가입 버튼 뷰 (시민 -> 조직원 승급) ===
 class SelfJoinView(discord.ui.View):
     def __init__(self):
@@ -1700,6 +1889,35 @@ async def show_inventory(interaction: discord.Interaction):
         embed.set_thumbnail(url=interaction.user.avatar.url)
 
     await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="무기상점", description="[조직원 전용] 특수 무기(?)-장비를 판매하는 상점을 엽니다.")
+async def open_weapon_shop(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    await interaction.response.defer()
+
+    user = interaction.user
+    user_stats = get_user_data(user.id)
+    current_money = user_stats.get("money", 0)
+
+    items_desc = "\n".join([
+        f"• **{item['name']}** - `${item['price']:,}`\n  └ *{item['desc']}*"
+        for item in WEAPON_SHOP_ITEMS
+    ])
+
+    embed = discord.Embed(
+        title="🔫 [지하 무기 상점] 비밀 카탈로그",
+        description=f"**{user.mention}** 님, 환영합니다. 결투에서 승리를 보장하는 최첨단 무기(?)들입니다.\n\n"
+                    f"{items_desc}\n\n"
+                    f"🏦 **현재 보유 자금:** `${current_money:,}`",
+        color=discord.Color.dark_red()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+
+    await interaction.followup.send(embed=embed, view=WeaponShopView(owner=user))
 
 @bot.tree.command(name="이동", description="[마피아 GM] 다른 지역으로 이동합니다.")
 @app_commands.choices(지역=[
