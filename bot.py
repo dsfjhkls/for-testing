@@ -1342,7 +1342,7 @@ class LeaveConfirmView(discord.ui.View):
         )
         await interaction.edit_original_response(embed=embed, view=self)
 
-# === 3. 임무 선택 뷰 ===
+# === 3. 임무 선택 뷰 (최적화 버전) ===
 class MissionSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
         self.owner = owner
@@ -1350,7 +1350,6 @@ class MissionSelect(discord.ui.Select):
             discord.SelectOption(label="타 조직 구역 비밀 조사", description="난이도: 하 | 보상: $300~$700 / 명예 +10pt", emoji="🕶️", value="mission_1"),
             discord.SelectOption(label="밀수품 비밀 운송 작업", description="난이도: 중 | 보상: $600~$1,500 / 명예 +25pt", emoji="💼", value="mission_2"),
             discord.SelectOption(label="라이벌 보스의 장부 탈취", description="난이도: 상 | 보상: $1,500~$3,500 / 명예 +50pt", emoji="🏛️", value="mission_3"),
-            # 👇 새로 추가된 임무 2개
             discord.SelectOption(label="기밀 문서 야간 밀반출", description="난이도: 중상 | 보상: $1,200~$2,500 / 명예 +35pt", emoji="📁", value="mission_4"),
             discord.SelectOption(label="중앙 은행 호송 차량 습격", description="난이도: 최상 | 보상: $3,000~$6,000 / 명예 +80pt", emoji="💰", value="mission_5"),
         ]
@@ -1383,19 +1382,16 @@ class MissionSelect(discord.ui.Select):
 
         mission_cooldowns[user.id] = now + timedelta(seconds=cooldown_seconds)
 
-        # 👇 새로 추가된 임무의 데이터 세부 설정 (성공 확률, 보상 범위, 명예)
         mission_data = {
-            "mission_1": {"title": "🕶️ 타 조직 구역 비밀 조사", "success_rate": 75, "reward": (300, 700), "honor": 10},
-            "mission_2": {"title": "💼 밀수품 비밀 운송 작업", "success_rate": 55, "reward": (600, 1500), "honor": 25},
-            "mission_3": {"title": "🏛️ 라이벌 보스의 장부 탈취", "success_rate": 40, "reward": (1500, 3500), "honor": 50},
-            "mission_4": {"title": "📁 기밀 문서 야간 밀반출", "success_rate": 50, "reward": (1200, 2500), "honor": 35},      # 추가
-            "mission_5": {"title": "💰 중앙 은행 호송 차량 습격", "success_rate": 10, "reward": (3000, 6000), "honor": 80},  # 추가
+            "mission_1": {"title": "🕶️ 타 조직 구역 비밀 조사", "success_rate": 80, "reward": (300, 700), "honor": 10},
+            "mission_2": {"title": "💼 밀수품 비밀 운송 작업", "success_rate": 65, "reward": (600, 1500), "honor": 25},
+            "mission_3": {"title": "🏛️ 라이벌 보스의 장부 탈취", "success_rate": 50, "reward": (1500, 3500), "honor": 50},
+            "mission_4": {"title": "📁 기밀 문서 야간 밀반출", "success_rate": 58, "reward": (1200, 2500), "honor": 35},
+            "mission_5": {"title": "💰 중앙 은행 호송 차량 습격", "success_rate": 40, "reward": (3000, 6000), "honor": 80},
         }
 
         selected = mission_data[self.values[0]]
         current_loc = user_stats.get("location", "레벤하임")
-        
-        # (이하 아래의 기존 버프 계산 및 성공/실패 판정 로직은 그대로 유지)
 
         success_bonus = 0
         money_mult = 1.0
@@ -1408,6 +1404,12 @@ class MissionSelect(discord.ui.Select):
         if "🥷 익명의 덮개" in inventory:
             success_bonus += 10
             active_buffs.append("🥷 덮개 (+10%)")
+        if "🗡️ 암시장 야시경" in inventory:
+            success_bonus += 15
+            active_buffs.append("🗡️ 야시경 (+15%)")
+        if "🗺️ 해적 비밀 항해 지도" in inventory:
+            success_bonus += 20
+            active_buffs.append("🗺️ 항해 지도 (+20%)")
         if "📻 해상 무전 도청기" in inventory:
             success_bonus += 15
             money_mult += 0.10
@@ -1423,27 +1425,37 @@ class MissionSelect(discord.ui.Select):
         is_success = random.randint(1, 100) <= final_success_rate
         buff_desc = f"\n✨ **적용된 보너스:** {', '.join(active_buffs)}" if active_buffs else ""
 
+        # 데이터 변동분 계산
+        current_money = user_stats.get("money", 0)
+        current_honor = user_stats.get("honor", 0)
+        
+        fail_msg = ""
+        rank_up_msg = ""
+
+        # 칭호 및 통계 블롭 미리 로드
+        blob = get_title_blob(user_stats)
+        s = blob["stats"]
+
         if is_success:
             base_money = random.randint(*selected["reward"])
             earned_money = int(base_money * money_mult)
             earned_honor = int(selected["honor"] * honor_mult)
             
-            try:
-                update_user_stats(user.id, earned_money, earned_honor)
-            except Exception:
-                mission_cooldowns.pop(user.id, None)
-                await interaction.edit_original_response(view=MissionView(owner=self.owner))
-                await interaction.followup.send("🚨 DB 저장 오류로 보상이 반영되지 않았습니다.", ephemeral=True)
-                return
+            current_money += earned_money
+            current_honor += earned_honor
 
-            current_stats = get_user_data(user.id)
-            new_rank = get_user_rank(current_stats["honor"])
+            # 칭호 통계 업데이트
+            s["success"] += 1
+            s["streak"] += 1
+            s["best_streak"] = max(s["best_streak"], s["streak"])
+            if self.values[0] == "mission_3" or self.values[0] == "mission_5":
+                s["hard_success"] += 1
 
-            rank_up_msg = ""
+            new_rank = get_user_rank(current_honor)
             if old_rank != new_rank:
                 rank_up_msg = f"\n\n🎉 **[조직 승급 축하]** **{old_rank}** ➔ **{new_rank}**(으)로 승급하셨습니다!"
 
-            new_title_ids = record_mission_result(user.id, current_stats, True, self.values[0] == "mission_3")
+            new_title_ids = evaluate_new_titles(blob, {**user_stats, "money": current_money, "honor": current_honor})
             rank_up_msg += format_new_titles(new_title_ids)
 
             embed = discord.Embed(
@@ -1453,57 +1465,60 @@ class MissionSelect(discord.ui.Select):
                             f"💰 **획득 보상금:** `${earned_money:,}`\n"
                             f"🏆 **획득 명예:** `+{earned_honor} pt`\n\n"
                             f"🗡️ **현재 직급:** `{new_rank}`\n"
-                            f"🏦 **보유 자금:** `${current_stats['money']:,}`\n"
-                            f"🏅 **총 명예:** `{current_stats['honor']} pt`{rank_up_msg}",
+                            f"🏦 **보유 자금:** `${current_money:,}`\n"
+                            f"🏅 **총 명예:** `{current_honor} pt`{rank_up_msg}",
                 color=discord.Color.green()
             )
-        # (임무 실패 로직 내부)
         else:
-            current_stats = get_user_data(user.id)
-            inventory = current_stats.get("inventory", {})
-            settings = current_stats.get("settings", {"auto_fail_guard": True})
-            
+            settings = user_stats.get("settings", {"auto_fail_guard": True})
             guard_item_key = "🎟️ 임무 실패 방지권"
             guard_used = False
 
-            # 실패 방지권 자동 사용 조건 확인
             if settings.get("auto_fail_guard", True) and inventory.get(guard_item_key, 0) > 0:
                 inventory[guard_item_key] -= 1
                 if inventory[guard_item_key] <= 0:
                     del inventory[guard_item_key]
-                
-                # DB 인벤토리 반영
-                try:
-                    update_user_market_purchase(user.id, current_stats["money"], current_stats["honor"], inventory)
-                except Exception:
-                    pass
                 guard_used = True
 
             if guard_used:
                 fail_msg = "🛡️ **[실패 방지권 발동]** 임무에 실패했으나, 가방에 있던 **🎟️ 임무 실패 방지권**이 소모되어 수배 및 패널티가 면제되었습니다!"
             else:
-                # 방지권이 없거나 설정이 꺼져있으면 기존대로 수배 등록
                 wanted_list[user.id] = datetime.now() + timedelta(seconds=60)
-
                 if "🪪 치안국 위조 신분증" in inventory:
                     fail_msg = "⚠️ 임무에 실패했으나 **🪪 치안국 위조 신분증** 덕분에 지명수배를 면했습니다!"
                     wanted_list.pop(user.id, None)
                 else:
                     fail_msg = "🚨 **작전 실패!** 현장에 흔적이 남아 **1분간 경찰 지명수배 상태**가 됩니다!"
 
-            current_rank = get_user_rank(current_stats["honor"])
-            new_title_ids = record_mission_result(user.id, current_stats, False, False)
+            s["fail"] += 1
+            s["streak"] = 0
+            new_title_ids = evaluate_new_titles(blob, user_stats)
 
+            current_rank = get_user_rank(current_honor)
             embed = discord.Embed(
                 title=f"💥 [{current_loc}] 임무 실패",
                 description=f"**{user.mention}** 님이 작전 도중 문제가 발생했습니다!{buff_desc}\n\n"
                             f"📌 **작전명:** {selected['title']}\n"
                             f"{fail_msg}\n\n"
                             f"🗡️ **현재 직급:** `{current_rank}`\n"
-                            f"🏦 **보유 자금:** `${current_stats['money']:,}`\n"
-                            f"🏅 **총 명예:** `{current_stats['honor']} pt`{format_new_titles(new_title_ids)}",
+                            f"🏦 **보유 자금:** `${current_money:,}`\n"
+                            f"🏅 **총 명예:** `{current_honor} pt`{format_new_titles(new_title_ids)}",
                 color=discord.Color.red()
             )
+
+        # ⚡ 데이터베이스 업데이트를 한 번에 처리 (네트워크 왕복 최소화)
+        try:
+            _require_db()
+            supabase.table("user_data").update({
+                "money": current_money,
+                "honor": current_honor,
+                "inventory": inventory,
+                "data": blob
+            }).eq("user_id", str(user.id)).execute()
+        except Exception as e:
+            print(f"DB Error (mission update): {e}")
+            await interaction.followup.send("🚨 DB 저장 중 오류가 발생했습니다.", ephemeral=True)
+            return
 
         if user.avatar:
             embed.set_thumbnail(url=user.avatar.url)
