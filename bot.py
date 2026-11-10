@@ -426,10 +426,9 @@ class MissionSelect(discord.ui.Select):
         if user.avatar:
             embed.set_thumbnail(url=user.avatar.url)
 
-        # 임무 선택 메뉴는 새 뷰로 갱신해서 계속 유지 (view=None으로 지우면 임무를 한 번밖에 못 함)
-        await interaction.edit_original_response(view=MissionView(owner=self.owner))
-        # 결과는 별도 메시지로 전송 (이전 결과가 덮어써지지 않음)
-        await interaction.followup.send(embed=embed)
+        # 결과 표시 + 임무 선택 메뉴 갱신을 한 번의 수정으로 처리
+        # (view=None으로 지우면 임무를 한 번밖에 못 하고, 새 뷰를 넣으면 선택 상태도 초기화됨)
+        await interaction.edit_original_response(embed=embed, view=MissionView(owner=self.owner))
 
 class MissionView(discord.ui.View):
     def __init__(self, owner: discord.Member):
