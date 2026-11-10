@@ -356,6 +356,7 @@ class TitleView(discord.ui.View):
 @bot.tree.command(name="칭호", description="[마피아 GM] 획득한 칭호를 확인하고 장착합니다.")
 async def titles_command(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
 
     user = interaction.user
     info = get_user_data(user.id)
@@ -399,6 +400,19 @@ async def check_maintenance(interaction: discord.Interaction) -> bool:
             return False
     return True
 
+# === [공통 체크 함수] 조직원 가입 여부 확인 ===
+async def check_membership(interaction: discord.Interaction) -> bool:
+    user = interaction.user
+    role = discord.utils.get(interaction.guild.roles, name="조직원")
+    
+    # 조직원 역할이 없거나 유저에게 해당 역할이 없다면 차단
+    if not role or role not in user.roles:
+        await interaction.response.send_message(
+            "❌ 패밀리의 정식 조직원이 아닙니다! `/가입`을 먼저 진행해 주세요.",
+            ephemeral=True
+        )
+        return False
+    return True
 # === 1. 셀프 가입 버튼 뷰 ===
 # === 1. 셀프 가입 버튼 뷰 (시민 -> 조직원 승급) ===
 class SelfJoinView(discord.ui.View):
@@ -847,6 +861,7 @@ async def leave_family(interaction: discord.Interaction):
 async def execute_mission(interaction: discord.Interaction):
     # 점검 체크는 defer 이전에 해야 함 (이미 응답한 뒤에 send_message를 쓰면 오류)
     if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
 
     # 3초 타임아웃 방지
     await interaction.response.defer()
@@ -873,24 +888,32 @@ async def execute_mission(interaction: discord.Interaction):
     view = MissionView(owner=user)
     await interaction.followup.send(embed=embed, view=view)
 
-# === 8. `/프로필` 명령어 ===
+# === 8. `/프로필` 명령어 수정 ===
 @bot.tree.command(name="프로필", description="[마피아 GM] 패밀리 조직원 신원 조회 서류 및 인벤토리를 확인합니다.")
 async def profile(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
 
     user = interaction.user
+    role = discord.utils.get(interaction.guild.roles, name="조직원")
+    
+    # 조직원 역할이 없으면 직급을 '시민'으로 설정
+    if not role or role not in user.roles:
+        user_rank = "시민"
+    else:
+        user_stats = get_user_data(user.id)
+        user_rank = get_user_rank(user_stats.get("honor", 0))
+
     user_stats = get_user_data(user.id)
-    user_rank = get_user_rank(user_stats.get("honor", 0))
 
     embed = discord.Embed(
         title="🕵️‍♂️ [패밀리 비밀 문서] 조직원 신원 조회",
-        description=f"**{user.name}** 패밀리원에 대한 보안 기록입니다.",
+        description=f"**{user.name}** 님의 보안 기록입니다.",
         color=discord.Color.dark_red()
     )
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
 
-    embed.add_field(name="📜 조직원명", value=user.mention, inline=True)
+    embed.add_field(name="📜 신분 / 조직원명", value=user.mention, inline=True)
     embed.add_field(name="🗡️ 현재 직급", value=user_rank, inline=True)
     embed.add_field(name="🏷️ 칭호", value=get_equipped_title_name(user_stats), inline=True)
     embed.add_field(name="💰 보유 자금", value=f"${user_stats['money']:,}", inline=True)
@@ -912,6 +935,7 @@ async def profile(interaction: discord.Interaction):
 @bot.tree.command(name="인벤토리", description="[마피아 GM] 자신이 소지한 암시장 아이템과 적용 효과를 확인합니다.")
 async def show_inventory(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
 
     user = interaction.user
     role = discord.utils.get(interaction.guild.roles, name="조직원")
@@ -988,6 +1012,7 @@ async def move_location(interaction: discord.Interaction, 지역: app_commands.C
 @bot.tree.command(name="암시장", description="[조직원 전용] 현재 위치한 지역의 밀거래 암시장에 입장합니다.")
 async def open_market(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
 
     user = interaction.user
     role = discord.utils.get(interaction.guild.roles, name="조직원")
@@ -1024,6 +1049,7 @@ async def open_market(interaction: discord.Interaction):
 @app_commands.describe(member="추방할 조직원", reason="추방 사유 (선택 사항)")
 async def kick_member(interaction: discord.Interaction, member: discord.Member, reason: str = "규율 위반 및 배신"):
     if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
 
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ 패밀리 간부(관리자) 권한을 가진 자만 추방 명령을 내릴 수 있습니다!", ephemeral=True)
