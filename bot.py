@@ -205,6 +205,171 @@ def update_user_market_purchase(user_id: int, new_money: int, new_honor: int, in
     }).eq("user_id", str_id).execute()
     _check_updated(res, "update_user_market_purchase")
 
+# ==========================================
+# 🏷️ 칭호 시스템 (user_data 테이블의 `data` jsonb 컬럼에 저장)
+#   data = {"stats": {...}, "titles": [칭호ID...], "equipped": 칭호ID or None}
+# ==========================================
+TITLES = {
+    "first_step":   {"name": "🌱 첫 발걸음",       "desc": "임무 1회 성공",                        "check": lambda s, i: s["success"] >= 1},
+    "veteran":      {"name": "🗡️ 노련한 청부꾼",   "desc": "임무 10회 성공",                       "check": lambda s, i: s["success"] >= 10},
+    "legend":       {"name": "💀 전설의 그림자",   "desc": "임무 50회 성공",                       "check": lambda s, i: s["success"] >= 50},
+    "hot_streak":   {"name": "🔥 불붙은 손길",     "desc": "임무 3연속 성공",                      "check": lambda s, i: s["best_streak"] >= 3},
+    "unstoppable":  {"name": "⚡ 멈추지 않는 자",  "desc": "임무 5연속 성공",                      "check": lambda s, i: s["best_streak"] >= 5},
+    "ledger_thief": {"name": "🏛️ 장부 도둑",       "desc": "'라이벌 보스의 장부 탈취' 5회 성공",   "check": lambda s, i: s["hard_success"] >= 5},
+    "unlucky":      {"name": "🩹 불운한 쥐새끼",   "desc": "임무 5회 실패",                        "check": lambda s, i: s["fail"] >= 5},
+    "rich":         {"name": "💰 검은 돈의 주인",  "desc": "보유 자금 $10,000 이상",               "check": lambda s, i: (i.get("money") or 0) >= 10000},
+    "respected":    {"name": "🎩 존경받는 자",     "desc": "조직 명예 100pt 이상",                 "check": lambda s, i: (i.get("honor") or 0) >= 100},
+    "collector":    {"name": "🎒 장비 수집가",     "desc": "암시장 장비 3개 이상 보유",            "check": lambda s, i: len(i.get("inventory") or {}) >= 3},
+}
+
+def get_title_blob(user_info: dict) -> dict:
+    raw = user_info.get("data")
+    blob = dict(raw) if isinstance(raw, dict) else {}
+    stats = blob.get("stats") if isinstance(blob.get("stats"), dict) else {}
+    for key in ("success", "fail", "streak", "best_streak", "hard_success"):
+        stats[key] = int(stats.get(key, 0) or 0)
+    blob["stats"] = stats
+    blob["titles"] = list(blob.get("titles") or [])
+    blob["equipped"] = blob.get("equipped")
+    return blob
+
+def evaluate_new_titles(blob: dict, user_info: dict) -> list:
+    """조건을 만족했지만 아직 없는 칭호를 blob에 추가하고, 새로 얻은 칭호 ID 목록을 반환"""
+    new_ids = []
+    for tid, t in TITLES.items():
+        if tid not in blob["titles"] and t["check"](blob["stats"], user_info):
+            blob["titles"].append(tid)
+            new_ids.append(tid)
+    if new_ids and blob.get("equipped") not in TITLES:
+        blob["equipped"] = new_ids[0]  # 장착한 칭호가 없으면 첫 칭호 자동 장착
+    return new_ids
+
+def save_title_blob(user_id: int, blob: dict):
+    _require_db()
+    res = supabase.table("user_data").update({"data": blob}).eq("user_id", str(user_id)).execute()
+    _check_updated(res, "save_title_blob")
+
+def record_mission_result(user_id: int, user_info: dict, success: bool, hard: bool) -> list:
+    """임무 결과를 기록하고 새로 얻은 칭호 ID 목록을 반환"""
+    blob = get_title_blob(user_info)
+    s = blob["stats"]
+    if success:
+        s["success"] += 1
+        s["streak"] += 1
+        s["best_streak"] = max(s["best_streak"], s["streak"])
+        if hard:
+            s["hard_success"] += 1
+    else:
+        s["fail"] += 1
+        s["streak"] = 0
+    new_ids = evaluate_new_titles(blob, user_info)
+    save_title_blob(user_id, blob)
+    return new_ids
+
+def get_equipped_title_name(user_info: dict) -> str:
+    equipped = get_title_blob(user_info).get("equipped")
+    return TITLES[equipped]["name"] if equipped in TITLES else "없음"
+
+def format_new_titles(new_ids: list) -> str:
+    if not new_ids:
+        return ""
+    names = ", ".join(TITLES[t]["name"] for t in new_ids)
+    return f"\n\n🏷️ **[새 칭호 획득]** {names}\n`/칭호` 명령어로 장착할 수 있습니다."
+
+def build_title_embed(user: discord.abc.User, blob: dict, new_ids: list = None) -> discord.Embed:
+    equipped = blob.get("equipped")
+    equipped_name = TITLES[equipped]["name"] if equipped in TITLES else "없음"
+    s = blob["stats"]
+
+    earned = [f"• {TITLES[t]['name']} — {TITLES[t]['desc']}" for t in blob["titles"] if t in TITLES]
+    locked = [f"• 🔒 ??? — {t['desc']}" for tid, t in TITLES.items() if tid not in blob["titles"]]
+
+    embed = discord.Embed(
+        title=f"🏷️ [{user.name} 님의 칭호]",
+        description=f"현재 장착 중인 칭호: **{equipped_name}**" + format_new_titles(new_ids or []),
+        color=discord.Color.gold()
+    )
+    embed.add_field(name=f"✅ 획득한 칭호 ({len(earned)}/{len(TITLES)})", value="\n".join(earned) if earned else "*아직 획득한 칭호가 없습니다.*", inline=False)
+    if locked:
+        embed.add_field(name="🔒 미획득 칭호", value="\n".join(locked), inline=False)
+    embed.add_field(
+        name="📊 임무 기록",
+        value=f"성공 `{s['success']}`회 / 실패 `{s['fail']}`회 / 최고 연속 성공 `{s['best_streak']}`회",
+        inline=False
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    return embed
+
+class TitleSelect(discord.ui.Select):
+    def __init__(self, owner: discord.abc.User, blob: dict):
+        self.owner = owner
+        options = [discord.SelectOption(label="칭호 해제", value="__none__", description="장착한 칭호를 내려놓습니다.", emoji="❌")]
+        for tid in blob["titles"]:
+            if tid in TITLES:
+                options.append(discord.SelectOption(
+                    label=TITLES[tid]["name"], value=tid,
+                    description=TITLES[tid]["desc"], default=(tid == blob.get("equipped"))
+                ))
+        super().__init__(placeholder="🏷️ 장착할 칭호를 선택하세요...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user != self.owner:
+            await interaction.response.send_message("❌ 타인의 칭호 창은 조작할 수 없습니다.", ephemeral=True)
+            return
+        await interaction.response.defer()
+
+        try:
+            info = get_user_data(interaction.user.id)
+            blob = get_title_blob(info)
+            choice = self.values[0]
+            if choice == "__none__":
+                blob["equipped"] = None
+            elif choice in blob["titles"]:
+                blob["equipped"] = choice
+            else:
+                await interaction.followup.send("❌ 아직 획득하지 못한 칭호입니다.", ephemeral=True)
+                return
+            save_title_blob(interaction.user.id, blob)
+        except Exception as e:
+            print(f"DB Error (title equip): {e}")
+            await interaction.followup.send("🚨 데이터베이스 저장 오류로 칭호를 변경하지 못했습니다. 관리자에게 문의해주세요.", ephemeral=True)
+            return
+
+        await interaction.edit_original_response(
+            embed=build_title_embed(interaction.user, blob),
+            view=TitleView(owner=interaction.user, blob=blob)
+        )
+
+class TitleView(discord.ui.View):
+    def __init__(self, owner: discord.abc.User, blob: dict):
+        super().__init__(timeout=180)
+        self.add_item(TitleSelect(owner=owner, blob=blob))
+
+@bot.tree.command(name="칭호", description="[마피아 GM] 획득한 칭호를 확인하고 장착합니다.")
+async def titles_command(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+
+    user = interaction.user
+    info = get_user_data(user.id)
+    blob = get_title_blob(info)
+
+    # 자금/명예/장비 조건으로 얻는 칭호는 여기서도 확인해서 지급
+    new_ids = []
+    try:
+        new_ids = evaluate_new_titles(blob, info)
+        if new_ids:
+            save_title_blob(user.id, blob)
+    except Exception as e:
+        print(f"DB Error (title refresh): {e}")
+        new_ids = []
+
+    embed = build_title_embed(user, blob, new_ids)
+    if blob["titles"]:
+        await interaction.response.send_message(embed=embed, view=TitleView(owner=user, blob=blob))
+    else:
+        await interaction.response.send_message(embed=embed)
+
 @bot.event
 async def on_ready():
     try:
@@ -432,6 +597,14 @@ class MissionSelect(discord.ui.Select):
             if old_rank != new_rank:
                 rank_up_msg = f"\n\n🎉 **[조직 승급 축하]** **{old_rank}** ➔ **{new_rank}**(으)로 승급하셨습니다!"
 
+            # 🏷️ 칭호 기록 (실패해도 임무 결과에는 영향 없음)
+            try:
+                new_title_ids = record_mission_result(user.id, current_stats, True, self.values[0] == "mission_3")
+            except Exception as e:
+                print(f"DB Error (record_mission_result): {e}")
+                new_title_ids = []
+            rank_up_msg += format_new_titles(new_title_ids)
+
             embed = discord.Embed(
                 title=f"🎯 [{current_loc}] 임무 성공",
                 description=f"**{user.mention}** 님이 선택하신 작전을 완벽하게 완수했습니다!{buff_desc}\n\n"
@@ -452,6 +625,14 @@ class MissionSelect(discord.ui.Select):
 
             current_stats = get_user_data(user.id)
             current_rank = get_user_rank(current_stats["honor"])
+
+            # 🏷️ 칭호 기록 (실패해도 임무 결과에는 영향 없음)
+            try:
+                new_title_ids = record_mission_result(user.id, current_stats, False, False)
+            except Exception as e:
+                print(f"DB Error (record_mission_result): {e}")
+                new_title_ids = []
+
             embed = discord.Embed(
                 title=f"💥 [{current_loc}] 임무 실패",
                 description=f"**{user.mention}** 님이 선택하신 작전 도중 문제가 발생했습니다!{buff_desc}\n\n"
@@ -460,7 +641,7 @@ class MissionSelect(discord.ui.Select):
                             f"{fail_msg}\n\n"
                             f"🗡️ **현재 직급:** `{current_rank}`\n"
                             f"🏦 **보유 자금:** `${current_stats['money']:,}`\n"
-                            f"🏅 **총 명예:** `{current_stats['honor']} pt`",
+                            f"🏅 **총 명예:** `{current_stats['honor']} pt`{format_new_titles(new_title_ids)}",
                 color=discord.Color.red()
             )
 
@@ -652,6 +833,7 @@ async def profile(interaction: discord.Interaction):
 
     embed.add_field(name="📜 조직원명", value=user.mention, inline=True)
     embed.add_field(name="🗡️ 현재 직급", value=user_rank, inline=True)
+    embed.add_field(name="🏷️ 칭호", value=get_equipped_title_name(user_stats), inline=True)
     embed.add_field(name="💰 보유 자금", value=f"${user_stats['money']:,}", inline=True)
     embed.add_field(name="🏆 조직 명예", value=f"{user_stats['honor']} pt", inline=True)
     embed.add_field(name="📍 현재 거점", value=user_stats.get('location', '레벤하임'), inline=False)
@@ -692,15 +874,6 @@ async def show_inventory(interaction: discord.Interaction):
         inv_list = [f"• **{item}** `[보유 중]`" for item in inventory.keys()]
         
         embed.add_field(name="📦 보유 중인 전용 장비", value="\n".join(inv_list), inline=False)
-        embed.add_field(
-            name="💡 보유 아이템 주요 보너스 효과",
-            value="• **⏱️ 시계 / 🛵 바이크**: 임무 쿨타임 50% 단축 (5초)\n"
-                  "• **🔑 락픽 / 🥷 덮개 / 🗡️ 야시경 / 🗺️ 지도**: 성공 확률 증가 (+10% ~ +20%)\n"
-                  "• **📻 도청기**: 성공률 +15% & 보상 자금 +10%\n"
-                  "• **🥊 장갑**: 임무 성공 보상 자금 +15%\n"
-                  "• **🧪 자양강장제**: 구매 시 쿨타임 즉시 초기화",
-            inline=False
-        )
     else:
         embed.add_field(name="📦 소지 아이템 목록", value="*가방이 비어 있습니다. `/암시장`에서 전용 장비를 구해보세요!*", inline=False)
 
@@ -832,7 +1005,8 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(name="🚪 `/탈퇴`", value="패밀리 탈퇴 경고 확인 후 역할을 해임합니다.", inline=False)
     embed.add_field(name="📍 `/이동`", value="칼렌데 내부 4개 핵심 거점으로 이동합니다.", inline=False)
     embed.add_field(name="🕵️‍♂️ `/암시장`", value="현재 거점의 비밀 암시장에서 고성능 밀수품을 거래합니다.", inline=False)
-    embed.add_field(name="🎒 `/인벤토리`", value="소지 중인 암시장 장비와 적용 중인 특수 효과를 확인합니다.", inline=False)
+    embed.add_field(name="🎒 `/인벤토리`", value="소지 중인 암시장 장비를 확인합니다.", inline=False)
+    embed.add_field(name="🏷️ `/칭호`", value="임무 기록과 업적으로 얻은 칭호를 확인하고 장착합니다.", inline=False)
     embed.add_field(name="🗡️ `/임무`", value="원하는 비밀 작전을 선택하여 수행합니다. (보유 아이템 버프 자동 적용)", inline=False)
     embed.add_field(name="🕵️‍♂️ `/프로필`", value="나의 조직원 신원 서류, 자금, 명예, 위치 및 소지품을 확인합니다.", inline=False)
     embed.add_field(name="⚖️ `/추방 [유저]`", value="[간부 전용] 대상 조직원을 강제 추방합니다.", inline=False)
