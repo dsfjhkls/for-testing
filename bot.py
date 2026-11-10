@@ -107,29 +107,29 @@ mission_cooldowns = {}
 def get_user_rank(honor: int, is_police: bool = False) -> str:
     if is_police:
         # 경찰 전용 직급
-        if honor >= 2000:
+        if honor >= 10000:
             return "👑 총경"
-        elif honor >= 1000:
+        elif honor >= 5000:
             return "⚔️ 경정"
-        elif honor >= 500:
+        elif honor >= 3000:
             return "🥇 경위"
-        elif honor >= 300:
+        elif honor >= 1000:
             return "🥈 경사"
-        elif honor >= 100:
+        elif honor >= 500:
             return "🥉 경장"
         else:
             return "🌱 신입 경찰"
     else:
         # 마피아(조직원) 전용 직급
-        if honor >= 2000:
+        if honor >= 10000:
             return "👑 대부"
-        elif honor >= 1000:
+        elif honor >= 5000:
             return "⚔️ 언더보스"
-        elif honor >= 500:
+        elif honor >= 3000:
             return "🥇 카포"
-        elif honor >= 300:
+        elif honor >= 1000:
             return "🥈 솔다토"
-        elif honor >= 100:
+        elif honor >= 500:
             return "🥉 행동대원"
         else:
             return "🌱 깡패"
@@ -690,8 +690,8 @@ async def part_time_job(interaction: discord.Interaction):
 #   - 누구나 이용 가능 (감옥 수감 중에는 불가)
 #   - 돈을 걸고 잃으면 자금이 사라지는 '자금 소각(머니 싱크)' 시스템
 # ==========================================
-GAMBLE_MIN_BET = 100        # 최소 베팅금
-GAMBLE_MAX_BET = 5000       # 최대 베팅금
+GAMBLE_MIN_BET = 1000       # 최소 베팅금
+GAMBLE_MAX_BET = 50000      # 최대 베팅금
 GAMBLE_COOLDOWN = 3         # 베팅 사이 대기 시간(초) - 연타/도배 방지
 COIN_WIN_RATE = 0.48        # 동전 던지기 승률 (승리 시 베팅금의 2배 지급)
 
