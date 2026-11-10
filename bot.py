@@ -205,6 +205,13 @@ def update_user_market_purchase(user_id: int, new_money: int, new_honor: int, in
     }).eq("user_id", str_id).execute()
     _check_updated(res, "update_user_market_purchase")
 
+def delete_user_data(user_id: int):
+    """탈퇴 시 Supabase DB에서 해당 유저의 모든 기록을 삭제(초기화)"""
+    str_id = str(user_id)
+    _require_db()
+    res = supabase.table("user_data").delete().eq("user_id", str_id).execute()
+    _check_updated(res, "delete_user_data")
+
 # ==========================================
 # 🏷️ 칭호 시스템 (user_data 테이블의 `data` jsonb 컬럼에 저장)
 #   data = {"stats": {...}, "titles": [칭호ID...], "equipped": 칭호ID or None}
@@ -448,7 +455,7 @@ class SelfJoinView(discord.ui.View):
 
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-# === 2. 탈퇴 확인/취소 버튼 뷰 ===
+# === 2. 탈퇴 확인/취소 버튼 뷰 (DB 데이터 삭제/초기화 포함) ===
 class LeaveConfirmView(discord.ui.View):
     def __init__(self, target_user: discord.Member):
         super().__init__(timeout=60)
@@ -460,37 +467,55 @@ class LeaveConfirmView(discord.ui.View):
             await interaction.response.send_message("❌ 본인의 탈퇴 확인 창만 조작할 수 있습니다.", ephemeral=True)
             return
 
-        # 역할 제거가 3초 넘게 걸려도 '상호작용 실패'가 뜨지 않도록 먼저 응답을 예약
+        # 3초 타임아웃 방지 지연 응답
         await interaction.response.defer()
 
-        member = interaction.user  # 최신 정보의 멤버 객체
-        role = discord.utils.get(interaction.guild.roles, name="조직원")
-        if not role:
-            await interaction.followup.send("❌ 서버에 '조직원' 역할이 없습니다! 관리자에게 문의하세요.", ephemeral=True)
+        member = interaction.user
+        mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
+        citizen_role = discord.utils.get(interaction.guild.roles, name="시민")
+
+        # 1. 디스코드 역할 정리 (마피아 조직원 제거 & 시민 역할 복구)
+        try:
+            if mafia_role and mafia_role in member.roles:
+                await member.remove_roles(mafia_role)
+            if citizen_role and citizen_role not in member.roles:
+                await member.add_roles(citizen_role)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "🚨 역할 변경 권한이 없습니다. 디스코드 서버 설정 > 역할에서 **봇의 역할 순서를 상위로** 올려주세요.",
+                ephemeral=True
+            )
+            return
+        except discord.HTTPException as e:
+            print(f"Leave Error (role update): {e}")
+            await interaction.followup.send("🚨 디스코드 오류로 탈퇴 처리에 실패했습니다.", ephemeral=True)
             return
 
-        if role in member.roles:
-            try:
-                await member.remove_roles(role)
-            except discord.Forbidden:
-                await interaction.followup.send(
-                    "🚨 '조직원' 역할을 제거할 권한이 없습니다. 서버 설정 > 역할에서 **봇의 역할을 '조직원' 역할보다 위로** 올리고, 봇에 '역할 관리' 권한이 있는지 확인해주세요.",
-                    ephemeral=True
-                )
-                return
-            except discord.HTTPException as e:
-                print(f"Leave Error (remove_roles): {e}")
-                await interaction.followup.send("🚨 디스코드 오류로 탈퇴 처리에 실패했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
-                return
+        # 2. Supabase DB 기록 완전 삭제 (초기화)
+        try:
+            delete_user_data(member.id)
+        except Exception as e:
+            print(f"DB Error (delete_user_data): {e}")
+            # 이미 DB에 데이터가 없었거나 삭제 실패 시에도 탈퇴는 진행 처리
+
+        # 3. 쿨타임 메모리 초기화
+        mission_cooldowns.pop(member.id, None)
 
         for child in self.children:
             child.disabled = True
 
         embed = discord.Embed(
-            title="🚪 [패밀리 조직원 해임]",
-            description=f"**{member.mention}** 님이 패밀리를 최종 탈퇴하셨습니다.",
+            title="💥 [패밀리 조직원 해임 및 기록 삭제]",
+            description=(
+                f"**{member.mention}** 님이 패밀리를 최종 탈퇴하셨습니다.\n\n"
+                f"⚠️ **초기화 완료:** 모든 보유 자금, 명예, 인벤토리 아이템 및 칭호 기록이 DB에서 완전히 삭제되었습니다.\n"
+                f"🏷️ **신분 변화:** `마피아 (조직원)` ➔ `시민`"
+            ),
             color=discord.Color.dark_gray()
         )
+        if member.avatar:
+            embed.set_thumbnail(url=member.avatar.url)
+
         await interaction.edit_original_response(embed=embed, view=self)
 
     @discord.ui.button(label="취소 (패밀리에 잔류)", style=discord.ButtonStyle.secondary, custom_id="cancel_leave")
@@ -508,7 +533,7 @@ class LeaveConfirmView(discord.ui.View):
             color=discord.Color.blue()
         )
         await interaction.response.edit_message(embed=embed, view=self)
-
+        
 # === 3. 임무 선택 뷰 (쿨타임 10초 / 장비 장착 시 5초) ===
 class MissionSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
@@ -760,7 +785,6 @@ class MarketSelect(discord.ui.Select):
             print(f"DB Error (update_user_market_purchase): {e}")
             await interaction.response.send_message("🚨 데이터베이스 저장 오류로 구매가 처리되지 않았습니다. 관리자에게 문의해주세요.", ephemeral=True)
             return
-
         new_rank = get_user_rank(new_honor)
         rank_up_msg = ""
         if old_rank != new_rank:
