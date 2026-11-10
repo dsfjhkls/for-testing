@@ -493,7 +493,7 @@ class SelfJoinView(discord.ui.View):
 
         await interaction.response.send_message(embed=embed)
 
-# === 2. 탈퇴 확인/취소 버튼 뷰 (DB 데이터 삭제 및 시민 복귀) ===
+# === 2. 탈퇴 확인/취소 버튼 뷰 (마피아 & 경찰 공용 데이터 삭제/초기화) ===
 class LeaveConfirmView(discord.ui.View):
     def __init__(self, target_user: discord.Member):
         super().__init__(timeout=60)
@@ -505,37 +505,53 @@ class LeaveConfirmView(discord.ui.View):
             await interaction.response.send_message("❌ 본인의 탈퇴 확인 창만 조작할 수 있습니다.", ephemeral=True)
             return
 
+        # 3초 타임아웃 방지 지연 응답
         await interaction.response.defer()
 
         member = interaction.user
         mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
+        police_role = discord.utils.get(interaction.guild.roles, name="경찰")
         citizen_role = discord.utils.get(interaction.guild.roles, name="시민")
 
+        # 1. 소속 역할(마피아 또는 경찰) 제거 & 시민 역할 복구
         try:
             if mafia_role and mafia_role in member.roles:
                 await member.remove_roles(mafia_role)
+            if police_role and police_role in member.roles:
+                await member.remove_roles(police_role)
+                
             if citizen_role and citizen_role not in member.roles:
                 await member.add_roles(citizen_role)
         except discord.Forbidden:
-            await interaction.followup.send("🚨 역할 변경 권한이 없습니다.", ephemeral=True)
+            await interaction.followup.send(
+                "🚨 역할 변경 권한이 없습니다. 서버 설정 > 역할에서 봇의 역할 순서를 상위로 올려주세요.",
+                ephemeral=True
+            )
+            return
+        except discord.HTTPException as e:
+            print(f"Leave Error (role update): {e}")
+            await interaction.followup.send("🚨 디스코드 오류로 탈퇴 처리에 실패했습니다.", ephemeral=True)
             return
 
+        # 2. Supabase DB 데이터 완전 삭제 (초기화)
         try:
             delete_user_data(member.id)
         except Exception:
             pass
 
+        # 3. 쿨타임 메모리 제거
         mission_cooldowns.pop(member.id, None)
+        parttime_cooldowns.pop(member.id, None)
 
         for child in self.children:
             child.disabled = True
 
         embed = discord.Embed(
-            title="💥 [패밀리 조직원 해임 및 기록 삭제]",
+            title="💥 [소속 해임 및 세이브 데이터 초기화]",
             description=(
-                f"**{member.mention}** 님이 패밀리를 최종 탈퇴하셨습니다.\n\n"
-                f"⚠️ **초기화 완료:** 모든 자금, 명예, 인벤토리, 칭호 기록이 완전히 삭제되었습니다.\n"
-                f"🏷️ **신분 변화:** `마피아 (조직원)` ➔ `시민`"
+                f"**{member.mention}** 님이 소속을 최종 탈퇴하셨습니다.\n\n"
+                f"⚠️ **초기화 완료:** 모든 보유 자금, 명예, 인벤토리 아이템 및 기록이 DB에서 완전히 삭제되었습니다.\n"
+                f"🏷️ **신분 변화:** `마피아/경찰` ➔ `시민`"
             ),
             color=discord.Color.dark_gray()
         )
@@ -544,7 +560,7 @@ class LeaveConfirmView(discord.ui.View):
 
         await interaction.edit_original_response(embed=embed, view=self)
 
-    @discord.ui.button(label="취소 (패밀리에 잔류)", style=discord.ButtonStyle.secondary, custom_id="cancel_leave")
+    @discord.ui.button(label="취소 (소속 잔류)", style=discord.ButtonStyle.secondary, custom_id="cancel_leave")
     async def cancel_leave(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.target_user:
             await interaction.response.send_message("❌ 본인의 탈퇴 확인 창만 조작할 수 있습니다.", ephemeral=True)
@@ -555,7 +571,7 @@ class LeaveConfirmView(discord.ui.View):
 
         embed = discord.Embed(
             title="🛡️ [탈퇴 철회]",
-            description="패밀리 탈퇴 신청이 취소되었습니다.",
+            description="탈퇴 신청이 취소되었습니다.",
             color=discord.Color.blue()
         )
         await interaction.edit_original_response(embed=embed, view=self)
