@@ -414,13 +414,26 @@ class SelfJoinView(discord.ui.View):
             await interaction.response.send_message("⚠️ 당신은 이미 패밀리의 정식 조직원입니다!", ephemeral=True)
             return
 
-        await user.add_roles(role)
-        user_stats = get_user_data(user.id)
+        try:
+            await user.add_roles(role)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "🚨 '조직원' 역할을 부여할 권한이 없습니다. 서버 설정에서 봇의 역할을 '조직원' 역할보다 위로 올려주세요.",
+                ephemeral=True
+            )
+            return
+
+        user_stats = get_user_data(user.id)  # 첫 가입이면 이 시점에 DB에 유저 행이 생성됨
         current_rank = get_user_rank(user_stats['honor'])
 
         embed = discord.Embed(
             title="🕶️ [패밀리 입단 환영]",
-            description=f"환영한다, 신입.\n**{user.mention}** 님이 패밀리의 새로운 조직원으로 합류했습니다.",
+            description=(
+                f"환영한다, 신입.\n"
+                f"**{user.mention}** 님이 칼렌데의 음지, 패밀리의 새로운 조직원으로 합류했습니다.\n\n"
+                f"이곳에서는 실력과 운이 곧 계급이다. 임무로 돈과 명예를 쌓고, 암시장에서 장비를 갖추고, "
+                f"자신만의 이름을 새겨라."
+            ),
             color=discord.Color.dark_red()
         )
         if user.avatar:
@@ -429,7 +442,18 @@ class SelfJoinView(discord.ui.View):
         embed.add_field(name="💰 초기 자금", value=f"${user_stats['money']:,}", inline=True)
         embed.add_field(name="🏆 조직 명예", value=f"{user_stats['honor']} pt", inline=True)
         embed.add_field(name="📍 시작 거점", value=user_stats['location'], inline=False)
-        
+        embed.add_field(
+            name="📌 첫 걸음 가이드",
+            value="• `/임무` — 비밀 임무를 수행해 자금과 명예를 얻습니다.\n"
+                  "• `/암시장` — 현재 거점의 밀거래 암시장에서 장비를 구매합니다.\n"
+                  "• `/이동` — 다른 지역으로 거점을 옮깁니다.\n"
+                  "• `/칭호` — 업적으로 얻은 칭호를 확인하고 장착합니다.\n"
+                  "• `/프로필` — 나의 신원 서류를 확인합니다.\n"
+                  "• `/도움말` — 전체 명령어 가이드를 봅니다.",
+            inline=False
+        )
+        embed.set_footer(text=f"{interaction.guild.name} · 패밀리에 오신 것을 환영합니다")
+
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
 # === 2. 탈퇴 확인/취소 버튼 뷰 ===
