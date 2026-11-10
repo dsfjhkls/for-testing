@@ -322,6 +322,8 @@ class MissionSelect(discord.ui.Select):
             next_available = mission_cooldowns[user.id]
             if now < next_available:
                 remaining = int((next_available - now).total_seconds())
+                # 선택 메뉴를 새 뷰로 교체해서 '선택된 상태'를 초기화 (같은 임무도 다시 고를 수 있게)
+                await interaction.edit_original_response(view=MissionView(owner=self.owner))
                 await interaction.followup.send(f"⏳ 체력을 회복 중입니다. **{remaining}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
                 return
 
@@ -424,11 +426,14 @@ class MissionSelect(discord.ui.Select):
         if user.avatar:
             embed.set_thumbnail(url=user.avatar.url)
 
-        await interaction.edit_original_response(embed=embed, view=None)
+        # 임무 선택 메뉴는 새 뷰로 갱신해서 계속 유지 (view=None으로 지우면 임무를 한 번밖에 못 함)
+        await interaction.edit_original_response(view=MissionView(owner=self.owner))
+        # 결과는 별도 메시지로 전송 (이전 결과가 덮어써지지 않음)
+        await interaction.followup.send(embed=embed)
 
 class MissionView(discord.ui.View):
     def __init__(self, owner: discord.Member):
-        super().__init__(timeout=60)
+        super().__init__(timeout=180)
         self.add_item(MissionSelect(owner=owner))
 
 # === 4. 암시장 드롭다운 및 Supabase DB 저장 뷰 ===
@@ -556,10 +561,11 @@ async def leave_family(interaction: discord.Interaction):
 # === 7. `/임무` 명령어 ===
 @bot.tree.command(name="임무", description="[조직원 전용] 원하는 비밀 임무를 직접 선택하여 수행합니다.")
 async def execute_mission(interaction: discord.Interaction):
+    # 점검 체크는 defer 이전에 해야 함 (이미 응답한 뒤에 send_message를 쓰면 오류)
+    if not await check_maintenance(interaction): return
+
     # 3초 타임아웃 방지
     await interaction.response.defer()
-
-    if not await check_maintenance(interaction): return
 
     user = interaction.user
     role = discord.utils.get(interaction.guild.roles, name="조직원")
