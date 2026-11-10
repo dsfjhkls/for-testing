@@ -35,8 +35,18 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # ==========================================
 # 🌐 [Supabase DB 클라이언트 연결]
 # ==========================================
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+def _clean_env(value):
+    # 앞뒤 공백/따옴표 제거
+    return (value or "").strip().strip('"').strip("'").strip()
+
+SUPABASE_URL = _clean_env(os.getenv("SUPABASE_URL"))
+SUPABASE_KEY = _clean_env(os.getenv("SUPABASE_KEY"))
+
+# 흔한 실수 자동 보정: 끝의 슬래시, /rest/v1 경로 제거 (PGRST125 방지)
+SUPABASE_URL = SUPABASE_URL.rstrip("/")
+if SUPABASE_URL.endswith("/rest/v1"):
+    SUPABASE_URL = SUPABASE_URL[: -len("/rest/v1")]
+SUPABASE_URL = SUPABASE_URL.rstrip("/")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("🚨 [경고] SUPABASE_URL 또는 SUPABASE_KEY 환경 변수가 설정되지 않았습니다!")
@@ -44,7 +54,14 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 else:
     try:
         supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print("✅ Supabase 데이터베이스 연결 성공!")
+        print(f"ℹ️ 사용 중인 SUPABASE_URL: {SUPABASE_URL}")
+        # 실제 DB 접근 테스트 (URL/키/테이블 문제를 시작 시점에 바로 확인)
+        try:
+            supabase.table("user_data").select("user_id").limit(1).execute()
+            print("✅ Supabase 데이터베이스 연결 및 user_data 테이블 접근 성공!")
+        except Exception as test_err:
+            print(f"🚨 Supabase 접근 테스트 실패: {test_err}")
+            print("   → SUPABASE_URL이 'https://프로젝트ID.supabase.co' 형태인지, user_data 테이블이 있는지 확인하세요.")
     except Exception as e:
         print(f"🚨 Supabase 연결 실패: {e}")
         supabase = None
@@ -383,7 +400,17 @@ class MissionSelect(discord.ui.Select):
             earned_money = int(base_money * money_mult)
             earned_honor = int(selected["honor"] * honor_mult)
             
-            update_user_stats(user.id, earned_money, earned_honor)
+            try:
+                update_user_stats(user.id, earned_money, earned_honor)
+            except Exception as e:
+                print(f"DB Error (update_user_stats): {e}")
+                mission_cooldowns.pop(user.id, None)  # 저장 실패 시 쿨타임 되돌리기
+                await interaction.edit_original_response(view=MissionView(owner=self.owner))
+                await interaction.followup.send(
+                    "🚨 데이터베이스 저장 중 오류가 발생해 보상이 반영되지 않았습니다. 관리자에게 문의해주세요.",
+                    ephemeral=True
+                )
+                return
             current_stats = get_user_data(user.id)
             new_rank = get_user_rank(current_stats["honor"])
 
