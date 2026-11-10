@@ -1164,7 +1164,7 @@ async def gamble_rules(interaction: discord.Interaction):
 # 쿨타임 관리를 위한 사전
 duel_cooldowns = {}
 
-@bot.tree.command(name="결투", description="[조직원 전용] 다른 조직원과 1:1 결투를 벌여 명예를 겁니다.")
+@bot.tree.command(name="결투", description="[조직원 전용] 장비와 스탯을 활용해 다른 조직원과 본격적인 전투를 벌입니다.")
 @app_commands.describe(member="결투를 신청할 상대 조직원", 베팅명예="걸고 싸울 명예 포인트 (기본 10pt)")
 async def duel_member(interaction: discord.Interaction, member: discord.Member, 베팅명예: int = 10):
     if not await check_maintenance(interaction): return
@@ -1211,24 +1211,52 @@ async def duel_member(interaction: discord.Interaction, member: discord.Member, 
 
     await interaction.response.defer()
 
-    # 무기 상점 아이템 기반 승률 보정치 계산 (수정완료)
-    def get_weapon_bonus(inventory: dict) -> int:
-        bonus = 0
-        if "👊🏻 슈퍼 울트라 주먹" in inventory: bonus += 30
-        elif "💉 수상한 주사기" in inventory: bonus += 20
-        elif "🏏 몽둥이" in inventory: bonus += 15
-        elif "🔫 권총" in inventory: bonus += 10
-        elif "🗡️ 단검" in inventory: bonus += 5
-        return bonus
+    # --- ⚔️ 장비/무기 스탯 계산 함수 ---
+    def get_combat_stats(inventory: dict, base_honor: int):
+        # 기본 스탯 (체력 1000, 공격력 100, 방어력 10 + 명예 보정)
+        hp = 1000 + (base_honor * 5)
+        atk = 100 + int(base_honor * 0.5)
+        def_val = 10
+        
+        # 무기 상점 및 암시장 장비 반영
+        if "👊🏻 슈퍼 울트라 주먹" in inventory: atk += 500; hp += 2000
+        elif "💉 수상한 주사기" in inventory: atk += 300; hp += 1000
+        elif "🏏 몽둥이" in inventory: atk += 200
+        elif "🔫 권총" in inventory: atk += 150
+        elif "🗡️ 단검" in inventory: atk += 80
 
-    user_weapon_bonus = get_weapon_bonus(user_stats.get("inventory", {}))
-    target_weapon_bonus = get_weapon_bonus(target_stats.get("inventory", {}))
+        if "🎟️ 임무 실패 방지권" in inventory: def_val += 20
+        if "🪪 치안국 위조 신분증" in inventory: def_val += 15
+        
+        return hp, atk, def_val
 
-    honor_diff = (user_stats["honor"] - target_stats["honor"]) * 0.1
-    weapon_diff = user_weapon_bonus - target_weapon_bonus
+    u_hp, u_atk, u_def = get_combat_stats(user_stats.get("inventory", {}), user_stats["honor"])
+    t_hp, t_atk, t_def = get_combat_stats(target_stats.get("inventory", {}), target_stats["honor"])
+
+    # --- 🎲 턴제 시뮬레이션 로그 생성 ---
+    logs = []
+    turn = 1
+    max_turns = 6
     
-    user_win_rate = max(10, min(90, 50 + honor_diff + weapon_diff))
-    is_user_win = random.randint(1, 100) <= user_win_rate
+    current_u_hp, current_t_hp = u_hp, t_hp
+
+    while current_u_hp > 0 and current_t_hp > 0 and turn <= max_turns:
+        # 유저 공격
+        u_dmg = max(10, u_atk - t_def + random.randint(-20, 20))
+        current_t_hp = max(0, current_t_hp - u_dmg)
+        logs.append(f"+ {user.display_name}의 공격! {member.display_name}의 체력 - {u_dmg}")
+
+        if current_t_hp <= 0:
+            break
+
+        # 상대 공격
+        t_dmg = max(10, t_atk - u_def + random.randint(-20, 20))
+        current_u_hp = max(0, current_u_hp - t_dmg)
+        logs.append(f"+ {member.display_name}의 반격! {user.display_name}의 체력 - {t_dmg}")
+        
+        turn += 1
+
+    is_user_win = current_u_hp >= current_t_hp
 
     winner = user if is_user_win else member
     loser = member if is_user_win else user
@@ -1249,20 +1277,44 @@ async def duel_member(interaction: discord.Interaction, member: discord.Member, 
         await interaction.followup.send("🚨 결투 정산 중 데이터베이스 오류가 발생했습니다.", ephemeral=True)
         return
 
+    # --- 📊 스크린샷 스타일 임베드 구성 ---
     embed = discord.Embed(
-        title="⚔️ [패밀리 혈투: 1:1 결투 결과]",
-        description=f"**{user.mention}** 님과 **{member.mention}** 님의 피비린내 나는 결투가 끝났습니다!\n\n"
-                    f"🏆 **승리자:** {winner.mention} (승률 판정: `{user_win_rate:.1f}%`)\n\n"
-                    f"📈 **명예 변동:**\n"
-                    f"• {winner.mention} `+{베팅명예} pt` (총 {new_winner_honor} pt)\n"
-                    f"• {loser.mention} `-{베팅명예} pt` (총 {new_loser_honor} pt)",
-        color=discord.Color.gold() if is_user_win else discord.Color.dark_red()
+        title=f"⚔️ 패밀리 혈투: {user.display_name} VS {member.display_name}",
+        color=discord.Color.dark_red()
     )
+
+    # 양측 스탯 비교 필드
+    embed.add_field(
+        name=f"{user.display_name}",
+        value=f"❤️ 체력 : {current_u_hp} / {u_hp}\n⚔️ 공격력 : {u_atk}\n🛡️ 방어력 : {u_def}",
+        inline=True
+    )
+    embed.add_field(
+        name=f"{member.display_name}",
+        value=f"❤️ 체력 : {current_t_hp} / {t_hp}\n⚔️ 공격력 : {t_atk}\n🛡️ 방어력 : {t_def}",
+        inline=True
+    )
+
+    # 전투 현황 로그 상자
+    log_text = "\n".join(logs) if logs else "+ 조우 직후 싱겁게 끝났습니다."
+    embed.add_field(
+        name="전투 현황",
+        value=f"```diff\n{log_text}\n```",
+        inline=False
+    )
+
+    embed.description = (
+        f"🏆 **승리자:** {winner.mention}\n\n"
+        f"📈 **명예 변동:**\n"
+        f"• {winner.mention} `+{베팅명예} pt` (총 {new_winner_honor} pt)\n"
+        f"• {loser.mention} `-{베팅명예} pt` (총 {new_loser_honor} pt)"
+    )
+
     if winner.avatar:
         embed.set_thumbnail(url=winner.avatar.url)
 
     await interaction.followup.send(embed=embed)
-
+    
 class WeaponShopSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
         self.owner = owner
