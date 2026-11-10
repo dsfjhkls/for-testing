@@ -305,8 +305,11 @@ class MissionSelect(discord.ui.Select):
         super().__init__(placeholder="🎯 수행할 비밀 임무를 선택하세요...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
+        # ⚡ 3초 타임아웃 방지를 위한 응답 지연 처리 (가장 먼저 실행)
+        await interaction.response.defer()
+
         if interaction.user != self.owner:
-            await interaction.response.send_message("❌ 타인의 임무 선택 창은 조작할 수 없습니다.", ephemeral=True)
+            await interaction.followup.send("❌ 타인의 임무 선택 창은 조작할 수 없습니다.", ephemeral=True)
             return
 
         user = interaction.user
@@ -320,14 +323,14 @@ class MissionSelect(discord.ui.Select):
             if now < next_available:
                 remaining = int((next_available - now).total_seconds())
                 mins, secs = divmod(remaining, 60)
-                await interaction.response.send_message(f"⏳ 체력을 회복 중입니다. **{mins}분 {secs}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
+                await interaction.followup.send(f"⏳ 체력을 회복 중입니다. **{mins}분 {secs}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
                 return
 
-        cooldown_seconds = 10
+        cooldown_minutes = 10
         if "⏱️ 고급 크로노그래프 시계" in inventory or "🛵 통신용 특수 바이크" in inventory:
-            cooldown_seconds = 5
+            cooldown_minutes = 5
 
-        mission_cooldowns[user.id] = now + timedelta(seconds=cooldown_seconds)
+        mission_cooldowns[user.id] = now + timedelta(minutes=cooldown_minutes)
 
         mission_data = {
             "mission_1": {"title": "🕶️ 타 조직 구역 비밀 조사", "success_rate": 80, "reward": (300, 700), "honor": 10},
@@ -365,8 +368,8 @@ class MissionSelect(discord.ui.Select):
         if "🍾 밀수된 고급 양주" in inventory:
             honor_mult += 1.0
             active_buffs.append("🍾 양주 (명예 2배)")
-        if cooldown_seconds == 5:
-            active_buffs.append("⏱️ 시간/이동 장비 (쿨타임 5초 적용)")
+        if cooldown_minutes == 5:
+            active_buffs.append("⏱️ 시간/이동 장비 (쿨타임 5분 적용)")
 
         final_success_rate = min(98, selected["success_rate"] + success_bonus)
         is_success = random.randint(1, 100) <= final_success_rate
@@ -421,7 +424,8 @@ class MissionSelect(discord.ui.Select):
         if user.avatar:
             embed.set_thumbnail(url=user.avatar.url)
 
-        await interaction.response.edit_message(embed=embed, view=None)
+        # defer() 적용 후에는 edit_original_response 사용
+        await interaction.edit_original_response(embed=embed, view=None)
 
 class MissionView(discord.ui.View):
     def __init__(self, owner: discord.Member):
@@ -553,13 +557,16 @@ async def leave_family(interaction: discord.Interaction):
 # === 7. `/임무` 명령어 ===
 @bot.tree.command(name="임무", description="[조직원 전용] 원하는 비밀 임무를 직접 선택하여 수행합니다.")
 async def execute_mission(interaction: discord.Interaction):
+    # ⚡ 3초 타임아웃 방지를 위한 응답 지연 처리
+    await interaction.response.defer()
+
     if not await check_maintenance(interaction): return
 
     user = interaction.user
     role = discord.utils.get(interaction.guild.roles, name="조직원")
 
     if not role or role not in user.roles:
-        await interaction.response.send_message("❌ 패밀리의 정식 조직원만 임무를 하달받을 수 있습니다! `/가입`을 먼저 해주세요.", ephemeral=True)
+        await interaction.followup.send("❌ 패밀리의 정식 조직원만 임무를 하달받을 수 있습니다! `/가입`을 먼저 해주세요.", ephemeral=True)
         return
 
     user_stats = get_user_data(user.id)
@@ -575,7 +582,7 @@ async def execute_mission(interaction: discord.Interaction):
         embed.set_thumbnail(url=user.avatar.url)
 
     view = MissionView(owner=user)
-    await interaction.response.send_message(embed=embed, view=view)
+    await interaction.followup.send(embed=embed, view=view)
 
 # === 8. `/프로필` 명령어 ===
 @bot.tree.command(name="프로필", description="[마피아 GM] 패밀리 조직원 신원 조회 서류 및 인벤토리를 확인합니다.")
