@@ -186,9 +186,9 @@ BLACK_MARKET_ITEMS = {
         {"id": "pirate_map", "name": "해적 비밀 항해 지도", "price": 2500, "desc": "임무 성공률 +20%", "emoji": "🗺️"}
     ],
     "로젠펠트": [
-        {"id": "luxury_vodka", "name": "미정1", "price": 2000, "desc": "미정1", "emoji": "🥃"},
-        {"id": "gold_ring", "name": "미정2", "price": 3000, "desc": "미정2", "emoji": "💍"},
-        {"id": "diamond_necklace", "name": "미정3", "price": 5000, "desc": "미정3", "emoji": "💎"}
+        {"id": "luxury_vodka", "name": "아우라 증폭기", "price": 30000, "desc": "임무 성공 시 명예 x2배", "emoji": "🥃"},
+        {"id": "gold_ring", "name": "금 반지", "price": 3000, "desc": "임무 성공 시 추가 자금 +10%", "emoji": "💍"},
+        {"id": "diamond_necklace", "name": "다이아몬드 목걸이", "price": 5000, "desc": "임무 성공 시 추가 자금 +20%", "emoji": "💎"}
     ]
 }
 
