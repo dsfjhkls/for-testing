@@ -468,43 +468,119 @@ async def check_membership(interaction: discord.Interaction) -> bool:
         return False
     return True
 
-# === ⚙️ [설정] 명령어 ===
-@bot.tree.command(name="설정", description="[조직원/경찰 전용] 게임 내 편의 기능 설정을 변경합니다.")
-@app_commands.describe(상태="임무 실패 방지권 자동 사용 여부")
-@app_commands.choices(상태=[
-    app_commands.Choice(name="켜기 (자동 사용)", value="on"),
-    app_commands.Choice(name="끄기 (수동 사용)", value="off")
-])
-async def settings_command(interaction: discord.Interaction, 상태: app_commands.Choice[str]):
+# === ⚙️ 다중 페이지 설정 뷰 (SettingsView) ===
+class SettingsView(discord.ui.View):
+    def __init__(self, user: discord.Member, page: int = 0):
+        super().__init__(timeout=120)
+        self.user = user
+        self.page = page
+        self.max_page = 1  # 총 2페이지 (0, 1)
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.prev_btn.disabled = (self.page == 0)
+        self.next_btn.disabled = (self.page == self.max_page)
+
+    def create_embed(self) -> discord.Embed:
+        user_stats = get_user_data(self.user.id)
+        settings = user_stats.get("settings", {"auto_fail_guard": True, "alert_mode": True})
+
+        embed = discord.Embed(
+            title="⚙️ [패밀리 시스템 통합 설정]",
+            description=f"**{self.user.mention}** 님의 게임 환경 설정을 관리합니다.\n아래 버튼을 눌러 페이지를 이동하거나 설정을 변경하세요.",
+            color=discord.Color.dark_purple()
+        )
+
+        if self.page == 0:
+            auto_guard = settings.get("auto_fail_guard", True)
+            status_text = "🟢 **켜짐 (자동 사용)**" if auto_guard else "🔴 **꺼짐 (수동 사용)**"
+            
+            embed.add_field(
+                name="📄 [페이지 1/2] 임무 안전 장치",
+                value=f"• **항목:** 임무 실패 방지권 자동 사용\n"
+                      f"• **설명:** 임무 실패 시 가방의 방지권을 자동으로 소모해 수배를 방어합니다.\n\n"
+                      f"현재 상태: {status_text}",
+                inline=False
+            )
+            self.toggle_btn.label = "상태 전환 (토글)"
+            self.toggle_btn.style = discord.ButtonStyle.green if auto_guard else discord.ButtonStyle.danger
+
+        elif self.page == 1:
+            alert_mode = settings.get("alert_mode", True)
+            status_text = "🟢 **켜짐 (활성화)**" if alert_mode else "🔴 **꺼짐 (차단)**"
+            
+            embed.add_field(
+                name="📄 [페이지 2/2] 시스템 알림 환경",
+                value=f"• **항목:** 긴급 수배 및 이벤트 알림\n"
+                      f"• **설명:** 주요 이벤트나 수배 경보 발생 시 멘션 알림을 받습니다.\n\n"
+                      f"현재 상태: {status_text}",
+                inline=False
+            )
+            self.toggle_btn.label = "상태 전환 (토글)"
+            self.toggle_btn.style = discord.ButtonStyle.green if alert_mode else discord.ButtonStyle.danger
+
+        if self.user.avatar:
+            embed.set_thumbnail(url=self.user.avatar.url)
+            
+        embed.set_footer(text=f"페이지 {self.page + 1} / {self.max_page + 1}")
+        return embed
+
+    @discord.ui.button(label="◀ 이전", style=discord.ButtonStyle.secondary, custom_id="settings_prev")
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user:
+            await interaction.response.send_message("❌ 본인의 설정 창만 조작할 수 있습니다.", ephemeral=True)
+            return
+        
+        if self.page > 0:
+            self.page -= 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+    @discord.ui.button(label="상태 전환", style=discord.ButtonStyle.primary, custom_id="settings_toggle")
+    async def toggle_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user:
+            await interaction.response.send_message("❌ 본인의 설정 창만 조작할 수 있습니다.", ephemeral=True)
+            return
+
+        user_stats = get_user_data(self.user.id)
+        settings = user_stats.get("settings", {"auto_fail_guard": True, "alert_mode": True})
+
+        if self.page == 0:
+            settings["auto_fail_guard"] = not settings.get("auto_fail_guard", True)
+        elif self.page == 1:
+            settings["alert_mode"] = not settings.get("alert_mode", True)
+
+        try:
+            update_user_settings(self.user.id, settings)
+        except Exception:
+            await interaction.response.send_message("🚨 설정 저장 중 오류가 발생했습니다.", ephemeral=True)
+            return
+
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+    @discord.ui.button(label="다음 ▶", style=discord.ButtonStyle.secondary, custom_id="settings_next")
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user:
+            await interaction.response.send_message("❌ 본인의 설정 창만 조작할 수 있습니다.", ephemeral=True)
+            return
+        
+        if self.page < self.max_page:
+            self.page += 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+# === ⚙️ 통합 `/설정` 슬래시 명령어 ===
+@bot.tree.command(name="설정", description="[조직원/경찰 전용] 게임 내 통합 환경 설정 창을 엽니다.")
+async def settings_command(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if await check_jail(interaction): return
     if not await check_membership(interaction): return
 
     user = interaction.user
-    user_stats = get_user_data(user.id)
-    
-    # settings 딕셔너리 불러오기 및 갱신
-    settings = user_stats.get("settings", {})
-    is_on = (상태.value == "on")
-    settings["auto_fail_guard"] = is_on
+    view = SettingsView(user=user, page=0)
+    embed = view.create_embed()
 
-    try:
-        update_user_settings(user.id, settings)
-    except Exception:
-        await interaction.response.send_message("🚨 설정 저장 중 오류가 발생했습니다.", ephemeral=True)
-        return
-
-    status_text = "🟢 **켜짐 (자동 사용)**" if is_on else "🔴 **꺼짐 (수동 사용)**"
-    embed = discord.Embed(
-        title="⚙️ [게임 설정 변경]",
-        description=f"**{user.mention}** 님의 임무 실패 방지권 설정이 변경되었습니다.\n\n"
-                    f"🎟️ **실패 방지권 자동 사용:** {status_text}",
-        color=discord.Color.blue()
-    )
-    if user.avatar:
-        embed.set_thumbnail(url=user.avatar.url)
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # === 🚨 [경찰 전용] `/검거` 명령어 ===
 @bot.tree.command(name="검거", description="[경찰 전용] 지명수배 중인 마피아를 체포하여 감옥에 가둡니다.")
@@ -1534,15 +1610,19 @@ async def profile(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
 
     user = interaction.user
-    role = discord.utils.get(interaction.guild.roles, name="조직원")
+    mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
+    police_role = discord.utils.get(interaction.guild.roles, name="경찰")
     
-    if not role or role not in user.roles:
-        user_rank = "시민"
-    else:
+    # 소속에 따른 직급 판별
+    if police_role and police_role in user.roles:
         user_stats = get_user_data(user.id)
-        user_rank = get_user_rank(user_stats.get("honor", 0))
-
-    user_stats = get_user_data(user.id)
+        user_rank = get_user_rank(user_stats.get("honor", 0), is_police=True)
+    elif mafia_role and mafia_role in user.roles:
+        user_stats = get_user_data(user.id)
+        user_rank = get_user_rank(user_stats.get("honor", 0), is_police=False)
+    else:
+        user_rank = "시민"
+        user_stats = get_user_data(user.id)
 
     embed = discord.Embed(
         title="🕵️‍♂️ [패밀리 비밀 문서] 신원 조회",
