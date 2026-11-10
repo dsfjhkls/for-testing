@@ -36,13 +36,11 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # 🌐 [Supabase DB 클라이언트 연결]
 # ==========================================
 def _clean_env(value):
-    # 앞뒤 공백/따옴표 제거
     return (value or "").strip().strip('"').strip("'").strip()
 
 SUPABASE_URL = _clean_env(os.getenv("SUPABASE_URL"))
 SUPABASE_KEY = _clean_env(os.getenv("SUPABASE_KEY"))
 
-# 흔한 실수 자동 보정: 끝의 슬래시, /rest/v1 경로 제거 (PGRST125 방지)
 SUPABASE_URL = SUPABASE_URL.rstrip("/")
 if SUPABASE_URL.endswith("/rest/v1"):
     SUPABASE_URL = SUPABASE_URL[: -len("/rest/v1")]
@@ -55,13 +53,11 @@ else:
     try:
         supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
         print(f"ℹ️ 사용 중인 SUPABASE_URL: {SUPABASE_URL}")
-        # 실제 DB 접근 테스트 (URL/키/테이블 문제를 시작 시점에 바로 확인)
         try:
             supabase.table("user_data").select("user_id").limit(1).execute()
             print("✅ Supabase 데이터베이스 연결 및 user_data 테이블 접근 성공!")
         except Exception as test_err:
             print(f"🚨 Supabase 접근 테스트 실패: {test_err}")
-            print("   → SUPABASE_URL이 'https://프로젝트ID.supabase.co' 형태인지, user_data 테이블이 있는지 확인하세요.")
     except Exception as e:
         print(f"🚨 Supabase 연결 실패: {e}")
         supabase = None
@@ -74,18 +70,20 @@ MAINTENANCE_MODE = False
 # 쿨타임 관리를 위한 메모리 사전 (유저ID: 다음 수행 가능 시간)
 mission_cooldowns = {}
 
-# === 🎖️ 명예 포인트에 따른 직급 계산 함수 ===
+# === 🎖️ 변경된 명예 포인트에 따른 직급 계산 함수 ===
 def get_user_rank(honor: int) -> str:
-    if honor >= 200:
-        return "👑 패밀리 언더보스"
-    elif honor >= 150:
-        return "⚔️ 간부 (지휘관)"
+    if honor >= 2000:
+        return "👑 대부"
+    elif honor >= 1000:
+        return "⚔️ 언더보스"
+    elif honor >= 500:
+        return "🥇 카포"
+    elif honor >= 300:
+        return "🥈 솔다토"
     elif honor >= 100:
-        return "🥇 행동대장"
-    elif honor >= 50:
-        return "🥈 정식 행동대원"
+        return "🥉 행동대원"
     else:
-        return "🥉 신입 행동대원"
+        return "🌱 신입"
 
 # === 🗺️ 4대 지역 정보 데이터 ===
 LOCATIONS = {
@@ -157,8 +155,6 @@ def get_user_data(user_id: int) -> dict:
             "inventory": {}
         }
         ins = supabase.table("user_data").insert(default_data).execute()
-        if not ins.data:
-            print(f"⚠️ [get_user_data] 새 유저 행 생성 결과가 비어 있습니다 (user_id={str_id}). RLS 정책을 확인하세요.")
         return default_data
     except Exception as e:
         print(f"DB Error (get_user_data): {e}")
@@ -166,12 +162,11 @@ def get_user_data(user_id: int) -> dict:
 
 def _require_db():
     if not supabase:
-        raise RuntimeError("Supabase 클라이언트가 초기화되지 않았습니다 (SUPABASE_URL / SUPABASE_KEY 확인)")
+        raise RuntimeError("Supabase 클라이언트가 초기화되지 않았습니다")
 
 def _check_updated(res, action: str):
-    # update()가 한 행도 바꾸지 못하면 res.data가 빈 리스트 -> 행이 없거나 RLS 정책에 막힌 것
     if not res.data:
-        raise RuntimeError(f"{action}: 반영된 행이 없습니다 (user_data 행이 없거나 RLS 정책으로 차단됨)")
+        raise RuntimeError(f"{action}: 반영된 행이 없습니다")
 
 def update_user_stats(user_id: int, money_add: int, honor_add: int):
     str_id = str(user_id)
@@ -206,16 +201,12 @@ def update_user_market_purchase(user_id: int, new_money: int, new_honor: int, in
     _check_updated(res, "update_user_market_purchase")
 
 def delete_user_data(user_id: int):
-    """탈퇴 시 Supabase DB에서 해당 유저의 모든 기록을 삭제(초기화)"""
     str_id = str(user_id)
     _require_db()
     res = supabase.table("user_data").delete().eq("user_id", str_id).execute()
     _check_updated(res, "delete_user_data")
 
-# ==========================================
-# 🏷️ 칭호 시스템 (user_data 테이블의 `data` jsonb 컬럼에 저장)
-#   data = {"stats": {...}, "titles": [칭호ID...], "equipped": 칭호ID or None}
-# ==========================================
+# === 🏷️ 칭호 시스템 ===
 TITLES = {
     "first_step":   {"name": "🌱 첫 발걸음",       "desc": "임무 1회 성공",                        "check": lambda s, i: s["success"] >= 1},
     "veteran":      {"name": "🗡️ 노련한 청부꾼",   "desc": "임무 10회 성공",                       "check": lambda s, i: s["success"] >= 10},
@@ -225,7 +216,7 @@ TITLES = {
     "ledger_thief": {"name": "🏛️ 장부 도둑",       "desc": "'라이벌 보스의 장부 탈취' 5회 성공",   "check": lambda s, i: s["hard_success"] >= 5},
     "unlucky":      {"name": "🩹 불운한 쥐새끼",   "desc": "임무 5회 실패",                        "check": lambda s, i: s["fail"] >= 5},
     "rich":         {"name": "💰 검은 돈의 주인",  "desc": "보유 자금 $10,000 이상",               "check": lambda s, i: (i.get("money") or 0) >= 10000},
-    "respected":    {"name": "🎩 존경받는 자",     "desc": "조직 명예 100pt 이상",                 "check": lambda s, i: (i.get("honor") or 0) >= 100},
+    "respected":    {"name": "🎩 존경받는 자",     "desc": "조직 명예 300pt 이상 (솔다토 이상)",   "check": lambda s, i: (i.get("honor") or 0) >= 300},
     "collector":    {"name": "🎒 장비 수집가",     "desc": "암시장 장비 3개 이상 보유",            "check": lambda s, i: len(i.get("inventory") or {}) >= 3},
 }
 
@@ -241,14 +232,13 @@ def get_title_blob(user_info: dict) -> dict:
     return blob
 
 def evaluate_new_titles(blob: dict, user_info: dict) -> list:
-    """조건을 만족했지만 아직 없는 칭호를 blob에 추가하고, 새로 얻은 칭호 ID 목록을 반환"""
     new_ids = []
     for tid, t in TITLES.items():
         if tid not in blob["titles"] and t["check"](blob["stats"], user_info):
             blob["titles"].append(tid)
             new_ids.append(tid)
     if new_ids and blob.get("equipped") not in TITLES:
-        blob["equipped"] = new_ids[0]  # 장착한 칭호가 없으면 첫 칭호 자동 장착
+        blob["equipped"] = new_ids[0]
     return new_ids
 
 def save_title_blob(user_id: int, blob: dict):
@@ -257,7 +247,6 @@ def save_title_blob(user_id: int, blob: dict):
     _check_updated(res, "save_title_blob")
 
 def record_mission_result(user_id: int, user_info: dict, success: bool, hard: bool) -> list:
-    """임무 결과를 기록하고 새로 얻은 칭호 ID 목록을 반환"""
     blob = get_title_blob(user_info)
     s = blob["stats"]
     if success:
@@ -326,22 +315,17 @@ class TitleSelect(discord.ui.Select):
             return
         await interaction.response.defer()
 
-        try:
-            info = get_user_data(interaction.user.id)
-            blob = get_title_blob(info)
-            choice = self.values[0]
-            if choice == "__none__":
-                blob["equipped"] = None
-            elif choice in blob["titles"]:
-                blob["equipped"] = choice
-            else:
-                await interaction.followup.send("❌ 아직 획득하지 못한 칭호입니다.", ephemeral=True)
-                return
-            save_title_blob(interaction.user.id, blob)
-        except Exception as e:
-            print(f"DB Error (title equip): {e}")
-            await interaction.followup.send("🚨 데이터베이스 저장 오류로 칭호를 변경하지 못했습니다. 관리자에게 문의해주세요.", ephemeral=True)
+        info = get_user_data(interaction.user.id)
+        blob = get_title_blob(info)
+        choice = self.values[0]
+        if choice == "__none__":
+            blob["equipped"] = None
+        elif choice in blob["titles"]:
+            blob["equipped"] = choice
+        else:
+            await interaction.followup.send("❌ 아직 획득하지 못한 칭호입니다.", ephemeral=True)
             return
+        save_title_blob(interaction.user.id, blob)
 
         await interaction.edit_original_response(
             embed=build_title_embed(interaction.user, blob),
@@ -362,15 +346,9 @@ async def titles_command(interaction: discord.Interaction):
     info = get_user_data(user.id)
     blob = get_title_blob(info)
 
-    # 자금/명예/장비 조건으로 얻는 칭호는 여기서도 확인해서 지급
-    new_ids = []
-    try:
-        new_ids = evaluate_new_titles(blob, info)
-        if new_ids:
-            save_title_blob(user.id, blob)
-    except Exception as e:
-        print(f"DB Error (title refresh): {e}")
-        new_ids = []
+    new_ids = evaluate_new_titles(blob, info)
+    if new_ids:
+        save_title_blob(user.id, blob)
 
     embed = build_title_embed(user, blob, new_ids)
     if blob["titles"]:
@@ -405,7 +383,6 @@ async def check_membership(interaction: discord.Interaction) -> bool:
     user = interaction.user
     role = discord.utils.get(interaction.guild.roles, name="조직원")
     
-    # 조직원 역할이 없거나 유저에게 해당 역할이 없다면 차단
     if not role or role not in user.roles:
         await interaction.response.send_message(
             "❌ 패밀리의 정식 조직원이 아닙니다! `/가입`을 먼저 진행해 주세요.",
@@ -413,7 +390,7 @@ async def check_membership(interaction: discord.Interaction) -> bool:
         )
         return False
     return True
-# === 1. 셀프 가입 버튼 뷰 ===
+
 # === 1. 셀프 가입 버튼 뷰 (시민 -> 조직원 승급) ===
 class SelfJoinView(discord.ui.View):
     def __init__(self):
@@ -438,13 +415,12 @@ class SelfJoinView(discord.ui.View):
             return
 
         try:
-            # 시민 역할이 있다면 제거 후 조직원 역할 부여
             if citizen_role and citizen_role in user.roles:
                 await user.remove_roles(citizen_role)
             await user.add_roles(mafia_role)
         except discord.Forbidden:
             await interaction.response.send_message(
-                "🚨 역할 변경 권한이 없습니다. 디스코드 서버 설정 > 역할에서 **봇의 역할 순서를 '시민'과 '조직원'보다 위로** 올려주세요.",
+                "🚨 역할 변경 권한이 없습니다. 서버 설정 > 역할에서 봇의 역할을 상위로 올려주세요.",
                 ephemeral=True
             )
             return
@@ -469,7 +445,7 @@ class SelfJoinView(discord.ui.View):
 
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-# === 2. 탈퇴 확인/취소 버튼 뷰 (DB 데이터 삭제/초기화 포함) ===
+# === 2. 탈퇴 확인/취소 버튼 뷰 (DB 데이터 삭제 및 시민 복귀) ===
 class LeaveConfirmView(discord.ui.View):
     def __init__(self, target_user: discord.Member):
         super().__init__(timeout=60)
@@ -481,38 +457,26 @@ class LeaveConfirmView(discord.ui.View):
             await interaction.response.send_message("❌ 본인의 탈퇴 확인 창만 조작할 수 있습니다.", ephemeral=True)
             return
 
-        # 3초 타임아웃 방지 지연 응답
         await interaction.response.defer()
 
         member = interaction.user
         mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
         citizen_role = discord.utils.get(interaction.guild.roles, name="시민")
 
-        # 1. 디스코드 역할 정리 (마피아 조직원 제거 & 시민 역할 복구)
         try:
             if mafia_role and mafia_role in member.roles:
                 await member.remove_roles(mafia_role)
             if citizen_role and citizen_role not in member.roles:
                 await member.add_roles(citizen_role)
         except discord.Forbidden:
-            await interaction.followup.send(
-                "🚨 역할 변경 권한이 없습니다. 디스코드 서버 설정 > 역할에서 **봇의 역할 순서를 상위로** 올려주세요.",
-                ephemeral=True
-            )
-            return
-        except discord.HTTPException as e:
-            print(f"Leave Error (role update): {e}")
-            await interaction.followup.send("🚨 디스코드 오류로 탈퇴 처리에 실패했습니다.", ephemeral=True)
+            await interaction.followup.send("🚨 역할 변경 권한이 없습니다.", ephemeral=True)
             return
 
-        # 2. Supabase DB 기록 완전 삭제 (초기화)
         try:
             delete_user_data(member.id)
-        except Exception as e:
-            print(f"DB Error (delete_user_data): {e}")
-            # 이미 DB에 데이터가 없었거나 삭제 실패 시에도 탈퇴는 진행 처리
+        except Exception:
+            pass
 
-        # 3. 쿨타임 메모리 초기화
         mission_cooldowns.pop(member.id, None)
 
         for child in self.children:
@@ -522,7 +486,7 @@ class LeaveConfirmView(discord.ui.View):
             title="💥 [패밀리 조직원 해임 및 기록 삭제]",
             description=(
                 f"**{member.mention}** 님이 패밀리를 최종 탈퇴하셨습니다.\n\n"
-                f"⚠️ **초기화 완료:** 모든 보유 자금, 명예, 인벤토리 아이템 및 칭호 기록이 DB에서 완전히 삭제되었습니다.\n"
+                f"⚠️ **초기화 완료:** 모든 자금, 명예, 인벤토리, 칭호 기록이 완전히 삭제되었습니다.\n"
                 f"🏷️ **신분 변화:** `마피아 (조직원)` ➔ `시민`"
             ),
             color=discord.Color.dark_gray()
@@ -546,36 +510,20 @@ class LeaveConfirmView(discord.ui.View):
             description="패밀리 탈퇴 신청이 취소되었습니다.",
             color=discord.Color.blue()
         )
-        await interaction.response.edit_message(embed=embed, view=self)
-        
-# === 3. 임무 선택 뷰 (쿨타임 10초 / 장비 장착 시 5초) ===
+        await interaction.edit_original_response(embed=embed, view=self)
+
+# === 3. 임무 선택 뷰 ===
 class MissionSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
         self.owner = owner
         options = [
-            discord.SelectOption(
-                label="타 조직 구역 비밀 조사", 
-                description="난이도: 하 | 보상: $300 ~ $700 / 명예 +10pt", 
-                emoji="🕶️", 
-                value="mission_1"
-            ),
-            discord.SelectOption(
-                label="밀수품 비밀 운송 작업", 
-                description="난이도: 중 | 보상: $600 ~ $1,500 / 명예 +25pt", 
-                emoji="💼", 
-                value="mission_2"
-            ),
-            discord.SelectOption(
-                label="라이벌 보스의 장부 탈취", 
-                description="난이도: 상 | 보상: $1,500 ~ $3,500 / 명예 +50pt", 
-                emoji="🏛️", 
-                value="mission_3"
-            ),
+            discord.SelectOption(label="타 조직 구역 비밀 조사", description="난이도: 하 | 보상: $300~$700 / 명예 +10pt", emoji="🕶️", value="mission_1"),
+            discord.SelectOption(label="밀수품 비밀 운송 작업", description="난이도: 중 | 보상: $600~$1,500 / 명예 +25pt", emoji="💼", value="mission_2"),
+            discord.SelectOption(label="라이벌 보스의 장부 탈취", description="난이도: 상 | 보상: $1,500~$3,500 / 명예 +50pt", emoji="🏛️", value="mission_3"),
         ]
         super().__init__(placeholder="🎯 수행할 비밀 임무를 선택하세요...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        # 3초 타임아웃 방지
         await interaction.response.defer()
 
         if interaction.user != self.owner:
@@ -592,12 +540,10 @@ class MissionSelect(discord.ui.Select):
             next_available = mission_cooldowns[user.id]
             if now < next_available:
                 remaining = int((next_available - now).total_seconds())
-                # 선택 메뉴를 새 뷰로 교체해서 '선택된 상태'를 초기화 (같은 임무도 다시 고를 수 있게)
                 await interaction.edit_original_response(view=MissionView(owner=self.owner))
                 await interaction.followup.send(f"⏳ 체력을 회복 중입니다. **{remaining}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
                 return
 
-        # 기본 쿨타임 10초, 시계/바이크 장착 시 5초
         cooldown_seconds = 10
         if "⏱️ 고급 크로노그래프 시계" in inventory or "🛵 통신용 특수 바이크" in inventory:
             cooldown_seconds = 5
@@ -640,12 +586,9 @@ class MissionSelect(discord.ui.Select):
         if "🍾 밀수된 고급 양주" in inventory:
             honor_mult += 1.0
             active_buffs.append("🍾 양주 (명예 2배)")
-        if cooldown_seconds == 5:
-            active_buffs.append("⏱️ 시간/이동 장비 (쿨타임 5초 적용)")
 
         final_success_rate = min(98, selected["success_rate"] + success_bonus)
         is_success = random.randint(1, 100) <= final_success_rate
-
         buff_desc = f"\n✨ **적용된 보너스:** {', '.join(active_buffs)}" if active_buffs else ""
 
         if is_success:
@@ -655,15 +598,12 @@ class MissionSelect(discord.ui.Select):
             
             try:
                 update_user_stats(user.id, earned_money, earned_honor)
-            except Exception as e:
-                print(f"DB Error (update_user_stats): {e}")
-                mission_cooldowns.pop(user.id, None)  # 저장 실패 시 쿨타임 되돌리기
+            except Exception:
+                mission_cooldowns.pop(user.id, None)
                 await interaction.edit_original_response(view=MissionView(owner=self.owner))
-                await interaction.followup.send(
-                    "🚨 데이터베이스 저장 중 오류가 발생해 보상이 반영되지 않았습니다. 관리자에게 문의해주세요.",
-                    ephemeral=True
-                )
+                await interaction.followup.send("🚨 DB 저장 오류로 보상이 반영되지 않았습니다.", ephemeral=True)
                 return
+
             current_stats = get_user_data(user.id)
             new_rank = get_user_rank(current_stats["honor"])
 
@@ -671,19 +611,13 @@ class MissionSelect(discord.ui.Select):
             if old_rank != new_rank:
                 rank_up_msg = f"\n\n🎉 **[조직 승급 축하]** **{old_rank}** ➔ **{new_rank}**(으)로 승급하셨습니다!"
 
-            # 🏷️ 칭호 기록 (실패해도 임무 결과에는 영향 없음)
-            try:
-                new_title_ids = record_mission_result(user.id, current_stats, True, self.values[0] == "mission_3")
-            except Exception as e:
-                print(f"DB Error (record_mission_result): {e}")
-                new_title_ids = []
+            new_title_ids = record_mission_result(user.id, current_stats, True, self.values[0] == "mission_3")
             rank_up_msg += format_new_titles(new_title_ids)
 
             embed = discord.Embed(
                 title=f"🎯 [{current_loc}] 임무 성공",
-                description=f"**{user.mention}** 님이 선택하신 작전을 완벽하게 완수했습니다!{buff_desc}\n\n"
+                description=f"**{user.mention}** 님이 작전을 완벽하게 완수했습니다!{buff_desc}\n\n"
                             f"📌 **작전명:** {selected['title']}\n"
-                            f"📍 **수행 구역:** {current_loc}\n"
                             f"💰 **획득 보상금:** `${earned_money:,}`\n"
                             f"🏆 **획득 명예:** `+{earned_honor} pt`\n\n"
                             f"🗡️ **현재 직급:** `{new_rank}`\n"
@@ -693,25 +627,18 @@ class MissionSelect(discord.ui.Select):
             )
         else:
             if "🪪 치안국 위조 신분증" in inventory:
-                fail_msg = "⚠️ 임무에 실패했으나 **🪪 치안국 위조 신분증** 덕분에 무사히 수배를 면했습니다!"
+                fail_msg = "⚠️ 임무에 실패했으나 **🪪 치안국 위조 신분증** 덕분에 수배를 면했습니다!"
             else:
                 fail_msg = "⚠️ 경비대에 적발되어 임무 보상을 얻지 못했습니다."
 
             current_stats = get_user_data(user.id)
             current_rank = get_user_rank(current_stats["honor"])
-
-            # 🏷️ 칭호 기록 (실패해도 임무 결과에는 영향 없음)
-            try:
-                new_title_ids = record_mission_result(user.id, current_stats, False, False)
-            except Exception as e:
-                print(f"DB Error (record_mission_result): {e}")
-                new_title_ids = []
+            new_title_ids = record_mission_result(user.id, current_stats, False, False)
 
             embed = discord.Embed(
                 title=f"💥 [{current_loc}] 임무 실패",
-                description=f"**{user.mention}** 님이 선택하신 작전 도중 문제가 발생했습니다!{buff_desc}\n\n"
+                description=f"**{user.mention}** 님이 작전 도중 문제가 발생했습니다!{buff_desc}\n\n"
                             f"📌 **작전명:** {selected['title']}\n"
-                            f"📍 **수행 구역:** {current_loc}\n"
                             f"{fail_msg}\n\n"
                             f"🗡️ **현재 직급:** `{current_rank}`\n"
                             f"🏦 **보유 자금:** `${current_stats['money']:,}`\n"
@@ -722,7 +649,6 @@ class MissionSelect(discord.ui.Select):
         if user.avatar:
             embed.set_thumbnail(url=user.avatar.url)
 
-        # 결과를 표시하고 임무 선택 메뉴는 제거 (다음 임무는 /임무 로 다시 시작)
         await interaction.edit_original_response(embed=embed, view=None)
 
 class MissionView(discord.ui.View):
@@ -730,22 +656,13 @@ class MissionView(discord.ui.View):
         super().__init__(timeout=180)
         self.add_item(MissionSelect(owner=owner))
 
-# === 4. 암시장 드롭다운 및 Supabase DB 저장 뷰 ===
+# === 4. 암시장 드롭다운 뷰 ===
 class MarketSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member, location: str):
         self.owner = owner
         self.location = location
         items = BLACK_MARKET_ITEMS.get(location, [])
-        
-        options = []
-        for item in items:
-            options.append(discord.SelectOption(
-                label=f"{item['name']} (${item['price']:,})",
-                description=item['desc'],
-                emoji=item['emoji'],
-                value=item['id']
-            ))
-            
+        options = [discord.SelectOption(label=f"{i['name']} (${i['price']:,})", description=i['desc'], emoji=i['emoji'], value=i['id']) for i in items]
         super().__init__(placeholder=f"🛒 {location} 암시장 상품을 선택하세요...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -767,17 +684,11 @@ class MarketSelect(discord.ui.Select):
         item_name = f"{target_item['emoji']} {target_item['name']}"
 
         if inventory.get(item_name, 0) >= 1:
-            await interaction.response.send_message(
-                f"⚠️ **{item_name}**은(는) 이미 소지 중입니다! 암시장 물품은 1개만 보유할 수 있습니다.", 
-                ephemeral=True
-            )
+            await interaction.response.send_message("⚠️ 이미 소지 중인 장비입니다.", ephemeral=True)
             return
 
         if user_info["money"] < target_item["price"]:
-            await interaction.response.send_message(
-                f"❌ 자금이 부족합니다! (필요 자금: ${target_item['price']:,} / 보유 자금: ${user_info['money']:,})", 
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ 자금이 부족합니다!", ephemeral=True)
             return
 
         new_money = user_info["money"] - target_item["price"]
@@ -787,30 +698,23 @@ class MarketSelect(discord.ui.Select):
         special_effect_text = ""
         if target_item['id'] == "vip_cigar":
             new_honor += 15
-            special_effect_text = "\n✨ **특수 효과:** 명예 포인트가 즉시 **+15 pt** 증가했습니다!"
+            special_effect_text = "\n✨ 명예 포인트가 즉시 **+15 pt** 증가했습니다!"
         elif target_item['id'] == "boost_drink":
-            if interaction.user.id in mission_cooldowns:
-                del mission_cooldowns[interaction.user.id]
-            special_effect_text = "\n⚡ **특수 효과:** 임무 쿨타임이 **즉시 초기화**되었습니다!"
+            mission_cooldowns.pop(interaction.user.id, None)
+            special_effect_text = "\n⚡ 임무 쿨타임이 **즉시 초기화**되었습니다!"
 
-        try:
-            update_user_market_purchase(interaction.user.id, new_money, new_honor, inventory)
-        except Exception as e:
-            print(f"DB Error (update_user_market_purchase): {e}")
-            await interaction.response.send_message("🚨 데이터베이스 저장 오류로 구매가 처리되지 않았습니다. 관리자에게 문의해주세요.", ephemeral=True)
-            return
+        update_user_market_purchase(interaction.user.id, new_money, new_honor, inventory)
+
         new_rank = get_user_rank(new_honor)
         rank_up_msg = ""
         if old_rank != new_rank:
-            rank_up_msg = f"\n🎉 **[조직 승급]** 명예 상승으로 **{new_rank}**(으)로 승급하셨습니다!"
+            rank_up_msg = f"\n🎉 **[조직 승급]** **{new_rank}**(으)로 승급하셨습니다!"
 
         embed = discord.Embed(
             title="💰 [암시장 거래 성사]",
-            description=f"**{interaction.user.mention}** 님이 **{item_name}**을(를) 구매하셨습니다!{special_effect_text}{rank_up_msg}\n\n"
-                        f"💵 **결제 금액:** `${target_item['price']:,}`\n"
+            description=f"**{interaction.user.mention}** 님이 **{item_name}**을(를) 구매했습니다!{special_effect_text}{rank_up_msg}\n\n"
                         f"🏦 **남은 자금:** `${new_money:,}`\n"
-                        f"🏆 **현재 명예:** `{new_honor} pt`\n"
-                        f"🎒 **보유 상태:** `소지 중 (Supabase DB 영구 저장완료)`",
+                        f"🏆 **현재 명예:** `{new_honor} pt`",
             color=discord.Color.gold()
         )
         if interaction.user.avatar:
@@ -823,80 +727,49 @@ class MarketView(discord.ui.View):
         super().__init__(timeout=60)
         self.add_item(MarketSelect(owner=owner, location=location))
 
-# === 5. `/가입` 명령어 ===
+# === 명령어 목록 ===
 @bot.tree.command(name="가입", description="[마피아 GM] 패밀리 가입 버튼을 소환합니다.")
 async def join_family(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
-    
-    embed = discord.Embed(
-        title="📜 [패밀리 입단 안내]",
-        description="아래 버튼을 눌러 패밀리에 합류하세요.",
-        color=discord.Color.gold()
-    )
-    view = SelfJoinView()
-    await interaction.response.send_message(embed=embed, view=view)
+    embed = discord.Embed(title="📜 [패밀리 입단 안내]", description="아래 버튼을 눌러 패밀리에 합류하세요.", color=discord.Color.gold())
+    await interaction.response.send_message(embed=embed, view=SelfJoinView())
 
-# === 6. `/탈퇴` 명령어 ===
 @bot.tree.command(name="탈퇴", description="[마피아 GM] 패밀리 탈퇴 절차를 진행합니다.")
 async def leave_family(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
-
-    user = interaction.user
-    role = discord.utils.get(interaction.guild.roles, name="조직원")
-
-    if not role or role not in user.roles:
-        await interaction.response.send_message("⚠️ 당신은 패밀리 조직원이 아닙니다.", ephemeral=True)
-        return
-
-    embed = discord.Embed(
-        title="⚠️ [패밀리 탈퇴 경고]",
-        description=f"**{user.mention}**님, 정말로 패밀리에서 탈퇴하시겠습니까?",
-        color=discord.Color.red()
-    )
-    view = LeaveConfirmView(target_user=user)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-# === 7. `/임무` 명령어 ===
-@bot.tree.command(name="임무", description="[조직원 전용] 원하는 비밀 임무를 직접 선택하여 수행합니다.")
-async def execute_mission(interaction: discord.Interaction):
-    # 점검 체크는 defer 이전에 해야 함 (이미 응답한 뒤에 send_message를 쓰면 오류)
-    if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
 
-    # 3초 타임아웃 방지
+    user = interaction.user
+    embed = discord.Embed(title="⚠️ [패밀리 탈퇴 경고]", description=f"**{user.mention}**님, 정말로 탈퇴하시겠습니까? (모든 기록이 초기화됩니다)", color=discord.Color.red())
+    await interaction.response.send_message(embed=embed, view=LeaveConfirmView(target_user=user), ephemeral=True)
+
+@bot.tree.command(name="임무", description="[조직원 전용] 원하는 비밀 임무를 직접 선택하여 수행합니다.")
+async def execute_mission(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
     await interaction.response.defer()
 
     user = interaction.user
-    role = discord.utils.get(interaction.guild.roles, name="조직원")
-
-    if not role or role not in user.roles:
-        await interaction.followup.send("❌ 패밀리의 정식 조직원만 임무를 하달받을 수 있습니다! `/가입`을 먼저 해주세요.", ephemeral=True)
-        return
-
     user_stats = get_user_data(user.id)
     current_loc = user_stats.get("location", "레벤하임")
 
     embed = discord.Embed(
         title=f"📂 [{current_loc}] 비밀 임무 작전 하달",
-        description=f"**{user.mention}** 님, 현재 거점인 **{current_loc}**에서 수행할 작전을 직접 선택해 주십시오.\n\n"
-                    "⚠️ **주의:** 소지한 암시장 아이템 효과가 작전 수행 시 자동으로 반영됩니다.",
+        description=f"**{user.mention}** 님, 수행할 작전을 선택해 주십시오.",
         color=discord.Color.dark_purple()
     )
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
 
-    view = MissionView(owner=user)
-    await interaction.followup.send(embed=embed, view=view)
+    await interaction.followup.send(embed=embed, view=MissionView(owner=user))
 
-# === 8. `/프로필` 명령어 수정 ===
-@bot.tree.command(name="프로필", description="[마피아 GM] 패밀리 조직원 신원 조회 서류 및 인벤토리를 확인합니다.")
+@bot.tree.command(name="프로필", description="[마피아 GM] 조직원 신원 조회 서류를 확인합니다.")
 async def profile(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
 
     user = interaction.user
     role = discord.utils.get(interaction.guild.roles, name="조직원")
     
-    # 조직원 역할이 없으면 직급을 '시민'으로 설정
     if not role or role not in user.roles:
         user_rank = "시민"
     else:
@@ -906,14 +779,14 @@ async def profile(interaction: discord.Interaction):
     user_stats = get_user_data(user.id)
 
     embed = discord.Embed(
-        title="🕵️‍♂️ [패밀리 비밀 문서] 조직원 신원 조회",
+        title="🕵️‍♂️ [패밀리 비밀 문서] 신원 조회",
         description=f"**{user.name}** 님의 보안 기록입니다.",
         color=discord.Color.dark_red()
     )
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
 
-    embed.add_field(name="📜 신분 / 조직원명", value=user.mention, inline=True)
+    embed.add_field(name="📜 신분 / 명칭", value=user.mention, inline=True)
     embed.add_field(name="🗡️ 현재 직급", value=user_rank, inline=True)
     embed.add_field(name="🏷️ 칭호", value=get_equipped_title_name(user_stats), inline=True)
     embed.add_field(name="💰 보유 자금", value=f"${user_stats['money']:,}", inline=True)
@@ -921,192 +794,120 @@ async def profile(interaction: discord.Interaction):
     embed.add_field(name="📍 현재 거점", value=user_stats.get('location', '레벤하임'), inline=False)
     
     inventory = user_stats.get("inventory", {})
-    if inventory:
-        inv_text = "\n".join([f"• **{item}**: `소지 중`" for item in inventory.keys()])
-    else:
-        inv_text = "*소지한 아이템이 없습니다.*"
-        
+    inv_text = "\n".join([f"• **{item}**: `소지 중`" for item in inventory.keys()]) if inventory else "*소지한 아이템이 없습니다.*"
     embed.add_field(name="🎒 소지품 (인벤토리)", value=inv_text, inline=False)
-    embed.set_footer(text=f"문서 요청자: {user.name}")
 
     await interaction.response.send_message(embed=embed)
 
-# === 9. 🎒 `/인벤토리` 명령어 ===
-@bot.tree.command(name="인벤토리", description="[마피아 GM] 자신이 소지한 암시장 아이템과 적용 효과를 확인합니다.")
+@bot.tree.command(name="인벤토리", description="[마피아 GM] 소지한 장비를 확인합니다.")
 async def show_inventory(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
 
-    user = interaction.user
-    role = discord.utils.get(interaction.guild.roles, name="조직원")
-
-    if not role or role not in user.roles:
-        await interaction.response.send_message("❌ 패밀리 조직원만 인벤토리를 열 수 있습니다. `/가입`을 먼저 해주세요.", ephemeral=True)
-        return
-
-    user_stats = get_user_data(user.id)
+    user_stats = get_user_data(interaction.user.id)
     inventory = user_stats.get("inventory", {})
 
-    embed = discord.Embed(
-        title=f"🎒 [{user.name} 님의 장비 가방]",
-        description=f"현재 **${user_stats['money']:,}** 자금을 보유 중이며, 암시장 장비는 **중복 소지가 불가능**합니다.\n",
-        color=discord.Color.dark_green()
-    )
-
-    if inventory:
-        inv_list = [f"• **{item}** `[보유 중]`" for item in inventory.keys()]
-        
-        embed.add_field(name="📦 보유 중인 전용 장비", value="\n".join(inv_list), inline=False)
-    else:
-        embed.add_field(name="📦 소지 아이템 목록", value="*가방이 비어 있습니다. `/암시장`에서 전용 장비를 구해보세요!*", inline=False)
-
-    if user.avatar:
-        embed.set_thumbnail(url=user.avatar.url)
-    embed.set_footer(text=f"조직원: {user.name}")
+    embed = discord.Embed(title=f"🎒 [{interaction.user.name} 님의 장비 가방]", color=discord.Color.dark_green())
+    inv_list = [f"• **{item}** `[보유 중]`" for item in inventory.keys()] if inventory else ["*가방이 비어 있습니다.*"]
+    embed.add_field(name="📦 보유 중인 전용 장비", value="\n".join(inv_list), inline=False)
+    
+    if interaction.user.avatar:
+        embed.set_thumbnail(url=interaction.user.avatar.url)
 
     await interaction.response.send_message(embed=embed)
 
-# === 10. `/이동` 명령어 ===
-@bot.tree.command(name="이동", description="[마피아 GM] 칼렌데 내의 다른 지역으로 이동합니다.")
+@bot.tree.command(name="이동", description="[마피아 GM] 다른 지역으로 이동합니다.")
 @app_commands.choices(지역=[
-    app_commands.Choice(name="🏛️ 레벤하임 (수도 / 시작 지점)", value="레벤하임"),
+    app_commands.Choice(name="🏛️ 레벤하임 (수도)", value="레벤하임"),
     app_commands.Choice(name="⚙️ 던베르크 (공업지대)", value="던베르크"),
     app_commands.Choice(name="🏚️ 블랙워드 (빈민가)", value="블랙워드"),
     app_commands.Choice(name="⚓ 에르느코항 (항구도시)", value="에르느코항")
 ])
 async def move_location(interaction: discord.Interaction, 지역: app_commands.Choice[str]):
     if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
 
     user = interaction.user
-    role = discord.utils.get(interaction.guild.roles, name="조직원")
-
-    if not role or role not in user.roles:
-        await interaction.response.send_message("❌ 패밀리의 정식 조직원만 이 지역을 자유롭게 이동할 수 있습니다. `/가입`을 먼저 해주세요.", ephemeral=True)
-        return
-
     selected_loc = 지역.value
     loc_info = LOCATIONS[selected_loc]
 
-    try:
-        update_user_location(user.id, selected_loc)
-    except Exception as e:
-        print(f"DB Error (update_user_location): {e}")
-        await interaction.response.send_message("🚨 데이터베이스 저장 오류로 이동하지 못했습니다. 관리자에게 문의해주세요.", ephemeral=True)
-        return
+    update_user_location(user.id, selected_loc)
 
     embed = discord.Embed(
-        title=f"{loc_info['emoji']} [{selected_loc}] (으)로 거점 이동 완료",
-        description=f"**{user.mention}** 님이 성공적으로 **{selected_loc}**(으)로 도착했습니다.",
+        title=f"{loc_info['emoji']} [{selected_loc}] (으)로 이동 완료",
+        description=f"**{user.mention}** 님이 성공적으로 도착했습니다.",
         color=discord.Color.dark_blue()
     )
     embed.add_field(name="📜 지역 특징", value=loc_info["desc"], inline=False)
-    embed.add_field(name="🚨 치안 위험도", value=loc_info["risk"], inline=True)
-    embed.set_footer(text=f"요청자: {user.name}")
-
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
 
     await interaction.response.send_message(embed=embed)
 
-# === 11. `/암시장` 명령어 ===
-@bot.tree.command(name="암시장", description="[조직원 전용] 현재 위치한 지역의 밀거래 암시장에 입장합니다.")
+@bot.tree.command(name="암시장", description="[조직원 전용] 암시장에 입장합니다.")
 async def open_market(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
 
     user = interaction.user
-    role = discord.utils.get(interaction.guild.roles, name="조직원")
-
-    if not role or role not in user.roles:
-        await interaction.response.send_message("❌ 패밀리 조직원만 암시장에 접근할 수 있습니다. `/가입`을 먼저 해주세요.", ephemeral=True)
-        return
-
     user_stats = get_user_data(user.id)
     current_loc = user_stats.get("location", "레벤하임")
     loc_emoji = LOCATIONS.get(current_loc, {}).get("emoji", "📍")
     items = BLACK_MARKET_ITEMS.get(current_loc, [])
 
-    item_details = []
-    for item in items:
-        item_details.append(f"• **{item['emoji']} {item['name']}** (`${item['price']:,}`)\n  └ {item['desc']}")
+    item_details = [f"• **{i['emoji']} {i['name']}** (`${i['price']:,}`)\n  └ {i['desc']}" for i in items]
 
     embed = discord.Embed(
         title=f"🕵️‍♂️ {loc_emoji} [{current_loc} 비밀 암시장]",
-        description=f"**{user.name}** 님, 은밀한 음지 거래소에 오신 것을 환영합니다.\n"
-                    f"현재 보유 자금: **${user_stats['money']:,}**\n\n"
-                    f"📜 **[판매 물품 목록 및 상세 효과]**\n" + "\n".join(item_details) + "\n\n"
-                    f"⚠️ *암시장 물품은 중복 보유가 불가능하며 종류별 1개만 구매 가능합니다.*",
+        description=f"현재 보유 자금: **${user_stats['money']:,}**\n\n📜 **[판매 물품]**\n" + "\n".join(item_details),
         color=discord.Color.gold()
     )
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
 
-    view = MarketView(owner=user, location=current_loc)
-    await interaction.response.send_message(embed=embed, view=view)
+    await interaction.response.send_message(embed=embed, view=MarketView(owner=user, location=current_loc))
 
-# === 12. `/추방` 명령어 ===
-@bot.tree.command(name="추방", description="[간부 전용] 규칙을 어긴 조직원을 패밀리에서 강제로 추방합니다.")
-@app_commands.describe(member="추방할 조직원", reason="추방 사유 (선택 사항)")
-async def kick_member(interaction: discord.Interaction, member: discord.Member, reason: str = "규율 위반 및 배신"):
+@bot.tree.command(name="추방", description="[간부 전용] 조직원을 추방합니다.")
+@app_commands.describe(member="추방할 조직원", reason="추방 사유")
+async def kick_member(interaction: discord.Interaction, member: discord.Member, reason: str = "규율 위반"):
     if not await check_maintenance(interaction): return
-    if not await check_membership(interaction): return
 
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ 패밀리 간부(관리자) 권한을 가진 자만 추방 명령을 내릴 수 있습니다!", ephemeral=True)
+        await interaction.response.send_message("❌ 관리자 권한이 필요합니다!", ephemeral=True)
         return
 
     role = discord.utils.get(interaction.guild.roles, name="조직원")
+    citizen_role = discord.utils.get(interaction.guild.roles, name="시민")
+    
     if not role or role not in member.roles:
-        await interaction.response.send_message(f"⚠️ {member.mention} 님은 패밀리 조직원이 아닙니다.", ephemeral=True)
+        await interaction.response.send_message(f"⚠️ {member.mention} 님은 조직원이 아닙니다.", ephemeral=True)
         return
 
     try:
         await member.remove_roles(role)
-    except discord.Forbidden:
-        await interaction.response.send_message(
-            "🚨 '조직원' 역할을 제거할 권한이 없습니다. 서버 설정 > 역할에서 봇의 역할을 '조직원' 역할보다 위로 올려주세요.",
-            ephemeral=True
-        )
-        return
+        if citizen_role:
+            await member.add_roles(citizen_role)
+        delete_user_data(member.id)
+    except Exception:
+        pass
 
     embed = discord.Embed(
-        title="⚖️ [패밀리 숙청: 조직원 추방]",
-        description=f"보스의 엄중한 명령으로 **{member.mention}** 님이 패밀리에서 영구 추방되었습니다.",
+        title="⚖️ [패밀리 숙청]",
+        description=f"**{member.mention}** 님이 추방되고 모든 기록이 초기화되었습니다.",
         color=discord.Color.dark_embed()
     )
-    embed.add_field(name="👤 대상자", value=member.name, inline=True)
-    embed.add_field(name="🔨 집행자", value=interaction.user.mention, inline=True)
-    embed.add_field(name="📜 숙청 사유", value=reason, inline=False)
-    
-    if member.avatar:
-        embed.set_thumbnail(url=member.avatar.url)
-
     await interaction.response.send_message(embed=embed)
 
-# === 13. `/도움말` 명령어 ===
-@bot.tree.command(name="도움말", description="[마피아 GM] 봇의 명령어 가이드를 확인합니다.")
+@bot.tree.command(name="도움말", description="[마피아 GM] 명령어 가이드를 확인합니다.")
 async def help_command(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
 
-    embed = discord.Embed(
-        title="📜 [패밀리 GM] 시스템 가이드",
-        description="마피아 조직 세계관에 오신 것을 환영합니다.",
-        color=discord.Color.dark_red()
-    )
-    embed.add_field(name="🔫 `/가입`", value="패밀리 입단 신청 버튼을 불러옵니다.", inline=False)
-    embed.add_field(name="🚪 `/탈퇴`", value="패밀리 탈퇴 경고 확인 후 역할을 해임합니다.", inline=False)
-    embed.add_field(name="📍 `/이동`", value="칼렌데 내부 4개 핵심 거점으로 이동합니다.", inline=False)
-    embed.add_field(name="🕵️‍♂️ `/암시장`", value="현재 거점의 비밀 암시장에서 고성능 밀수품을 거래합니다.", inline=False)
-    embed.add_field(name="🎒 `/인벤토리`", value="소지 중인 암시장 장비를 확인합니다.", inline=False)
-    embed.add_field(name="🏷️ `/칭호`", value="임무 기록과 업적으로 얻은 칭호를 확인하고 장착합니다.", inline=False)
-    embed.add_field(name="🗡️ `/임무`", value="원하는 비밀 작전을 선택하여 수행합니다. (보유 아이템 버프 자동 적용)", inline=False)
-    embed.add_field(name="🕵️‍♂️ `/프로필`", value="나의 조직원 신원 서류, 자금, 명예, 위치 및 소지품을 확인합니다.", inline=False)
-    embed.add_field(name="⚖️ `/추방 [유저]`", value="[간부 전용] 대상 조직원을 강제 추방합니다.", inline=False)
-    embed.add_field(name="❓ `/도움말`", value="봇의 명령어 가이드를 확인합니다.", inline=False)
+    embed = discord.Embed(title="📜 [패밀리 GM] 시스템 가이드", color=discord.Color.dark_red())
+    embed.add_field(name="🔫 `/가입`", value="조직에 가입합니다. (시민 ➔ 조직원 역할 전환)", inline=False)
+    embed.add_field(name="🕵️‍♂️ `/프로필`", value="나의 신원 서류와 직급을 확인합니다. (누구나 조회 가능)", inline=False)
+    embed.add_field(name="🚪 `/탈퇴`", value="탈퇴 시 모든 데이터가 초기화되고 시민으로 돌아갑니다.", inline=False)
+    embed.add_field(name="📍 `/이동` / 🕵️‍♂️ `/암시장` / 🎒 `/인벤토리` / 🗡️ `/임무` / 🏷️ `/칭호`", value="[조직원 전용 명령어]", inline=False)
     
-    embed.set_footer(text="이 메시지는 명령어를 입력한 본인에게만 표시됩니다.")
-
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# 봇 토큰 입력
 bot.run(os.getenv("DISCORD_TOKEN"))
