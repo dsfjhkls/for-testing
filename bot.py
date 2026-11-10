@@ -1687,7 +1687,8 @@ async def show_inventory(interaction: discord.Interaction):
     app_commands.Choice(name="🏛️ 레벤하임 (수도)", value="레벤하임"),
     app_commands.Choice(name="⚙️ 던베르크 (공업지대)", value="던베르크"),
     app_commands.Choice(name="🏚️ 블랙워드 (빈민가)", value="블랙워드"),
-    app_commands.Choice(name="⚓ 에르느코항 (항구도시)", value="에르느코항")
+    app_commands.Choice(name="⚓ 에르느코항 (항구도시)", value="에르느코항"),
+    app_commands.Choice(name="🍸 로젠펠트 (유흥업소)", value="로젠펠트")
 ])
 async def move_location(interaction: discord.Interaction, 지역: app_commands.Choice[str]):
     if not await check_maintenance(interaction): return
