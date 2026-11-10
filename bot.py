@@ -2,6 +2,7 @@ from flask import Flask
 from threading import Thread
 import os
 import random
+import asyncio
 from datetime import datetime, timedelta
 
 # 렌더 포트 검사를 통과하기 위한 가짜 웹 서버
@@ -161,7 +162,7 @@ LOCATIONS = {
 BLACK_MARKET_ITEMS = {
     "레벤하임": [
         {"id": "gov_pass", "name": "치안국 위조 신분증", "price": 1200, "desc": "실패 시 수배 방어", "emoji": "🪪"},
-        {"id": "vip_cigar", "name": "고급 시가 패키지", "price": 500, "desc": "즉시 명예 +15 pt", "emoji": "🚬"},
+        {"id": "fail_guard", "name": "임무 실패 방지권", "price": 800, "desc": "임무 실패 시 패널티 자동 방어", "emoji": "🎟️"},
         {"id": "chrono_watch", "name": "고급 크로노그래프 시계", "price": 2000, "desc": "임무 쿨타임 50% 단축 (5초)", "emoji": "⏱️"}
     ],
     "던베르크": [
@@ -200,7 +201,8 @@ def get_user_data(user_id: int) -> dict:
             "money": 1000,
             "honor": 0,
             "location": "레벤하임",
-            "inventory": {}
+            "inventory": {},
+            "settings": {"auto_fail_guard": True}
         }
         ins = supabase.table("user_data").insert(default_data).execute()
         return default_data
@@ -215,6 +217,14 @@ def _require_db():
 def _check_updated(res, action: str):
     if not res.data:
         raise RuntimeError(f"{action}: 반영된 행이 없습니다")
+
+def update_user_settings(user_id: int, settings: dict):
+    str_id = str(user_id)
+    _require_db()
+    res = supabase.table("user_data").update({
+        "settings": settings
+    }).eq("user_id", str_id).execute()
+    _check_updated(res, "update_user_settings")
 
 def update_user_stats(user_id: int, money_add: int, honor_add: int):
     str_id = str(user_id)
@@ -266,13 +276,18 @@ TITLES = {
     "rich":         {"name": "💰 검은 돈의 주인",  "desc": "보유 자금 $10,000 이상",               "check": lambda s, i: (i.get("money") or 0) >= 10000},
     "respected":    {"name": "🎩 존경받는 자",     "desc": "조직 명예 300pt 이상 (솔다토 이상)",   "check": lambda s, i: (i.get("honor") or 0) >= 300},
     "collector":    {"name": "🎒 장비 수집가",     "desc": "암시장 장비 3개 이상 보유",            "check": lambda s, i: len(i.get("inventory") or {}) >= 3},
+    "gambler":      {"name": "🎲 도박꾼",          "desc": "도박 10판 플레이",                     "check": lambda s, i: s["gamble_played"] >= 10},
+    "jackpot":      {"name": "🍀 잭팟의 주인공",   "desc": "슬롯머신 잭팟(7️⃣7️⃣7️⃣) 당첨",         "check": lambda s, i: s["jackpot"] >= 1},
+    "high_roller":  {"name": "💎 카지노의 큰손",   "desc": "도박 누적 베팅액 $50,000 이상",        "check": lambda s, i: s["gamble_wagered"] >= 50000},
+    "broke":        {"name": "💸 거덜 난 도박사",  "desc": "도박으로 보유 자금이 $0이 됨",         "check": lambda s, i: s["broke"] >= 1},
 }
 
 def get_title_blob(user_info: dict) -> dict:
     raw = user_info.get("data")
     blob = dict(raw) if isinstance(raw, dict) else {}
     stats = blob.get("stats") if isinstance(blob.get("stats"), dict) else {}
-    for key in ("success", "fail", "streak", "best_streak", "hard_success"):
+    for key in ("success", "fail", "streak", "best_streak", "hard_success",
+                "gamble_played", "gamble_won", "gamble_wagered", "gamble_net", "jackpot", "broke"):
         stats[key] = int(stats.get(key, 0) or 0)
     blob["stats"] = stats
     blob["titles"] = list(blob.get("titles") or [])
@@ -341,6 +356,14 @@ def build_title_embed(user: discord.abc.User, blob: dict, new_ids: list = None) 
         value=f"성공 `{s['success']}`회 / 실패 `{s['fail']}`회 / 최고 연속 성공 `{s['best_streak']}`회",
         inline=False
     )
+    if s["gamble_played"] > 0:
+        net = s["gamble_net"]
+        net_text = f"{'+' if net >= 0 else '-'}${abs(net):,}"
+        embed.add_field(
+            name="🎰 도박 기록",
+            value=f"총 `{s['gamble_played']}`판 / 승리 `{s['gamble_won']}`판 / 누적 손익 `{net_text}`",
+            inline=False
+        )
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
     return embed
@@ -445,6 +468,44 @@ async def check_membership(interaction: discord.Interaction) -> bool:
         return False
     return True
 
+# === ⚙️ [설정] 명령어 ===
+@bot.tree.command(name="설정", description="[조직원/경찰 전용] 게임 내 편의 기능 설정을 변경합니다.")
+@app_commands.describe(상태="임무 실패 방지권 자동 사용 여부")
+@app_commands.choices(상태=[
+    app_commands.Choice(name="켜기 (자동 사용)", value="on"),
+    app_commands.Choice(name="끄기 (수동 사용)", value="off")
+])
+async def settings_command(interaction: discord.Interaction, 상태: app_commands.Choice[str]):
+    if not await check_maintenance(interaction): return
+    if await check_jail(interaction): return
+    if not await check_membership(interaction): return
+
+    user = interaction.user
+    user_stats = get_user_data(user.id)
+    
+    # settings 딕셔너리 불러오기 및 갱신
+    settings = user_stats.get("settings", {})
+    is_on = (상태.value == "on")
+    settings["auto_fail_guard"] = is_on
+
+    try:
+        update_user_settings(user.id, settings)
+    except Exception:
+        await interaction.response.send_message("🚨 설정 저장 중 오류가 발생했습니다.", ephemeral=True)
+        return
+
+    status_text = "🟢 **켜짐 (자동 사용)**" if is_on else "🔴 **꺼짐 (수동 사용)**"
+    embed = discord.Embed(
+        title="⚙️ [게임 설정 변경]",
+        description=f"**{user.mention}** 님의 임무 실패 방지권 설정이 변경되었습니다.\n\n"
+                    f"🎟️ **실패 방지권 자동 사용:** {status_text}",
+        color=discord.Color.blue()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 # === 🚨 [경찰 전용] `/검거` 명령어 ===
 @bot.tree.command(name="검거", description="[경찰 전용] 지명수배 중인 마피아를 체포하여 감옥에 가둡니다.")
 @app_commands.describe(member="검거할 수배 대상 마피아")
@@ -546,6 +607,509 @@ async def part_time_job(interaction: discord.Interaction):
         embed.set_thumbnail(url=user.avatar.url)
 
     await interaction.followup.send(embed=embed)
+
+# ==========================================
+# 🎰 도박 시스템 (카지노)
+#   /도박 슬롯 · /도박 동전 · /도박 블랙잭 · /도박 규칙
+#   - 누구나 이용 가능 (감옥 수감 중에는 불가)
+#   - 돈을 걸고 잃으면 자금이 사라지는 '자금 소각(머니 싱크)' 시스템
+# ==========================================
+GAMBLE_MIN_BET = 100        # 최소 베팅금
+GAMBLE_MAX_BET = 5000       # 최대 베팅금
+GAMBLE_COOLDOWN = 3         # 베팅 사이 대기 시간(초) - 연타/도배 방지
+COIN_WIN_RATE = 0.48        # 동전 던지기 승률 (승리 시 베팅금의 2배 지급)
+
+# 슬롯머신: (이모지, 등장 가중치, 3개 일치 시 배당 배수)
+# 2개 일치는 본전(SLOT_PAIR_MULT배)을 돌려받고, 모두 다르면 꽝. (환수율은 /도박 규칙에서 자동 계산)
+SLOT_SYMBOLS = [
+    ("🍒", 30, 3),
+    ("🍋", 25, 5),
+    ("🔔", 20, 8),
+    ("💎", 10, 20),
+    ("7️⃣", 5, 100),
+]
+SLOT_PAIR_MULT = 1.0
+SLOT_JACKPOT_SYMBOL = "7️⃣"
+
+# 블랙잭 결과별 총 지급 배수 (베팅금 포함)
+BLACKJACK_PAYOUT = {"blackjack": 2.5, "win": 2.0, "push": 1.0, "lose": 0}
+
+gamble_cooldowns = {}   # {user_id: datetime}  다음 베팅 가능 시각
+gamble_locks = {}       # {user_id: asyncio.Lock}  같은 유저의 동시 베팅(이중 결제) 방지
+active_blackjack = {}   # {user_id: BlackjackView}  진행 중인 블랙잭 테이블
+
+class InsufficientFunds(Exception):
+    pass
+
+def _gamble_lock(user_id: int) -> asyncio.Lock:
+    lock = gamble_locks.get(user_id)
+    if lock is None:
+        lock = gamble_locks[user_id] = asyncio.Lock()
+    return lock
+
+def fmt_net(n: int) -> str:
+    return f"{'+' if n >= 0 else '-'}${abs(n):,}"
+
+# --- DB 정산 ---
+def settle_gamble(user_id: int, bet: int, payout: int, info: dict = None, prepaid: bool = False, jackpot: bool = False):
+    """한 판의 결과를 DB에 한 번에 반영 (자금 + 도박 기록 + 칭호).
+    prepaid=True 이면 베팅금이 이미 차감된 상태(블랙잭)라서 payout 만 더해줌.
+    반환: (새 보유 자금, 새로 얻은 칭호 ID 목록)"""
+    _require_db()
+    if info is None:
+        info = get_user_data(user_id)
+    money = int(info.get("money") or 0)
+
+    if not prepaid and money < bet:
+        raise InsufficientFunds(money)
+
+    new_money = money + (payout if prepaid else payout - bet)
+
+    blob = get_title_blob(info)
+    s = blob["stats"]
+    s["gamble_played"] += 1
+    s["gamble_wagered"] += bet
+    s["gamble_net"] += payout - bet
+    if payout > bet:
+        s["gamble_won"] += 1
+    if jackpot:
+        s["jackpot"] += 1
+    if new_money <= 0:
+        s["broke"] += 1
+    new_ids = evaluate_new_titles(blob, {**info, "money": new_money})
+
+    res = supabase.table("user_data").update({"money": new_money, "data": blob}).eq("user_id", str(user_id)).execute()
+    _check_updated(res, "settle_gamble")
+    return new_money, new_ids
+
+def take_bet(user_id: int, bet: int) -> int:
+    """블랙잭 시작 시 베팅금을 먼저 차감. 반환: 차감 후 보유 자금"""
+    _require_db()
+    info = get_user_data(user_id)
+    money = int(info.get("money") or 0)
+    if money < bet:
+        raise InsufficientFunds(money)
+    res = supabase.table("user_data").update({"money": money - bet}).eq("user_id", str(user_id)).execute()
+    _check_updated(res, "take_bet")
+    return money - bet
+
+# --- 공통 체크 ---
+async def gamble_precheck(interaction: discord.Interaction) -> bool:
+    if not await check_maintenance(interaction): return False
+    if await check_jail(interaction): return False
+
+    now = datetime.now()
+    next_ok = gamble_cooldowns.get(interaction.user.id)
+    if next_ok and now < next_ok:
+        remaining = int((next_ok - now).total_seconds()) + 1
+        await interaction.response.send_message(f"⏳ 잠시 후 다시 베팅할 수 있습니다. (**{remaining}초**)", ephemeral=True)
+        return False
+    gamble_cooldowns[interaction.user.id] = now + timedelta(seconds=GAMBLE_COOLDOWN)
+    return True
+
+async def _safe_edit(interaction: discord.Interaction, **kwargs):
+    """연출용 메시지 수정이 실패해도(레이트리밋 등) 결과 처리는 계속되도록 보호"""
+    try:
+        await interaction.edit_original_response(**kwargs)
+    except discord.HTTPException:
+        pass
+
+# ==========================================
+# 🎰 슬롯머신 로직
+# ==========================================
+def spin_slots() -> list:
+    return random.choices([s[0] for s in SLOT_SYMBOLS], weights=[s[1] for s in SLOT_SYMBOLS], k=3)
+
+def slot_multiplier(reels: list) -> float:
+    if reels[0] == reels[1] == reels[2]:
+        for emoji, _, mult in SLOT_SYMBOLS:
+            if emoji == reels[0]:
+                return float(mult)
+    if len(set(reels)) == 2:
+        return SLOT_PAIR_MULT
+    return 0.0
+
+def slot_rtp() -> float:
+    """현재 설정 기준 슬롯머신 환수율(베팅금 대비 평균 지급 비율)을 정확히 계산"""
+    total_w = sum(w for _, w, _ in SLOT_SYMBOLS)
+    rtp = 0.0
+    for a in SLOT_SYMBOLS:
+        for b in SLOT_SYMBOLS:
+            for c in SLOT_SYMBOLS:
+                p = (a[1] / total_w) * (b[1] / total_w) * (c[1] / total_w)
+                rtp += p * slot_multiplier([a[0], b[0], c[0]])
+    return rtp
+
+def slot_board(reels: list) -> str:
+    return "🎰 ┃ " + " ┃ ".join(reels) + " ┃ 🎰"
+
+# ==========================================
+# 🃏 블랙잭 로직
+# ==========================================
+CARD_RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+CARD_SUITS = ["♠️", "♥️", "♦️", "♣️"]
+
+def new_deck() -> list:
+    deck = [(r, s) for r in CARD_RANKS for s in CARD_SUITS]
+    random.shuffle(deck)
+    return deck
+
+def hand_value(hand: list) -> int:
+    total = 0
+    aces = 0
+    for rank, _ in hand:
+        if rank == "A":
+            total += 11
+            aces += 1
+        elif rank in ("J", "Q", "K"):
+            total += 10
+        else:
+            total += int(rank)
+    while total > 21 and aces:   # A는 필요하면 11 -> 1로 계산
+        total -= 10
+        aces -= 1
+    return total
+
+def is_blackjack(hand: list) -> bool:
+    return len(hand) == 2 and hand_value(hand) == 21
+
+def card_str(card: tuple) -> str:
+    return f"**{card[0]}{card[1]}**"
+
+def hand_str(hand: list) -> str:
+    return " ".join(card_str(c) for c in hand)
+
+def blackjack_outcome(player: list, dealer: list) -> str:
+    """딜러의 플레이가 끝난 뒤의 결과: blackjack / win / push / lose"""
+    p, d = hand_value(player), hand_value(dealer)
+    if p > 21:
+        return "lose"
+    if is_blackjack(player):
+        return "push" if is_blackjack(dealer) else "blackjack"
+    if is_blackjack(dealer):
+        return "lose"
+    if d > 21 or p > d:
+        return "win"
+    if p == d:
+        return "push"
+    return "lose"
+
+class BlackjackView(discord.ui.View):
+    def __init__(self, owner: discord.Member, bet: int):
+        super().__init__(timeout=60)
+        self.owner = owner
+        self.bet = bet
+        self.deck = new_deck()
+        self.player = [self.deck.pop(), self.deck.pop()]
+        self.dealer = [self.deck.pop(), self.deck.pop()]
+        self.finished = False
+        self.busy = False
+        self.message = None
+
+    def build_embed(self, reveal: bool = False, outcome: str = None, payout: int = 0,
+                    money: int = 0, new_ids: list = None, note: str = "") -> discord.Embed:
+        colors = {
+            None: discord.Color.dark_green(), "blackjack": discord.Color.gold(),
+            "win": discord.Color.green(), "push": discord.Color.blue(), "lose": discord.Color.red()
+        }
+        embed = discord.Embed(title="🃏 [블랙잭]", color=colors[outcome])
+
+        dealer_text = (f"{hand_str(self.dealer)}  (합계 **{hand_value(self.dealer)}**)" if reveal
+                       else f"{card_str(self.dealer[0])} **[?]**")
+        embed.add_field(name=f"🧑 {self.owner.display_name}의 패 (합계 {hand_value(self.player)})", value=hand_str(self.player), inline=False)
+        embed.add_field(name="🎩 딜러의 패", value=dealer_text, inline=False)
+
+        if outcome is None:
+            embed.description = f"💵 베팅금 **${self.bet:,}**\n🃏 **히트**(카드 받기) 또는 ✋ **스탠드**(멈추기)를 선택하세요. (60초 이내)"
+        else:
+            if note == "timeout":
+                msg = "⌛ **시간 초과** — 자동으로 패배 처리되었습니다."
+            elif outcome == "blackjack":
+                msg = "🃏 **블랙잭!** 3:2 배당으로 지급됩니다."
+            elif outcome == "win":
+                msg = "🎉 **승리!**" + (" 딜러가 버스트했습니다." if hand_value(self.dealer) > 21 else "")
+            elif outcome == "push":
+                msg = "🤝 **무승부** — 베팅금이 그대로 돌아옵니다."
+            else:
+                msg = "💥 **버스트!** 21을 초과했습니다." if hand_value(self.player) > 21 else "💀 **패배**"
+            net = payout - self.bet
+            embed.description = (f"{msg}\n\n💵 베팅금: `${self.bet:,}`\n💰 지급액: `${payout:,}`\n"
+                                 f"📈 손익: `{fmt_net(net)}`\n🏦 보유 자금: `${money:,}`{format_new_titles(new_ids or [])}")
+
+        embed.set_footer(text="딜러는 16 이하에서 카드를 받고 17 이상에서 멈춥니다 · 블랙잭 3:2")
+        if self.owner.avatar:
+            embed.set_thumbnail(url=self.owner.avatar.url)
+        return embed
+
+    async def finish(self, edit, outcome: str, note: str = ""):
+        """결과를 정산하고 최종 화면을 표시. edit 은 메시지 수정 함수(embed=, view= 인자)"""
+        self.finished = True
+        self.stop()
+        active_blackjack.pop(self.owner.id, None)
+
+        payout = int(self.bet * BLACKJACK_PAYOUT[outcome])
+        try:
+            async with _gamble_lock(self.owner.id):
+                new_money, new_ids = settle_gamble(self.owner.id, self.bet, payout, prepaid=True)
+        except Exception as e:
+            print(f"DB Error (blackjack settle): {e}")
+            await edit(embed=discord.Embed(
+                title="🚨 [블랙잭 정산 오류]",
+                description="데이터베이스 오류로 결과를 정산하지 못했습니다. 관리자에게 문의해주세요.",
+                color=discord.Color.red()), view=None)
+            return
+
+        await edit(embed=self.build_embed(reveal=True, outcome=outcome, payout=payout,
+                                          money=new_money, new_ids=new_ids, note=note), view=None)
+
+    async def dealer_turn(self, edit):
+        while hand_value(self.dealer) < 17:
+            self.dealer.append(self.deck.pop())
+        await self.finish(edit, blackjack_outcome(self.player, self.dealer))
+
+    async def _guard(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner.id:
+            await interaction.response.send_message("❌ 본인의 블랙잭 테이블만 조작할 수 있습니다.", ephemeral=True)
+            return False
+        await interaction.response.defer()
+        return not (self.finished or self.busy)
+
+    @discord.ui.button(label="히트 (카드 받기)", emoji="🃏", style=discord.ButtonStyle.primary)
+    async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._guard(interaction): return
+        self.busy = True
+        try:
+            self.player.append(self.deck.pop())
+            value = hand_value(self.player)
+            if value > 21:
+                await self.finish(interaction.edit_original_response, "lose")
+            elif value == 21:   # 21이면 자동 스탠드
+                await self.dealer_turn(interaction.edit_original_response)
+            else:
+                await interaction.edit_original_response(embed=self.build_embed(), view=self)
+        finally:
+            self.busy = False
+
+    @discord.ui.button(label="스탠드 (멈추기)", emoji="✋", style=discord.ButtonStyle.secondary)
+    async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._guard(interaction): return
+        self.busy = True
+        try:
+            await self.dealer_turn(interaction.edit_original_response)
+        finally:
+            self.busy = False
+
+    async def on_timeout(self):
+        if self.finished or self.busy or self.message is None:
+            return
+        await self.finish(self.message.edit, "lose", note="timeout")
+
+# ==========================================
+# 🎰 /도박 명령어 그룹
+# ==========================================
+gamble_group = app_commands.Group(name="도박", description="[카지노] 자금을 걸고 도박을 즐깁니다.")
+bot.tree.add_command(gamble_group)
+
+BET_DESC = f"베팅할 금액 (${GAMBLE_MIN_BET:,} ~ ${GAMBLE_MAX_BET:,})"
+
+@gamble_group.command(name="슬롯", description="🎰 슬롯머신을 돌립니다. (3개 일치 고배당 / 2개 일치 본전)")
+@app_commands.describe(베팅금=BET_DESC)
+async def gamble_slots(interaction: discord.Interaction, 베팅금: app_commands.Range[int, GAMBLE_MIN_BET, GAMBLE_MAX_BET]):
+    if not await gamble_precheck(interaction): return
+
+    user = interaction.user
+    bet = 베팅금
+
+    money = int(get_user_data(user.id).get("money") or 0)
+    if money < bet:
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.response.send_message(f"❌ 자금이 부족합니다! (보유 자금: ${money:,})", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    reels = spin_slots()
+    mult = slot_multiplier(reels)
+    payout = int(bet * mult)
+    jackpot = (reels[0] == reels[1] == reels[2] == SLOT_JACKPOT_SYMBOL)
+
+    try:
+        async with _gamble_lock(user.id):
+            new_money, new_ids = settle_gamble(user.id, bet, payout, jackpot=jackpot)
+    except InsufficientFunds:
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.edit_original_response(content="❌ 자금이 부족합니다!")
+        return
+    except Exception as e:
+        print(f"DB Error (slots): {e}")
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.edit_original_response(content="🚨 데이터베이스 오류로 베팅이 취소되었습니다. (자금은 차감되지 않았습니다)")
+        return
+
+    # 릴이 하나씩 멈추는 연출 (결과는 이미 정산 완료)
+    spinning = discord.Embed(title="🎰 [슬롯머신]", description=slot_board(["🔄", "🔄", "🔄"]) + f"\n\n💵 베팅금 `${bet:,}`", color=discord.Color.dark_gold())
+    await _safe_edit(interaction, embed=spinning)
+    await asyncio.sleep(0.8)
+    spinning.description = slot_board([reels[0], "🔄", "🔄"]) + f"\n\n💵 베팅금 `${bet:,}`"
+    await _safe_edit(interaction, embed=spinning)
+    await asyncio.sleep(0.8)
+    spinning.description = slot_board([reels[0], reels[1], "🔄"]) + f"\n\n💵 베팅금 `${bet:,}`"
+    await _safe_edit(interaction, embed=spinning)
+    await asyncio.sleep(0.8)
+
+    if jackpot:
+        msg, color = "🎊 **JACKPOT!!!** 7️⃣7️⃣7️⃣ 대박이 터졌습니다!", discord.Color.gold()
+    elif mult >= 2:
+        msg, color = f"✨ **{reels[0]} 3개 일치!** 배당 x{mult:g}", discord.Color.green()
+    elif mult == SLOT_PAIR_MULT and mult > 0:
+        msg, color = "🤝 **2개 일치** — 베팅금이 그대로 돌아옵니다.", discord.Color.blue()
+    else:
+        msg, color = "💨 **꽝!** 베팅금을 잃었습니다.", discord.Color.red()
+
+    embed = discord.Embed(
+        title="🎰 [슬롯머신] 결과",
+        description=(f"{slot_board(reels)}\n\n{msg}\n\n💵 베팅금: `${bet:,}`\n💰 지급액: `${payout:,}`\n"
+                     f"📈 손익: `{fmt_net(payout - bet)}`\n🏦 보유 자금: `${new_money:,}`{format_new_titles(new_ids)}"),
+        color=color
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    await _safe_edit(interaction, embed=embed)
+
+@gamble_group.command(name="동전", description="🪙 동전 던지기에 베팅합니다. (승리 시 2배)")
+@app_commands.describe(베팅금=BET_DESC, 선택="동전의 어느 면에 걸까요?")
+@app_commands.choices(선택=[
+    app_commands.Choice(name="🪙 앞면", value="front"),
+    app_commands.Choice(name="🌑 뒷면", value="back")
+])
+async def gamble_coin(interaction: discord.Interaction, 베팅금: app_commands.Range[int, GAMBLE_MIN_BET, GAMBLE_MAX_BET], 선택: app_commands.Choice[str]):
+    if not await gamble_precheck(interaction): return
+
+    user = interaction.user
+    bet = 베팅금
+
+    money = int(get_user_data(user.id).get("money") or 0)
+    if money < bet:
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.response.send_message(f"❌ 자금이 부족합니다! (보유 자금: ${money:,})", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    names = {"front": "🪙 앞면", "back": "🌑 뒷면"}
+    won = random.random() < COIN_WIN_RATE
+    result_side = 선택.value if won else ("back" if 선택.value == "front" else "front")
+    payout = bet * 2 if won else 0
+
+    try:
+        async with _gamble_lock(user.id):
+            new_money, new_ids = settle_gamble(user.id, bet, payout)
+    except InsufficientFunds:
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.edit_original_response(content="❌ 자금이 부족합니다!")
+        return
+    except Exception as e:
+        print(f"DB Error (coin): {e}")
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.edit_original_response(content="🚨 데이터베이스 오류로 베팅이 취소되었습니다. (자금은 차감되지 않았습니다)")
+        return
+
+    flipping = discord.Embed(
+        title="🪙 [동전 던지기]",
+        description=f"{user.mention} 님이 **{names[선택.value]}**에 `${bet:,}` 를 걸었습니다!\n\n🪙 동전이 공중에서 회전 중...",
+        color=discord.Color.dark_gold()
+    )
+    await _safe_edit(interaction, embed=flipping)
+    await asyncio.sleep(1.2)
+
+    embed = discord.Embed(
+        title="🪙 [동전 던지기] 결과",
+        description=(f"결과: **{names[result_side]}**\n"
+                     f"{'🎉 **적중!** 베팅금의 2배를 받았습니다.' if won else '💨 **빗나갔습니다.** 베팅금을 잃었습니다.'}\n\n"
+                     f"💵 베팅금: `${bet:,}`\n💰 지급액: `${payout:,}`\n"
+                     f"📈 손익: `{fmt_net(payout - bet)}`\n🏦 보유 자금: `${new_money:,}`{format_new_titles(new_ids)}"),
+        color=discord.Color.green() if won else discord.Color.red()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    await _safe_edit(interaction, embed=embed)
+
+@gamble_group.command(name="블랙잭", description="🃏 딜러와 블랙잭 승부를 겨룹니다. (블랙잭 3:2 / 승리 2배)")
+@app_commands.describe(베팅금=BET_DESC)
+async def gamble_blackjack(interaction: discord.Interaction, 베팅금: app_commands.Range[int, GAMBLE_MIN_BET, GAMBLE_MAX_BET]):
+    if not await gamble_precheck(interaction): return
+
+    user = interaction.user
+    bet = 베팅금
+
+    if user.id in active_blackjack:
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.response.send_message("⚠️ 이미 진행 중인 블랙잭 테이블이 있습니다! 먼저 끝내주세요.", ephemeral=True)
+        return
+
+    money = int(get_user_data(user.id).get("money") or 0)
+    if money < bet:
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.response.send_message(f"❌ 자금이 부족합니다! (보유 자금: ${money:,})", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    # 베팅금을 먼저 차감하고 테이블에 앉힘 (결과 정산 시 지급액만 더해줌)
+    try:
+        async with _gamble_lock(user.id):
+            take_bet(user.id, bet)
+    except InsufficientFunds:
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.edit_original_response(content="❌ 자금이 부족합니다!")
+        return
+    except Exception as e:
+        print(f"DB Error (blackjack take_bet): {e}")
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.edit_original_response(content="🚨 데이터베이스 오류로 베팅이 취소되었습니다. (자금은 차감되지 않았습니다)")
+        return
+
+    view = BlackjackView(owner=user, bet=bet)
+    active_blackjack[user.id] = view
+
+    if is_blackjack(view.player) or is_blackjack(view.dealer):
+        # 시작부터 승부가 결정된 경우 (블랙잭)
+        view.message = await interaction.edit_original_response(embed=view.build_embed())
+        await view.finish(interaction.edit_original_response, blackjack_outcome(view.player, view.dealer))
+    else:
+        view.message = await interaction.edit_original_response(embed=view.build_embed(), view=view)
+
+@gamble_group.command(name="규칙", description="📖 카지노 규칙·배당표와 나의 도박 기록을 확인합니다.")
+async def gamble_rules(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+
+    s = get_title_blob(get_user_data(interaction.user.id))["stats"]
+    paytable = "\n".join(f"{e}{e}{e} → **x{m}**" for e, _, m in SLOT_SYMBOLS)
+    net = s["gamble_net"]
+
+    embed = discord.Embed(
+        title="📖 [칼렌데 카지노 규칙]",
+        description=f"💵 베팅 한도: **${GAMBLE_MIN_BET:,} ~ ${GAMBLE_MAX_BET:,}** · 베팅 간격 {GAMBLE_COOLDOWN}초\n"
+                    f"⚠️ 도박은 평균적으로 자금이 줄어듭니다. 감옥에서는 이용할 수 없습니다.",
+        color=discord.Color.dark_gold()
+    )
+    embed.add_field(
+        name="🎰 `/도박 슬롯`",
+        value=f"{paytable}\n같은 그림 **2개** → 베팅금 반환 / 모두 다르면 꽝\n📊 환수율 약 **{slot_rtp() * 100:.1f}%**",
+        inline=False
+    )
+    embed.add_field(name="🪙 `/도박 동전`", value=f"앞면/뒷면 중 선택 · 적중 시 **2배** (승률 **{COIN_WIN_RATE * 100:.0f}%**)", inline=False)
+    embed.add_field(
+        name="🃏 `/도박 블랙잭`",
+        value="21에 가까운 쪽이 승리 (21 초과 시 버스트)\n승리 **2배** · 블랙잭(처음 2장 21) **2.5배** · 무승부 베팅금 반환\n딜러는 16 이하 히트 / 17 이상 스탠드 · 60초 내 미선택 시 패배",
+        inline=False
+    )
+    embed.add_field(
+        name="📊 나의 도박 기록",
+        value=f"총 `{s['gamble_played']}`판 / 승리 `{s['gamble_won']}`판 / 누적 베팅 `${s['gamble_wagered']:,}`\n누적 손익 `{fmt_net(net)}` / 잭팟 `{s['jackpot']}`회",
+        inline=False
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # === 1. 셀프 가입 버튼 뷰 (시민 -> 조직원 승급) ===
 class SelfJoinView(discord.ui.View):
@@ -652,6 +1216,11 @@ class LeaveConfirmView(discord.ui.View):
         # 3. 쿨타임 메모리 제거
         mission_cooldowns.pop(member.id, None)
         parttime_cooldowns.pop(member.id, None)
+        gamble_cooldowns.pop(member.id, None)
+        open_table = active_blackjack.pop(member.id, None)
+        if open_table:  # 진행 중이던 블랙잭은 초기화된 계정에 정산되지 않도록 종료
+            open_table.finished = True
+            open_table.stop()
 
         for child in self.children:
             child.disabled = True
@@ -799,18 +1368,40 @@ class MissionSelect(discord.ui.Select):
                             f"🏅 **총 명예:** `{current_stats['honor']} pt`{rank_up_msg}",
                 color=discord.Color.green()
             )
-        # (임무 실패 조건 내부)
+        # (임무 실패 로직 내부)
         else:
-            # 1분간 수배 목록에 등록 (60초)
-            wanted_list[user.id] = datetime.now() + timedelta(seconds=60)
-
-            if "🪪 치안국 위조 신분증" in inventory:
-                fail_msg = "⚠️ 임무에 실패했으나 **🪪 치안국 위조 신분증** 덕분에 지명수배를 면했습니다!"
-                wanted_list.pop(user.id, None) # 신분증이 있으면 수배 취소
-            else:
-                fail_msg = "🚨 **작전 실패!** 현장에 흔적이 남아 **1분간 경찰 지명수배 상태**가 됩니다!"
-
             current_stats = get_user_data(user.id)
+            inventory = current_stats.get("inventory", {})
+            settings = current_stats.get("settings", {"auto_fail_guard": True})
+            
+            guard_item_key = "🎟️ 임무 실패 방지권"
+            guard_used = False
+
+            # 실패 방지권 자동 사용 조건 확인
+            if settings.get("auto_fail_guard", True) and inventory.get(guard_item_key, 0) > 0:
+                inventory[guard_item_key] -= 1
+                if inventory[guard_item_key] <= 0:
+                    del inventory[guard_item_key]
+                
+                # DB 인벤토리 반영
+                try:
+                    update_user_market_purchase(user.id, current_stats["money"], current_stats["honor"], inventory)
+                except Exception:
+                    pass
+                guard_used = True
+
+            if guard_used:
+                fail_msg = "🛡️ **[실패 방지권 발동]** 임무에 실패했으나, 가방에 있던 **🎟️ 임무 실패 방지권**이 소모되어 수배 및 패널티가 면제되었습니다!"
+            else:
+                # 방지권이 없거나 설정이 꺼져있으면 기존대로 수배 등록
+                wanted_list[user.id] = datetime.now() + timedelta(seconds=60)
+
+                if "🪪 치안국 위조 신분증" in inventory:
+                    fail_msg = "⚠️ 임무에 실패했으나 **🪪 치안국 위조 신분증** 덕분에 지명수배를 면했습니다!"
+                    wanted_list.pop(user.id, None)
+                else:
+                    fail_msg = "🚨 **작전 실패!** 현장에 흔적이 남아 **1분간 경찰 지명수배 상태**가 됩니다!"
+
             current_rank = get_user_rank(current_stats["honor"])
             new_title_ids = record_mission_result(user.id, current_stats, False, False)
 
@@ -861,6 +1452,7 @@ class MarketSelect(discord.ui.Select):
         old_rank = get_user_rank(user_info.get("honor", 0))
         inventory = user_info.get("inventory", {})
         item_name = f"{target_item['emoji']} {target_item['name']}"
+        special_effect_text = f"\n✨ **특수 효과:** {target_item['desc']}"
 
         if inventory.get(item_name, 0) >= 1:
             await interaction.response.send_message("⚠️ 이미 소지 중인 장비입니다.", ephemeral=True)
@@ -874,13 +1466,6 @@ class MarketSelect(discord.ui.Select):
         new_honor = user_info["honor"]
         inventory[item_name] = 1
         
-        special_effect_text = ""
-        if target_item['id'] == "vip_cigar":
-            new_honor += 15
-            special_effect_text = "\n✨ 명예 포인트가 즉시 **+15 pt** 증가했습니다!"
-        elif target_item['id'] == "boost_drink":
-            mission_cooldowns.pop(interaction.user.id, None)
-            special_effect_text = "\n⚡ 임무 쿨타임이 **즉시 초기화**되었습니다!"
 
         update_user_market_purchase(interaction.user.id, new_money, new_honor, inventory)
 
@@ -1091,6 +1676,11 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(name="🕵️‍♂️ `/프로필`", value="나의 신원 서류와 직급을 확인합니다. (누구나 조회 가능)", inline=False)
     embed.add_field(name="🚪 `/탈퇴`", value="탈퇴 시 모든 데이터가 초기화되고 시민으로 돌아갑니다.", inline=False)
     embed.add_field(name="📍 `/이동` / 🕵️‍♂️ `/암시장` / 🎒 `/인벤토리` / 🗡️ `/임무` / 🏷️ `/칭호`", value="[조직원 전용 명령어]", inline=False)
+    embed.add_field(
+        name="🎰 `/도박 슬롯` · `/도박 동전` · `/도박 블랙잭` · `/도박 규칙`",
+        value="[누구나 이용 가능] 자금을 걸고 도박을 즐깁니다. 규칙과 배당표는 `/도박 규칙`에서 확인하세요. (감옥 수감 중 이용 불가)",
+        inline=False
+    )
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
