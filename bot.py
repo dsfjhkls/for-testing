@@ -155,6 +155,11 @@ LOCATIONS = {
         "desc": "항구도시 / 해상 무역 중심지. 합법과 불법 밀거래가 공존하는 개방형 항구.",
         "risk": "변동적",
         "emoji": "⚓"
+    },
+    "로젠펠트": {
+        "desc": "칼렌데 내 유흥업이 발달한 지역. 고급 바, 클럽, 카지노 및 각종 유흥 시설이 밀집해 있다. 낮과 밤의 분위기가 크게 다르다. 부유층과 범죄조직원, 다양한 계층의 사람들이 오간다. 화려한 외관과 달리 내부에는 각종 비리와 범죄가 얽혀 있다.",
+        "risk": "높음",
+        "emoji": "🍸"
     }
 }
 
@@ -179,6 +184,11 @@ BLACK_MARKET_ITEMS = {
         {"id": "smuggled_rum", "name": "밀수된 고급 양주", "price": 1500, "desc": "임무 명예 보상 2배", "emoji": "🍾"},
         {"id": "stealth_sonar", "name": "해상 무전 도청기", "price": 2000, "desc": "성공률 +15% & 자금 +10%", "emoji": "📻"},
         {"id": "pirate_map", "name": "해적 비밀 항해 지도", "price": 2500, "desc": "임무 성공률 +20%", "emoji": "🗺️"}
+    ],
+    "로젠펠트": [
+        {"id": "luxury_vodka", "name": "미정1", "price": 2000, "desc": "미정1", "emoji": "🥃"},
+        {"id": "gold_ring", "name": "미정2", "price": 3000, "desc": "미정2", "emoji": "💍"},
+        {"id": "diamond_necklace", "name": "미정3", "price": 5000, "desc": "미정3", "emoji": "💎"}
     ]
 }
 
@@ -1340,6 +1350,9 @@ class MissionSelect(discord.ui.Select):
             discord.SelectOption(label="타 조직 구역 비밀 조사", description="난이도: 하 | 보상: $300~$700 / 명예 +10pt", emoji="🕶️", value="mission_1"),
             discord.SelectOption(label="밀수품 비밀 운송 작업", description="난이도: 중 | 보상: $600~$1,500 / 명예 +25pt", emoji="💼", value="mission_2"),
             discord.SelectOption(label="라이벌 보스의 장부 탈취", description="난이도: 상 | 보상: $1,500~$3,500 / 명예 +50pt", emoji="🏛️", value="mission_3"),
+            # 👇 새로 추가된 임무 2개
+            discord.SelectOption(label="기밀 문서 야간 밀반출", description="난이도: 중상 | 보상: $1,200~$2,500 / 명예 +35pt", emoji="📁", value="mission_4"),
+            discord.SelectOption(label="중앙 은행 호송 차량 습격", description="난이도: 최상 | 보상: $3,000~$6,000 / 명예 +80pt", emoji="💰", value="mission_5"),
         ]
         super().__init__(placeholder="🎯 수행할 비밀 임무를 선택하세요...", min_values=1, max_values=1, options=options)
 
@@ -1370,14 +1383,19 @@ class MissionSelect(discord.ui.Select):
 
         mission_cooldowns[user.id] = now + timedelta(seconds=cooldown_seconds)
 
+        # 👇 새로 추가된 임무의 데이터 세부 설정 (성공 확률, 보상 범위, 명예)
         mission_data = {
-            "mission_1": {"title": "🕶️ 타 조직 구역 비밀 조사", "success_rate": 80, "reward": (300, 700), "honor": 10},
-            "mission_2": {"title": "💼 밀수품 비밀 운송 작업", "success_rate": 65, "reward": (600, 1500), "honor": 25},
-            "mission_3": {"title": "🏛️ 라이벌 보스의 장부 탈취", "success_rate": 50, "reward": (1500, 3500), "honor": 50},
+            "mission_1": {"title": "🕶️ 타 조직 구역 비밀 조사", "success_rate": 75, "reward": (300, 700), "honor": 10},
+            "mission_2": {"title": "💼 밀수품 비밀 운송 작업", "success_rate": 55, "reward": (600, 1500), "honor": 25},
+            "mission_3": {"title": "🏛️ 라이벌 보스의 장부 탈취", "success_rate": 40, "reward": (1500, 3500), "honor": 50},
+            "mission_4": {"title": "📁 기밀 문서 야간 밀반출", "success_rate": 50, "reward": (1200, 2500), "honor": 35},      # 추가
+            "mission_5": {"title": "💰 중앙 은행 호송 차량 습격", "success_rate": 10, "reward": (3000, 6000), "honor": 80},  # 추가
         }
 
         selected = mission_data[self.values[0]]
         current_loc = user_stats.get("location", "레벤하임")
+        
+        # (이하 아래의 기존 버프 계산 및 성공/실패 판정 로직은 그대로 유지)
 
         success_bonus = 0
         money_mult = 1.0
