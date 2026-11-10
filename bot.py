@@ -178,7 +178,7 @@ BLACK_MARKET_ITEMS = {
     "블랙워드": [
         {"id": "lockpick", "name": "녹슨 락픽 세트", "price": 300, "desc": "임무 성공률 +10%", "emoji": "🔑"},
         {"id": "black_hood", "name": "익명의 덮개", "price": 600, "desc": "임무 성공률 +10%", "emoji": "🥷"},
-        {"id": "night_goggles", "name": "암시장 야시경", "price": 1500, "desc": "임무 성공률 +15%", "emoji": "🗡️"}
+        {"id": "night_goggles", "name": "대형 밀수 전용 가방", "price": 2000, "desc": "임무 성공 시 추가 자금 +20%", "emoji": "💼"}
     ],
     "에르느코항": [
         {"id": "smuggled_rum", "name": "밀수된 고급 양주", "price": 1500, "desc": "임무 명예 보상 2배", "emoji": "🍾"},
@@ -1408,12 +1408,6 @@ class MissionSelect(discord.ui.Select):
         if "🥷 익명의 덮개" in inventory:
             success_bonus += 10
             active_buffs.append("🥷 덮개 (+10%)")
-        if "🗡️ 암시장 야시경" in inventory:
-            success_bonus += 15
-            active_buffs.append("🗡️ 야시경 (+15%)")
-        if "🗺️ 해적 비밀 항해 지도" in inventory:
-            success_bonus += 20
-            active_buffs.append("🗺️ 항해 지도 (+20%)")
         if "📻 해상 무전 도청기" in inventory:
             success_bonus += 15
             money_mult += 0.10
@@ -1608,21 +1602,31 @@ async def execute_mission(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=True)
 
     user = interaction.user
     user_stats = get_user_data(user.id)
     current_loc = user_stats.get("location", "레벤하임")
 
+    # ⏳ 쿨타임 계산 및 상단 안내 메시지 생성
+    now = datetime.now()
+    cooldown_notice = ""
+    
+    if user.id in mission_cooldowns:
+        next_available = mission_cooldowns[user.id]
+        if now < next_available:
+            remaining = int((next_available - now).total_seconds()) + 1
+            cooldown_notice = f"⏳ **현재 체력을 회복 중입니다. (남은 쿨타임: {remaining}초)**\n\n"
+
     embed = discord.Embed(
         title=f"📂 [{current_loc}] 비밀 임무 작전 하달",
-        description=f"**{user.mention}** 님, 수행할 작전을 선택해 주십시오.",
+        description=cooldown_notice + f"**{user.mention}** 님, 수행할 작전을 선택해 주십시오.",
         color=discord.Color.dark_purple()
     )
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
 
-    await interaction.followup.send(embed=embed, view=MissionView(owner=user))
+    await interaction.followup.send(embed=embed, view=MissionView(owner=user), ephemeral=True)
 
 @bot.tree.command(name="프로필", description="[마피아 GM] 조직원 신원 조회 서류를 확인합니다.")
 async def profile(interaction: discord.Interaction):
