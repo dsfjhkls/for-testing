@@ -70,20 +70,36 @@ MAINTENANCE_MODE = False
 # 쿨타임 관리를 위한 메모리 사전 (유저ID: 다음 수행 가능 시간)
 mission_cooldowns = {}
 
-# === 🎖️ 변경된 명예 포인트에 따른 직급 계산 함수 ===
-def get_user_rank(honor: int) -> str:
-    if honor >= 2000:
-        return "👑 대부"
-    elif honor >= 1000:
-        return "⚔️ 언더보스"
-    elif honor >= 500:
-        return "🥇 카포"
-    elif honor >= 300:
-        return "🥈 솔다토"
-    elif honor >= 100:
-        return "🥉 행동대원"
+# === 🎖️ 명예 포인트 및 소속(마피아/경찰)에 따른 직급 계산 함수 ===
+def get_user_rank(honor: int, is_police: bool = False) -> str:
+    if is_police:
+        # 경찰 전용 직급
+        if honor >= 2000:
+            return "👑 총경"
+        elif honor >= 1000:
+            return "⚔️ 경정"
+        elif honor >= 500:
+            return "🥇 경위"
+        elif honor >= 300:
+            return "🥈 경사"
+        elif honor >= 100:
+            return "🥉 경장"
+        else:
+            return "🌱 신입 경찰"
     else:
-        return "🌱 신입"
+        # 마피아(조직원) 전용 직급
+        if honor >= 2000:
+            return "👑 대부"
+        elif honor >= 1000:
+            return "⚔️ 언더보스"
+        elif honor >= 500:
+            return "🥇 카포"
+        elif honor >= 300:
+            return "🥈 솔다토"
+        elif honor >= 100:
+            return "🥉 행동대원"
+        else:
+            return "🌱 깡패"
 
 # === 🗺️ 4대 지역 정보 데이터 ===
 LOCATIONS = {
@@ -378,14 +394,19 @@ async def check_maintenance(interaction: discord.Interaction) -> bool:
             return False
     return True
 
-# === [공통 체크 함수] 조직원 가입 여부 확인 ===
+# === [공통 체크 함수] 마피아 또는 경찰 가입 여부 확인 ===
 async def check_membership(interaction: discord.Interaction) -> bool:
     user = interaction.user
-    role = discord.utils.get(interaction.guild.roles, name="조직원")
+    mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
+    police_role = discord.utils.get(interaction.guild.roles, name="경찰")
     
-    if not role or role not in user.roles:
+    # 마피아나 경찰 역할 중 하나라도 소속되어 있다면 통과
+    is_mafia = mafia_role and mafia_role in user.roles
+    is_police = police_role and police_role in user.roles
+
+    if not is_mafia and not is_police:
         await interaction.response.send_message(
-            "❌ 패밀리의 정식 조직원이 아닙니다! `/가입`을 먼저 진행해 주세요.",
+            "❌ 패밀리(마피아) 또는 치안국(경찰) 소속이 아닙니다! `/가입`을 먼저 진행해 주세요.",
             ephemeral=True
         )
         return False
