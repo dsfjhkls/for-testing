@@ -1602,7 +1602,7 @@ async def execute_mission(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer()
 
     user = interaction.user
     user_stats = get_user_data(user.id)
