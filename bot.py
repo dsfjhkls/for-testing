@@ -67,6 +67,38 @@ else:
 # ==========================================
 MAINTENANCE_MODE = False 
 
+# === 🚨 수배 및 감옥 관리 데이터 ===
+# {user_id: datetime (수배 만료 시간)}
+wanted_list = {}
+
+# {user_id: datetime (석방 예정 시간)}
+jail_list = {}
+
+# === [공통 체크 함수] 감옥 수감 여부 확인 ===
+async def check_jail(interaction: discord.Interaction) -> bool:
+    user_id = interaction.user.id
+    now = datetime.now()
+    
+    if user_id in jail_list:
+        release_time = jail_list[user_id]
+        if now < release_time:
+            remaining = int((release_time - now).total_seconds())
+            await interaction.response.send_message(
+                f"⛓️ **현재 감옥에 수감 중입니다!** 석방까지 **{remaining}초** 남았습니다. (`/프로필`만 이용 가능)",
+                ephemeral=True
+            )
+            return True
+        else:
+            # 수감 시간 종료 시 감옥 해제
+            jail_list.pop(user_id, None)
+            
+            # DB의 위치를 기본 거점으로 복구
+            try:
+                update_user_location(user_id, "레벤하임")
+            except Exception:
+                pass
+    return False
+
 # 쿨타임 관리를 위한 메모리 사전 (유저ID: 다음 수행 가능 시간)
 mission_cooldowns = {}
 
@@ -357,6 +389,7 @@ class TitleView(discord.ui.View):
 async def titles_command(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
+    if await check_jail(interaction): return
 
     user = interaction.user
     info = get_user_data(user.id)
@@ -412,12 +445,68 @@ async def check_membership(interaction: discord.Interaction) -> bool:
         return False
     return True
 
+# === 🚨 [경찰 전용] `/검거` 명령어 ===
+@bot.tree.command(name="검거", description="[경찰 전용] 지명수배 중인 마피아를 체포하여 감옥에 가둡니다.")
+@app_commands.describe(member="검거할 수배 대상 마피아")
+async def arrest_member(interaction: discord.Interaction, member: discord.Member):
+    if not await check_maintenance(interaction): return
+
+    police_role = discord.utils.get(interaction.guild.roles, name="경찰")
+    if not police_role or police_role not in interaction.user.roles:
+        await interaction.response.send_message("❌ 치안국 경찰만 검거 명령어를 사용할 수 있습니다!", ephemeral=True)
+        return
+
+    now = datetime.now()
+
+    # 1. 수배 대상 여부 및 1분 초과 여부 확인
+    if member.id not in wanted_list or now > wanted_list[member.id]:
+        wanted_list.pop(member.id, None)
+        await interaction.response.send_message(f"❌ {member.mention} 님은 현재 지명수배 상태가 아니거나 증거가 인멸되었습니다.", ephemeral=True)
+        return
+
+    # 2. 수배 상태 해제 후 감옥 투옥 (예: 180초 = 3분 수감)
+    wanted_list.pop(member.id, None)
+    jail_time_seconds = 180 
+    jail_list[member.id] = now + timedelta(seconds=jail_time_seconds)
+
+    # 3. DB 위치를 '감옥'으로 변경
+    try:
+        update_user_location(member.id, "감옥")
+    except Exception as e:
+        print(f"Location update error: {e}")
+
+    # 4. 경찰 실적 보상 (자금 $500, 명예 +20pt)
+    try:
+        update_user_stats(interaction.user.id, 500, 20)
+    except Exception:
+        pass
+
+    police_info = get_user_data(interaction.user.id)
+    police_rank = get_user_rank(police_info["honor"], is_police=True)
+
+    embed = discord.Embed(
+        title="🚨 [지명수배자 검거 완료]",
+        description=(
+            f"🚔 **{interaction.user.mention}** 경찰관이 수배범 **{member.mention}** (을)를 현장에서 체포했습니다!\n\n"
+            f"⚖️ **처벌:** **{jail_time_seconds // 60}분** 동안 감옥에 수감되며 프로필 외 명령어가 통제됩니다.\n"
+            f"📍 **현재 거점:** `감옥`\n\n"
+            f"💰 **검거 포상금:** `$500`\n"
+            f"🏆 **경찰 실적:** `+20 pt` (현재 직급: `{police_rank}`)"
+        ),
+        color=discord.Color.dark_blue()
+    )
+    if member.avatar:
+        embed.set_thumbnail(url=member.avatar.url)
+
+    await interaction.response.send_message(embed=embed)
+
 # === 시민 전용 아르바이트 쿨타임 사전 ===
 parttime_cooldowns = {}
 
 @bot.tree.command(name="아르바이트", description="[시민/공용] 합법적인 일거리를 통해 안전하게 소량의 자금을 벌어듭니다.")
 async def part_time_job(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
+    if await check_jail(interaction): return
 
     await interaction.response.defer()
     user = interaction.user
@@ -710,11 +799,16 @@ class MissionSelect(discord.ui.Select):
                             f"🏅 **총 명예:** `{current_stats['honor']} pt`{rank_up_msg}",
                 color=discord.Color.green()
             )
+        # (임무 실패 조건 내부)
         else:
+            # 1분간 수배 목록에 등록 (60초)
+            wanted_list[user.id] = datetime.now() + timedelta(seconds=60)
+
             if "🪪 치안국 위조 신분증" in inventory:
-                fail_msg = "⚠️ 임무에 실패했으나 **🪪 치안국 위조 신분증** 덕분에 수배를 면했습니다!"
+                fail_msg = "⚠️ 임무에 실패했으나 **🪪 치안국 위조 신분증** 덕분에 지명수배를 면했습니다!"
+                wanted_list.pop(user.id, None) # 신분증이 있으면 수배 취소
             else:
-                fail_msg = "⚠️ 경비대에 적발되어 임무 보상을 얻지 못했습니다."
+                fail_msg = "🚨 **작전 실패!** 현장에 흔적이 남아 **1분간 경찰 지명수배 상태**가 됩니다!"
 
             current_stats = get_user_data(user.id)
             current_rank = get_user_rank(current_stats["honor"])
@@ -823,6 +917,7 @@ async def join_family(interaction: discord.Interaction):
 async def leave_family(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
+    if await check_jail(interaction): return
 
     user = interaction.user
     embed = discord.Embed(title="⚠️ [패밀리 탈퇴 경고]", description=f"**{user.mention}**님, 정말로 탈퇴하시겠습니까? (모든 기록이 초기화됩니다)", color=discord.Color.red())
@@ -832,6 +927,7 @@ async def leave_family(interaction: discord.Interaction):
 async def execute_mission(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
+    if await check_jail(interaction): return
     await interaction.response.defer()
 
     user = interaction.user
@@ -888,6 +984,7 @@ async def profile(interaction: discord.Interaction):
 async def show_inventory(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
+    if await check_jail(interaction): return
 
     user_stats = get_user_data(interaction.user.id)
     inventory = user_stats.get("inventory", {})
@@ -911,6 +1008,7 @@ async def show_inventory(interaction: discord.Interaction):
 async def move_location(interaction: discord.Interaction, 지역: app_commands.Choice[str]):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
+    if await check_jail(interaction): return
 
     user = interaction.user
     selected_loc = 지역.value
@@ -933,6 +1031,7 @@ async def move_location(interaction: discord.Interaction, 지역: app_commands.C
 async def open_market(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
+    if await check_jail(interaction): return
 
     user = interaction.user
     user_stats = get_user_data(user.id)
