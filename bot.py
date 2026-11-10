@@ -156,40 +156,54 @@ def get_user_data(user_id: int) -> dict:
             "location": "레벤하임",
             "inventory": {}
         }
-        supabase.table("user_data").insert(default_data).execute()
+        ins = supabase.table("user_data").insert(default_data).execute()
+        if not ins.data:
+            print(f"⚠️ [get_user_data] 새 유저 행 생성 결과가 비어 있습니다 (user_id={str_id}). RLS 정책을 확인하세요.")
         return default_data
     except Exception as e:
         print(f"DB Error (get_user_data): {e}")
         return {"user_id": str_id, "money": 1000, "honor": 0, "location": "레벤하임", "inventory": {}}
 
+def _require_db():
+    if not supabase:
+        raise RuntimeError("Supabase 클라이언트가 초기화되지 않았습니다 (SUPABASE_URL / SUPABASE_KEY 확인)")
+
+def _check_updated(res, action: str):
+    # update()가 한 행도 바꾸지 못하면 res.data가 빈 리스트 -> 행이 없거나 RLS 정책에 막힌 것
+    if not res.data:
+        raise RuntimeError(f"{action}: 반영된 행이 없습니다 (user_data 행이 없거나 RLS 정책으로 차단됨)")
+
 def update_user_stats(user_id: int, money_add: int, honor_add: int):
     str_id = str(user_id)
-    if not supabase: return
+    _require_db()
     user_info = get_user_data(user_id)
     
     new_money = user_info["money"] + money_add
     new_honor = user_info["honor"] + honor_add
     
-    supabase.table("user_data").update({
+    res = supabase.table("user_data").update({
         "money": new_money,
         "honor": new_honor
     }).eq("user_id", str_id).execute()
+    _check_updated(res, "update_user_stats")
 
 def update_user_location(user_id: int, new_location: str):
     str_id = str(user_id)
-    if not supabase: return
-    supabase.table("user_data").update({
+    _require_db()
+    res = supabase.table("user_data").update({
         "location": new_location
     }).eq("user_id", str_id).execute()
+    _check_updated(res, "update_user_location")
 
 def update_user_market_purchase(user_id: int, new_money: int, new_honor: int, inventory: dict):
     str_id = str(user_id)
-    if not supabase: return
-    supabase.table("user_data").update({
+    _require_db()
+    res = supabase.table("user_data").update({
         "money": new_money,
         "honor": new_honor,
         "inventory": inventory
     }).eq("user_id", str_id).execute()
+    _check_updated(res, "update_user_market_purchase")
 
 @bot.event
 async def on_ready():
@@ -453,9 +467,8 @@ class MissionSelect(discord.ui.Select):
         if user.avatar:
             embed.set_thumbnail(url=user.avatar.url)
 
-        # 결과 표시 + 임무 선택 메뉴 갱신을 한 번의 수정으로 처리
-        # (view=None으로 지우면 임무를 한 번밖에 못 하고, 새 뷰를 넣으면 선택 상태도 초기화됨)
-        await interaction.edit_original_response(embed=embed, view=MissionView(owner=self.owner))
+        # 결과를 표시하고 임무 선택 메뉴는 제거 (다음 임무는 /임무 로 다시 시작)
+        await interaction.edit_original_response(embed=embed, view=None)
 
 class MissionView(discord.ui.View):
     def __init__(self, owner: discord.Member):
@@ -525,7 +538,12 @@ class MarketSelect(discord.ui.Select):
                 del mission_cooldowns[interaction.user.id]
             special_effect_text = "\n⚡ **특수 효과:** 임무 쿨타임이 **즉시 초기화**되었습니다!"
 
-        update_user_market_purchase(interaction.user.id, new_money, new_honor, inventory)
+        try:
+            update_user_market_purchase(interaction.user.id, new_money, new_honor, inventory)
+        except Exception as e:
+            print(f"DB Error (update_user_market_purchase): {e}")
+            await interaction.response.send_message("🚨 데이터베이스 저장 오류로 구매가 처리되지 않았습니다. 관리자에게 문의해주세요.", ephemeral=True)
+            return
 
         new_rank = get_user_rank(new_honor)
         rank_up_msg = ""
@@ -713,7 +731,12 @@ async def move_location(interaction: discord.Interaction, 지역: app_commands.C
     selected_loc = 지역.value
     loc_info = LOCATIONS[selected_loc]
 
-    update_user_location(user.id, selected_loc)
+    try:
+        update_user_location(user.id, selected_loc)
+    except Exception as e:
+        print(f"DB Error (update_user_location): {e}")
+        await interaction.response.send_message("🚨 데이터베이스 저장 오류로 이동하지 못했습니다. 관리자에게 문의해주세요.", ephemeral=True)
+        return
 
     embed = discord.Embed(
         title=f"{loc_info['emoji']} [{selected_loc}] (으)로 거점 이동 완료",
