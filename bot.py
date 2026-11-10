@@ -99,12 +99,12 @@ BLACK_MARKET_ITEMS = {
     "레벤하임": [
         {"id": "gov_pass", "name": "치안국 위조 신분증", "price": 1200, "desc": "실패 시 수배 방어", "emoji": "🪪"},
         {"id": "vip_cigar", "name": "고급 시가 패키지", "price": 500, "desc": "즉시 명예 +15 pt", "emoji": "🚬"},
-        {"id": "chrono_watch", "name": "고급 크로노그래프 시계", "price": 2000, "desc": "임무 쿨타임 50% 단축 (5분)", "emoji": "⏱️"}
+        {"id": "chrono_watch", "name": "고급 크로노그래프 시계", "price": 2000, "desc": "임무 쿨타임 50% 단축 (5초)", "emoji": "⏱️"}
     ],
     "던베르크": [
         {"id": "heavy_glove", "name": "강화 작업용 장갑", "price": 800, "desc": "임무 보상금 +15%", "emoji": "🥊"},
         {"id": "boost_drink", "name": "고농축 자양강장제", "price": 400, "desc": "쿨타임 즉시 초기화", "emoji": "🧪"},
-        {"id": "quick_bike", "name": "통신용 특수 바이크", "price": 2200, "desc": "기동력 상승으로 쿨타임 50% 단축 (5분)", "emoji": "🛵"}
+        {"id": "quick_bike", "name": "통신용 특수 바이크", "price": 2200, "desc": "기동력 상승으로 쿨타임 50% 단축 (5초)", "emoji": "🛵"}
     ],
     "블랙워드": [
         {"id": "lockpick", "name": "녹슨 락픽 세트", "price": 300, "desc": "임무 성공률 +10%", "emoji": "🔑"},
@@ -278,7 +278,7 @@ class LeaveConfirmView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=self)
 
-# === 3. 임무 선택 뷰 (승급 알림 기능 포함) ===
+# === 3. 임무 선택 뷰 (쿨타임 10초 / 장비 장착 시 5초) ===
 class MissionSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
         self.owner = owner
@@ -305,7 +305,7 @@ class MissionSelect(discord.ui.Select):
         super().__init__(placeholder="🎯 수행할 비밀 임무를 선택하세요...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        # ⚡ 3초 타임아웃 방지를 위한 응답 지연 처리 (가장 먼저 실행)
+        # 3초 타임아웃 방지
         await interaction.response.defer()
 
         if interaction.user != self.owner:
@@ -322,15 +322,15 @@ class MissionSelect(discord.ui.Select):
             next_available = mission_cooldowns[user.id]
             if now < next_available:
                 remaining = int((next_available - now).total_seconds())
-                mins, secs = divmod(remaining, 60)
-                await interaction.followup.send(f"⏳ 체력을 회복 중입니다. **{mins}분 {secs}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
+                await interaction.followup.send(f"⏳ 체력을 회복 중입니다. **{remaining}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
                 return
 
-        cooldown_minutes = 10
+        # 기본 쿨타임 10초, 시계/바이크 장착 시 5초
+        cooldown_seconds = 10
         if "⏱️ 고급 크로노그래프 시계" in inventory or "🛵 통신용 특수 바이크" in inventory:
-            cooldown_minutes = 5
+            cooldown_seconds = 5
 
-        mission_cooldowns[user.id] = now + timedelta(minutes=cooldown_minutes)
+        mission_cooldowns[user.id] = now + timedelta(seconds=cooldown_seconds)
 
         mission_data = {
             "mission_1": {"title": "🕶️ 타 조직 구역 비밀 조사", "success_rate": 80, "reward": (300, 700), "honor": 10},
@@ -368,8 +368,8 @@ class MissionSelect(discord.ui.Select):
         if "🍾 밀수된 고급 양주" in inventory:
             honor_mult += 1.0
             active_buffs.append("🍾 양주 (명예 2배)")
-        if cooldown_minutes == 5:
-            active_buffs.append("⏱️ 시간/이동 장비 (쿨타임 5분 적용)")
+        if cooldown_seconds == 5:
+            active_buffs.append("⏱️ 시간/이동 장비 (쿨타임 5초 적용)")
 
         final_success_rate = min(98, selected["success_rate"] + success_bonus)
         is_success = random.randint(1, 100) <= final_success_rate
@@ -424,7 +424,6 @@ class MissionSelect(discord.ui.Select):
         if user.avatar:
             embed.set_thumbnail(url=user.avatar.url)
 
-        # defer() 적용 후에는 edit_original_response 사용
         await interaction.edit_original_response(embed=embed, view=None)
 
 class MissionView(discord.ui.View):
@@ -557,7 +556,7 @@ async def leave_family(interaction: discord.Interaction):
 # === 7. `/임무` 명령어 ===
 @bot.tree.command(name="임무", description="[조직원 전용] 원하는 비밀 임무를 직접 선택하여 수행합니다.")
 async def execute_mission(interaction: discord.Interaction):
-    # ⚡ 3초 타임아웃 방지를 위한 응답 지연 처리
+    # 3초 타임아웃 방지
     await interaction.response.defer()
 
     if not await check_maintenance(interaction): return
@@ -645,7 +644,7 @@ async def show_inventory(interaction: discord.Interaction):
         embed.add_field(name="📦 보유 중인 전용 장비", value="\n".join(inv_list), inline=False)
         embed.add_field(
             name="💡 보유 아이템 주요 보너스 효과",
-            value="• **⏱️ 시계 / 🛵 바이크**: 임무 쿨타임 50% 단축 (5분)\n"
+            value="• **⏱️ 시계 / 🛵 바이크**: 임무 쿨타임 50% 단축 (5초)\n"
                   "• **🔑 락픽 / 🥷 덮개 / 🗡️ 야시경 / 🗺️ 지도**: 성공 확률 증가 (+10% ~ +20%)\n"
                   "• **📻 도청기**: 성공률 +15% & 보상 자금 +10%\n"
                   "• **🥊 장갑**: 임무 성공 보상 자금 +15%\n"
