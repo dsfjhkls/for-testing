@@ -468,19 +468,38 @@ class LeaveConfirmView(discord.ui.View):
             await interaction.response.send_message("❌ 본인의 탈퇴 확인 창만 조작할 수 있습니다.", ephemeral=True)
             return
 
+        # 역할 제거가 3초 넘게 걸려도 '상호작용 실패'가 뜨지 않도록 먼저 응답을 예약
+        await interaction.response.defer()
+
+        member = interaction.user  # 최신 정보의 멤버 객체
         role = discord.utils.get(interaction.guild.roles, name="조직원")
-        if role and role in self.target_user.roles:
-            await self.target_user.remove_roles(role)
+        if not role:
+            await interaction.followup.send("❌ 서버에 '조직원' 역할이 없습니다! 관리자에게 문의하세요.", ephemeral=True)
+            return
+
+        if role in member.roles:
+            try:
+                await member.remove_roles(role)
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "🚨 '조직원' 역할을 제거할 권한이 없습니다. 서버 설정 > 역할에서 **봇의 역할을 '조직원' 역할보다 위로** 올리고, 봇에 '역할 관리' 권한이 있는지 확인해주세요.",
+                    ephemeral=True
+                )
+                return
+            except discord.HTTPException as e:
+                print(f"Leave Error (remove_roles): {e}")
+                await interaction.followup.send("🚨 디스코드 오류로 탈퇴 처리에 실패했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
+                return
 
         for child in self.children:
             child.disabled = True
 
         embed = discord.Embed(
             title="🚪 [패밀리 조직원 해임]",
-            description=f"**{self.target_user.mention}** 님이 패밀리를 최종 탈퇴하셨습니다.",
+            description=f"**{member.mention}** 님이 패밀리를 최종 탈퇴하셨습니다.",
             color=discord.Color.dark_gray()
         )
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     @discord.ui.button(label="취소 (패밀리에 잔류)", style=discord.ButtonStyle.secondary, custom_id="cancel_leave")
     async def cancel_leave(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -999,7 +1018,14 @@ async def kick_member(interaction: discord.Interaction, member: discord.Member, 
         await interaction.response.send_message(f"⚠️ {member.mention} 님은 패밀리 조직원이 아닙니다.", ephemeral=True)
         return
 
-    await member.remove_roles(role)
+    try:
+        await member.remove_roles(role)
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "🚨 '조직원' 역할을 제거할 권한이 없습니다. 서버 설정 > 역할에서 봇의 역할을 '조직원' 역할보다 위로 올려주세요.",
+            ephemeral=True
+        )
+        return
 
     embed = discord.Embed(
         title="⚖️ [패밀리 숙청: 조직원 추방]",
