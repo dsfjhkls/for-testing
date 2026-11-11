@@ -733,6 +733,48 @@ NPC_DATA = {
     }
 }
 
+# === 💖 후원 링크 뷰 클래스 ===
+class DonationView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        # url 파라미터를 사용하면 클릭 시 외부 웹사이트로 이동하는 버튼이 됩니다.
+        self.add_item(discord.ui.Button(
+            label="☕ 후원 페이지로 이동하기", 
+            style=discord.ButtonStyle.link, 
+            url="https://toss.me/본인아이디",  # 👈 여기에 연결할 본인의 후원 링크(토스, 페이팔 등)를 입력하세요!
+            emoji="🔗"
+        ))
+
+# === 💖 `/후원` 슬래시 명령어 ===
+@bot.tree.command(name="후원", description="[공용] 개발자를 후원할 수 있는 외부 웹페이지 링크를 확인합니다.")
+async def donation_command(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+
+    embed = discord.Embed(
+        title="💖 [패밀리 GM] 개발자 후원 안내",
+        description=(
+            "패밀리 GM 봇을 재미있게 즐기고 계신가요?\n"
+            "보내주신 따뜻한 후원은 봇의 안정적인 서버 유지와 지속적인 콘텐츠 업데이트에 큰 힘이 됩니다!\n\n"
+            "아래 버튼을 눌러 후원 페이지로 이동해 주세요."
+        ),
+        color=discord.Color.gold()
+    )
+    
+    embed.add_field(
+        name="📌 안내 사항",
+        value=(
+            "• 후원은 강제가 아니며, 봇은 언제나 무료로 이용하실 수 있습니다.\n"
+            "• 미성년자분들은 반드시 부모님의 동의를 구하거나 본인 명의의 수단을 이용해 주세요!"
+        ),
+        inline=False
+    )
+
+    if interaction.user.avatar:
+        embed.set_thumbnail(url=interaction.user.avatar.url)
+
+    # ephemeral=True를 설정하여 명령어 사용한 사람에게만 후원 안내가 살짝 보이도록 합니다.
+    await interaction.response.send_message(embed=embed, view=DonationView(), ephemeral=True)
+    
 # === ⚔️ NPC 턴제 전투 View 클래스 (턴 제한 추가) ===
 class NPCBattleView(discord.ui.View):
     def __init__(self, user: discord.Member, user_stats_dict: dict, npc_info: dict, max_turns: int = 10):
