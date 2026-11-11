@@ -1,13 +1,14 @@
 from flask import Flask
 from threading import Thread
 import os
+import io
 import random
 import asyncio
 from datetime import datetime, timedelta
 
 # === PIL (Pillow) 관련 Import ===
 from PIL import Image, ImageDraw, ImageFont, ImageOps
-import requests
+from urllib.request import urlopen
 
 # 렌더 포트 검사를 통과하기 위한 가짜 웹 서버
 app = Flask('')
@@ -2367,8 +2368,8 @@ async def profile_image_command(interaction: discord.Interaction, member: discor
 
     # [2] 유저 증명사진 처리 (우측 상단 사각형 배치)
     avatar_url = target.avatar.url if target.avatar else target.default_avatar.url
-    avatar_response = requests.get(avatar_url)
-    avatar_img = Image.open(io.BytesIO(avatar_response.content)).convert("RGBA")
+    with urlopen(avatar_url) as avatar_response:
+        avatar_img = Image.open(io.BytesIO(avatar_response.read())).convert("RGBA")
     
     # 증명사진 크기 및 위치 (규격: 200x200, 테두리 추가)
     avatar_size = (200, 200)
