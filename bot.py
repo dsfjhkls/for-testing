@@ -404,6 +404,8 @@ class TitleView(discord.ui.View):
 
 @bot.tree.command(name="칭호", description="[마피아 GM] 획득한 칭호를 확인하고 장착합니다.")
 async def titles_command(interaction: discord.Interaction):
+    global npc_cooldowns
+
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
@@ -636,6 +638,274 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
         embed.set_thumbnail(url=member.avatar.url)
 
     await interaction.response.send_message(embed=embed)
+
+# === 👾 NPC 전투 대상 목록 ===
+NPC_DATA = {
+    "골목길 깡패": {
+        "name": "골목길 깡패",
+        "hp": 800,
+        "atk": 80,
+        "def": 5,
+        "reward_money": (200, 500),
+        "reward_honor": 5,
+        "desc": "칼렌데 뒷골목에서 서성이는 초보 깡패입니다."
+    },
+    "조직의 배신자": {
+        "name": "조직의 배신자",
+        "hp": 2000,
+        "atk": 180,
+        "def": 25,
+        "reward_money": (800, 1500),
+        "reward_honor": 15,
+        "desc": "패밀리의 기밀을 팔아넘기고 도망친 위험한 배신자입니다."
+    },
+    "암시장 악덕 거상": {
+        "name": "암시장 악덕 거상",
+        "hp": 3500,
+        "atk": 280,
+        "def": 40,
+        "reward_money": (2000, 4000),
+        "reward_honor": 30,
+        "desc": "고용한 보디가드들을 대동하고 다니는 악명 높은 거상입니다."
+    },
+    "지명수배자 보스": {
+        "name": "지명수배자 보스",
+        "hp": 6000,
+        "atk": 450,
+        "def": 60,
+        "reward_money": (5000, 10000),
+        "reward_honor": 60,
+        "desc": "치안국에서도 손대지 못하는 강력한 수배범 보스입니다."
+    }
+}
+
+# === ⚔️ NPC 턴제 전투 View 클래스 ===
+class NPCBattleView(discord.ui.View):
+    def __init__(self, user: discord.Member, user_stats_dict: dict, npc_info: dict):
+        super().__init__(timeout=60)
+        self.user = user
+        self.npc_info = npc_info
+        
+        # 유저 및 NPC 스탯 설정
+        self.u_hp = user_stats_dict["hp"]
+        self.u_max_hp = user_stats_dict["hp"]
+        self.u_atk = user_stats_dict["atk"]
+        self.u_def = user_stats_dict["def"]
+        self.u_guard = False
+
+        self.npc_hp = npc_info["hp"]
+        self.npc_max_hp = npc_info["hp"]
+        self.npc_atk = npc_info["atk"]
+        self.npc_def = npc_info["def"]
+        self.npc_guard = False
+
+        self.turn_count = 1
+        self.logs = [f"⚔️ {user.display_name} 님과 **[{npc_info['name']}]**의 전투가 시작되었습니다!"]
+        self.message = None
+        self.finished = False
+
+    def get_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title=f"⚔️ [NPC 토벌 전투] 턴 {self.turn_count}",
+            description=f"상대: **{self.npc_info['name']}**\n*{self.npc_info['desc']}*",
+            color=discord.Color.dark_purple()
+        )
+
+        embed.add_field(
+            name=f"🧑 {self.user.display_name} (나)",
+            value=f"❤️ 체력 : {self.u_hp} / {self.u_max_hp}\n⚔️ 공격력 : {self.u_atk}\n🛡️ 방어력 : {self.u_def}",
+            inline=True
+        )
+        embed.add_field(
+            name=f"👾 {self.npc_info['name']}",
+            value=f"❤️ 체력 : {self.npc_hp} / {self.npc_max_hp}\n⚔️ 공격력 : {self.npc_atk}\n🛡️ 방어력 : {self.npc_def}",
+            inline=True
+        )
+
+        log_text = "\n".join(self.logs[-6:])
+        embed.add_field(
+            name="📜 전투 현황 로그",
+            value=f"```diff\n{log_text}\n```",
+            inline=False
+        )
+        return embed
+
+    async def process_turn(self, interaction: discord.Interaction, action_type: str):
+        if interaction.user != self.user:
+            await interaction.response.send_message("❌ 본인의 전투 창만 조작할 수 있습니다.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        # 1. 유저 행동 처리
+        self.u_guard = False
+        if action_type == "attack":
+            dmg = max(10, self.u_atk - (self.npc_def * 2 if self.npc_guard else self.npc_def) + random.randint(-10, 10))
+            if self.npc_guard:
+                dmg = int(dmg * 0.5)
+                self.logs.append(f"+ {self.npc_info['name']}이(가) 방어 상태여서 대미지가 감소했습니다!")
+            self.npc_hp = max(0, self.npc_hp - dmg)
+            self.logs.append(f"+ {self.user.display_name}의 공격! {self.npc_info['name']}에게 {dmg} 대미지!")
+        elif action_type == "guard":
+            self.u_guard = True
+            self.logs.append(f"+ {self.user.display_name}이(가) 방어 자세를 취했습니다.")
+
+        # NPC 사망 확인 (승리)
+        if self.npc_hp <= 0:
+            await self.end_battle(interaction, is_win=True)
+            return
+
+        # 2. NPC 자동 반격 AI (20% 확률로 방어, 80% 확률로 공격)
+        self.npc_guard = False
+        if random.random() < 0.2:
+            self.npc_guard = True
+            self.logs.append(f"- {self.npc_info['name']}이(가) 방어 태세를 갖췄습니다.")
+        else:
+            npc_dmg = max(10, self.npc_atk - (self.u_def * 2 if self.u_guard else self.u_def) + random.randint(-10, 10))
+            if self.u_guard:
+                npc_dmg = int(npc_dmg * 0.5)
+                self.logs.append(f"- 방어 성공! 대미지를 절반으로 감소시켰습니다.")
+            self.u_hp = max(0, self.u_hp - npc_dmg)
+            self.logs.append(f"- {self.npc_info['name']}의 반격! {self.user.display_name}이(가) {npc_dmg} 대미지를 입었습니다.")
+
+        # 유저 사망 확인 (패배)
+        if self.u_hp <= 0:
+            await self.end_battle(interaction, is_win=False)
+            return
+
+        self.turn_count += 1
+        await interaction.edit_original_response(embed=self.get_embed(), view=self)
+
+    @discord.ui.button(label="⚔️ 공격하기", style=discord.ButtonStyle.danger)
+    async def attack_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_turn(interaction, "attack")
+
+    @discord.ui.button(label="🛡️ 방어하기", style=discord.ButtonStyle.primary)
+    async def guard_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_turn(interaction, "guard")
+
+    async def end_battle(self, interaction: discord.Interaction, is_win: bool):
+        self.finished = True
+        self.stop()
+
+        for child in self.children:
+            child.disabled = True
+
+        user_data = get_user_data(self.user.id)
+        current_money = user_data.get("money", 0)
+        current_honor = user_data.get("honor", 0)
+
+        if is_win:
+            earned_money = random.randint(*self.npc_info["reward_money"])
+            earned_honor = self.npc_info["reward_honor"]
+
+            new_money = current_money + earned_money
+            new_honor = current_honor + earned_honor
+
+            try:
+                _require_db()
+                supabase.table("user_data").update({
+                    "money": new_money,
+                    "honor": new_honor
+                }).eq("user_id", str(self.user.id)).execute()
+            except Exception as e:
+                print(f"DB Error (NPC Battle Win): {e}")
+
+            embed = discord.Embed(
+                title=f"🎉 [전투 승리] {self.npc_info['name']} 격퇴!",
+                description=f"**{self.user.mention}** 님이 **{self.npc_info['name']}**(을)를 완벽하게 쓰러뜨렸습니다!\n\n"
+                            f"💰 **획득 보상금:** `${earned_money:,}`\n"
+                            f"🏆 **획득 명예:** `+{earned_honor} pt`\n\n"
+                            f"🏦 **현재 보유 자금:** `${new_money:,}`\n"
+                            f"🏅 **현재 명예:** `{new_honor} pt`",
+                color=discord.Color.green()
+            )
+        else:
+            # 패배 시 소량의 치료비 손실 또는 수배
+            penalty = min(current_money, 300)
+            new_money = max(0, current_money - penalty)
+
+            try:
+                _require_db()
+                supabase.table("user_data").update({"money": new_money}).eq("user_id", str(self.user.id)).execute()
+            except Exception as e:
+                print(f"DB Error (NPC Battle Loss): {e}")
+
+            embed = discord.Embed(
+                title=f"💥 [전투 패배] 쓰러짐...",
+                description=f"**{self.user.mention}** 님이 **{self.npc_info['name']}**에게 쓰러져 부상을 입었습니다.\n\n"
+                            f"🩹 **치료비 지출:** `${penalty:,}`\n"
+                            f"🏦 **남은 자금:** `${new_money:,}`",
+                color=discord.Color.red()
+            )
+
+        log_text = "\n".join(self.logs[-8:])
+        embed.add_field(name="📜 최종 전투 기록", value=f"```diff\n{log_text}\n```", inline=False)
+
+        if self.user.avatar:
+            embed.set_thumbnail(url=self.user.avatar.url)
+
+        await interaction.edit_original_response(embed=embed, view=self)
+        npc_cooldowns = {}
+
+@bot.tree.command(name="전투", description="[조직원 전용] 지정한 NPC와 1:1 턴제 전투를 시작합니다.")
+@app_commands.describe(npc_name="전투를 벌일 NPC 선택")
+@app_commands.choices(npc_name=[
+    app_commands.Choice(name="골목길 깡패 (난이도: 쉬움)", value="골목길 깡패"),
+    app_commands.Choice(name="조직의 배신자 (난이도: 보통)", value="조직의 배신자"),
+    app_commands.Choice(name="암시장 악덕 거상 (난이도: 어려움)", value="암시장 악덕 거상"),
+    app_commands.Choice(name="지명수배자 보스 (난이도: 극극)", value="지명수배자 보스"),
+])
+async def fight_npc(interaction: discord.Interaction, npc_name: app_commands.Choice[str]):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+
+    # 쿨타임 체크 (예: 20초)
+    now = datetime.now()
+    if user.id in npc_cooldowns:
+        remaining = int((npc_cooldowns[user.id] - now).total_seconds())
+        if remaining > 0:
+            await interaction.response.send_message(f"⏳ 부상에서 회복 중입니다. **{remaining}초** 뒤에 다시 전투할 수 있습니다.", ephemeral=True)
+            return
+
+    npc_cooldowns[user.id] = now + timedelta(seconds=20)
+
+    target_npc = NPC_DATA.get(npc_name.value)
+    if not target_npc:
+        await interaction.response.send_message("❌ 존재하지 않는 NPC입니다.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    # 유저 전투 스탯 계산 (명예 + 보유 장비)
+    user_stats = get_user_data(user.id)
+    inventory = user_stats.get("inventory", {})
+    base_honor = user_stats.get("honor", 0)
+
+    u_hp = 1000 + (base_honor * 5)
+    u_atk = 100 + int(base_honor * 0.5)
+    u_def = 10
+
+    if "👊🏻 슈퍼 울트라 주먹" in inventory: u_atk += 500; u_hp += 2000
+    elif "💉 수상한 주사기" in inventory: u_atk += 300; u_hp += 1000
+    elif "🏏 몽둥이" in inventory: u_atk += 200
+    elif "🔫 권총" in inventory: u_atk += 150
+    elif "🗡️ 단검" in inventory: u_atk += 80
+
+    if "🎟️ 임무 실패 방지권" in inventory: u_def += 20
+    if "🪪 치안국 위조 신분증" in inventory: u_def += 15
+
+    user_combat_stats = {"hp": u_hp, "atk": u_atk, "def": u_def}
+
+    view = NPCBattleView(user=user, user_stats_dict=user_combat_stats, npc_info=target_npc)
+    embed = view.get_embed()
+
+    msg = await interaction.followup.send(embed=embed, view=view)
+    view.message = msg
+    
 
 # === 시민 전용 아르바이트 쿨타임 사전 ===
 parttime_cooldowns = {}
