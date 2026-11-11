@@ -745,36 +745,78 @@ class DonationView(discord.ui.View):
             emoji="🔗"
         ))
 
-# === 💖 `/후원` 슬래시 명령어 ===
-@bot.tree.command(name="후원", description="[공용] 개발자를 후원할 수 있는 외부 웹페이지 링크를 확인합니다.")
-async def donation_command(interaction: discord.Interaction):
+# === 💸 [조직원 전용] `/송금` 명령어 ===
+@bot.tree.command(name="송금", description="[조직원 전용] 다른 조직원에게 보유 자금을 양도합니다.")
+@app_commands.describe(member="돈을 받을 조직원", amount="보낼 금액 ($)")
+async def transfer_money(interaction: discord.Interaction, member: discord.Member, amount: int):
     if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
 
+    sender = interaction.user
+    receiver = member
+
+    # 1. 자기 자신에게 송금하는지 확인
+    if sender.id == receiver.id:
+        await interaction.response.send_message("❌ 자기 자신에게는 돈을 송금할 수 없습니다.", ephemeral=True)
+        return
+
+    # 2. 송금 금액 유효성 검사 (0원 이하 방지)
+    if amount <= 0:
+        await interaction.response.send_message("❌ 송금 금액은 1원 이상이어야 합니다.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    # 3. 송금자(나)의 최신 데이터 조회
+    sender_data = get_user_data(sender.id)
+    sender_money = sender_data.get("money", 0)
+
+    # 잔액 부족 확인
+    if sender_money < amount:
+        await interaction.response.send_message(
+            f"❌ 보유 자금이 부족합니다!\n"
+            f"• 보유 중인 자금: `${sender_money:,}`\n"
+            f"• 송금하려는 금액: `${amount:,}`",
+            ephemeral=True
+        )
+        return
+
+    # 4. 수신자(상대방) 데이터 확인 (존재하지 않으면 기본값 생성 방지를 위해 체크)
+    receiver_data = get_user_data(receiver.id)
+    receiver_money = receiver_data.get("money", 0)
+
+    # 5. 금액 차감 및 적립 계산 (수수료 0% 또는 원하시는 경우 소폭 수수료 부과 가능)
+    new_sender_money = sender_money - amount
+    new_receiver_money = receiver_money + amount
+
+    try:
+        _require_db()
+        # 송금자 자금 업데이트
+        supabase.table("user_data").update({"money": new_sender_money}).eq("user_id", str(sender.id)).execute()
+        # 수신자 자금 업데이트
+        supabase.table("user_data").update({"money": new_receiver_money}).eq("user_id", str(receiver.id)).execute()
+    except Exception as e:
+        print(f"DB Error (Transfer Money): {e}")
+        await interaction.followup.send("❌ 데이터베이스 오류로 송금에 실패했습니다. 나중에 다시 시도해 주세요.", ephemeral=True)
+        return
+
+    # 6. 송금 완료 임베드 생성 (서버 전체 공개 또는 알림)
     embed = discord.Embed(
-        title="💖 [패밀리 GM] 개발자 후원 안내",
+        title="💸 [조직 자금 이체 완료]",
         description=(
-            "패밀리 GM 봇을 재미있게 즐기고 계신가요?\n"
-            "보내주신 따뜻한 후원은 봇의 안정적인 서버 유지와 지속적인 콘텐츠 업데이트에 큰 힘이 됩니다!\n\n"
-            "아래 버튼을 눌러 후원 페이지로 이동해 주세요."
+            f"**{sender.mention}** 님이 **{receiver.mention}** 님에게 자금을 안전하게 전달했습니다!\n\n"
+            f"💵 **송금 금액:** `${amount:,}`\n\n"
+            f"🏦 **{sender.display_name} 님의 남은 자금:** `${new_sender_money:,}`\n"
+            f"🏦 **{receiver.display_name} 님의 보유 자금:** `${new_receiver_money:,}`"
         ),
-        color=discord.Color.gold()
+        color=discord.Color.green()
     )
-    
-    embed.add_field(
-        name="📌 안내 사항",
-        value=(
-            "• 후원은 강제가 아니며, 봇은 언제나 무료로 이용하실 수 있습니다.\n"
-            "• 미성년자분들은 반드시 부모님의 동의를 구하거나 본인 명의의 수단을 이용해 주세요!"
-        ),
-        inline=False
-    )
+    if sender.avatar:
+        embed.set_thumbnail(url=sender.avatar.url)
 
-    if interaction.user.avatar:
-        embed.set_thumbnail(url=interaction.user.avatar.url)
+    await interaction.followup.send(embed=embed)
 
-    # ephemeral=True를 설정하여 명령어 사용한 사람에게만 후원 안내가 살짝 보이도록 합니다.
-    await interaction.response.send_message(embed=embed, view=DonationView(), ephemeral=True)
-    
 # === ⚔️ NPC 턴제 전투 View 클래스 (턴 제한 추가) ===
 class NPCBattleView(discord.ui.View):
     def __init__(self, user: discord.Member, user_stats_dict: dict, npc_info: dict, max_turns: int = 10):
