@@ -1,0 +1,2706 @@
+from flask import Flask
+from threading import Thread
+import os
+import io
+import random
+import asyncio
+from datetime import datetime, timedelta
+
+# === PIL (Pillow) 관련 Import ===
+import unicodedata
+from functools import lru_cache
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+# 렌더 포트 검사를 통과하기 위한 가짜 웹 서버
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Mafia Bot is running with Supabase DB!"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+keep_alive()
+
+import discord
+from discord.ext import commands
+from discord import app_commands
+from supabase import create_client, Client
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.guilds = True
+intents.members = True
+
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+# ==========================================
+# 🌐 [Supabase DB 클라이언트 연결]
+# ==========================================
+def _clean_env(value):
+    return (value or "").strip().strip('"').strip("'").strip()
+
+SUPABASE_URL = _clean_env(os.getenv("SUPABASE_URL"))
+SUPABASE_KEY = _clean_env(os.getenv("SUPABASE_KEY"))
+
+SUPABASE_URL = SUPABASE_URL.rstrip("/")
+if SUPABASE_URL.endswith("/rest/v1"):
+    SUPABASE_URL = SUPABASE_URL[: -len("/rest/v1")]
+SUPABASE_URL = SUPABASE_URL.rstrip("/")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("🚨 [경고] SUPABASE_URL 또는 SUPABASE_KEY 환경 변수가 설정되지 않았습니다!")
+    supabase = None
+else:
+    try:
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print(f"ℹ️ 사용 중인 SUPABASE_URL: {SUPABASE_URL}")
+        try:
+            supabase.table("user_data").select("user_id").limit(1).execute()
+            print("✅ Supabase 데이터베이스 연결 및 user_data 테이블 접근 성공!")
+        except Exception as test_err:
+            print(f"🚨 Supabase 접근 테스트 실패: {test_err}")
+    except Exception as e:
+        print(f"🚨 Supabase 연결 실패: {e}")
+        supabase = None
+
+# ==========================================
+# 🚨 [점검 모드 설정 스위치]
+# ==========================================
+MAINTENANCE_MODE = False 
+
+# === 🚨 수배 및 감옥 관리 데이터 ===
+# {user_id: datetime (수배 만료 시간)}
+wanted_list = {}
+
+# {user_id: datetime (석방 예정 시간)}
+jail_list = {}
+
+# === [공통 체크 함수] 감옥 수감 여부 확인 ===
+async def check_jail(interaction: discord.Interaction) -> bool:
+    user_id = interaction.user.id
+    now = datetime.now()
+    
+    if user_id in jail_list:
+        release_time = jail_list[user_id]
+        if now < release_time:
+            remaining = int((release_time - now).total_seconds())
+            await interaction.response.send_message(
+                f"⛓️ **현재 감옥에 수감 중입니다!** 석방까지 **{remaining}초** 남았습니다. (`/프로필`만 이용 가능)",
+                ephemeral=True
+            )
+            return True
+        else:
+            # 수감 시간 종료 시 감옥 해제
+            jail_list.pop(user_id, None)
+            
+            # DB의 위치를 기본 거점으로 복구
+            try:
+                update_user_location(user_id, "레벤하임")
+            except Exception:
+                pass
+    return False
+
+# 쿨타임 관리를 위한 메모리 사전 (유저ID: 다음 수행 가능 시간)
+mission_cooldowns = {}
+
+# === 🎖️ 명예 포인트 및 소속(마피아/경찰)에 따른 직급 계산 함수 ===
+def get_user_rank(honor: int, is_police: bool = False) -> str:
+    if is_police:
+        if honor >= 10000:
+            return "👑 총경"
+        elif honor >= 5000:
+            return "⚔️ 경정"
+        elif honor >= 3000:
+            return "🥇 경위"
+        elif honor >= 1000:
+            return "🥈 경사"
+        elif honor >= 500:
+            return "🥉 경장"
+        else:
+            return "🌱 신입 경찰"
+    else:
+        if honor >= 10000:
+            return "👑 대부"
+        elif honor >= 5000:
+            return "⚔️ 언더보스"
+        elif honor >= 3000:
+            return "🥇 카포"
+        elif honor >= 1000:
+            return "🥈 솔다토"
+        elif honor >= 500:
+            return "🥉 행동대원"
+        else:
+            return "🌱 깡패"
+
+# === 🗺️ 4대 지역 정보 데이터 ===
+LOCATIONS = {
+    "레벤하임": {
+        "desc": "수도 / 시작 지점. 칼렌데의 중심 도시로 정부 기관과 중앙치안국 본부가 밀집한 도시.",
+        "risk": "보통",
+        "emoji": "🏛️"
+    },
+    "던베르크": {
+        "desc": "공업지대. 대규모 공장과 노동자 구역이 밀집한 산업 도시.",
+        "risk": "중간",
+        "emoji": "⚙️"
+    },
+    "블랙워드": {
+        "desc": "빈민가. 열악한 환경과 높은 범죄율, 음지의 범죄조직이 도사리는 구역.",
+        "risk": "높음",
+        "emoji": "🏚️"
+    },
+    "에르느코항": {
+        "desc": "항구도시 / 해상 무역 중심지. 합법과 불법 밀거래가 공존하는 개방형 항구.",
+        "risk": "변동적",
+        "emoji": "⚓"
+    },
+    "로젠펠트": {
+        "desc": "칼렌데 내 유흥업이 발달한 지역. 부유층과 범죄조직원, 다양한 계층의 사람들이 오간다.",
+        "risk": "높음",
+        "emoji": "🍸"
+    }
+}
+
+# === 🛒 지역별 암시장 아이템 목록 ===
+BLACK_MARKET_ITEMS = {
+    "레벤하임": [
+        {"id": "gov_pass", "name": "치안국 위조 신분증", "price": 1200, "desc": "실패 시 수배 방어", "emoji": "🪪"},
+        {"id": "fail_guard", "name": "임무 실패 방지권", "price": 800, "desc": "임무 실패 시 패널티 자동 방어", "emoji": "🎟️"},
+        {"id": "chrono_watch", "name": "고급 크로노그래프 시계", "price": 2000, "desc": "임무 쿨타임 50% 단축 (5초)", "emoji": "⏱️"}
+    ],
+    "던베르크": [
+        {"id": "heavy_glove", "name": "강화 작업용 장갑", "price": 800, "desc": "임무 보상금 +15%", "emoji": "🥊"},
+        {"id": "boost_drink", "name": "고농축 자양강장제", "price": 400, "desc": "쿨타임 즉시 초기화", "emoji": "🧪"},
+        {"id": "quick_bike", "name": "통신용 특수 바이크", "price": 2200, "desc": "기동력 상승으로 쿨타임 50% 단축 (5초)", "emoji": "🛵"}
+    ],
+    "블랙워드": [
+        {"id": "lockpick", "name": "녹슨 락픽 세트", "price": 300, "desc": "임무 성공률 +10%", "emoji": "🔑"},
+        {"id": "black_hood", "name": "익명의 덮개", "price": 600, "desc": "임무 성공률 +10%", "emoji": "🥷"},
+        {"id": "night_goggles", "name": "대형 밀수 전용 가방", "price": 2000, "desc": "임무 성공 시 추가 자금 +20%", "emoji": "💼"}
+    ],
+    "에르느코항": [
+        {"id": "smuggled_rum", "name": "밀수된 고급 양주", "price": 1500, "desc": "임무 명예 보상 2배", "emoji": "🍾"},
+        {"id": "stealth_sonar", "name": "해상 무전 도청기", "price": 2000, "desc": "성공률 +15% & 자금 +10%", "emoji": "📻"},
+        {"id": "pirate_map", "name": "해적 비밀 항해 지도", "price": 2500, "desc": "임무 성공률 +20%", "emoji": "🗺️"}
+    ],
+    "로젠펠트": [
+        {"id": "luxury_vodka", "name": "아우라 증폭기", "price": 30000, "desc": "임무 성공 시 명예 x2배", "emoji": "🥃"},
+        {"id": "gold_ring", "name": "금 반지", "price": 3000, "desc": "임무 성공 시 추가 자금 +10%", "emoji": "💍"},
+        {"id": "diamond_necklace", "name": "다이아몬드 목걸이", "price": 5000, "desc": "임무 성공 시 추가 자금 +20%", "emoji": "💎"}
+    ]
+}
+
+# === 🔫 무기 상점 아이템 목록 ===
+WEAPON_SHOP_ITEMS = [
+    {"id": "dagger", "name": "🗡️ 단검", "price": 500, "desc": "평범한 단검이다 (결투 승률 +5%)", "bonus": 5},
+    {"id": "pistol", "name": "🔫 권총", "price": 1500, "desc": "평범한 권총이다 (결투 승률 +10%)", "bonus": 10},
+    {"id": "club", "name": "🏏 몽둥이", "price": 3000, "desc": "평범한 몽둥이이다 (결투 승률 +15%)", "bonus": 15},
+    {"id": "syringe", "name": "💉 수상한 주사기", "price": 5500, "desc": "뭔가 수상한 주사기이다 (결투 승률 +20%)", "bonus": 20},
+    {"id": "fist", "name": "👊🏻 슈퍼 울트라 주먹", "price": 10000, "desc": "슈퍼 울트라 주먹. (결투 승률 +30%)", "bonus": 30},
+]
+
+# === 🗄️ Supabase DB 연동 함수들 ===
+def get_user_data(user_id: int) -> dict:
+    str_id = str(user_id)
+    if not supabase:
+        return {"user_id": str_id, "money": 1000, "honor": 0, "location": "레벤하임", "inventory": {}}
+
+    try:
+        response = supabase.table("user_data").select("*").eq("user_id", str_id).execute()
+        if response.data:
+            user_info = response.data[0]
+            if "inventory" not in user_info or user_info["inventory"] is None:
+                user_info["inventory"] = {}
+            return user_info
+        
+        default_data = {
+            "user_id": str_id,
+            "money": 1000,
+            "honor": 0,
+            "location": "레벤하임",
+            "inventory": {},
+            "settings": {"auto_fail_guard": True}
+        }
+        ins = supabase.table("user_data").insert(default_data).execute()
+        return default_data
+    except Exception as e:
+        print(f"DB Error (get_user_data): {e}")
+        return {"user_id": str_id, "money": 1000, "honor": 0, "location": "레벤하임", "inventory": {}}
+
+def _require_db():
+    if not supabase:
+        raise RuntimeError("Supabase 클라이언트가 초기화되지 않았습니다")
+
+def _check_updated(res, action: str):
+    if not res.data:
+        raise RuntimeError(f"{action}: 반영된 행이 없습니다")
+
+def update_user_settings(user_id: int, settings: dict):
+    str_id = str(user_id)
+    _require_db()
+    res = supabase.table("user_data").update({
+        "settings": settings
+    }).eq("user_id", str_id).execute()
+    _check_updated(res, "update_user_settings")
+
+def update_user_stats(user_id: int, money_add: int, honor_add: int):
+    str_id = str(user_id)
+    _require_db()
+    user_info = get_user_data(user_id)
+    
+    new_money = user_info["money"] + money_add
+    new_honor = user_info["honor"] + honor_add
+    
+    res = supabase.table("user_data").update({
+        "money": new_money,
+        "honor": new_honor
+    }).eq("user_id", str_id).execute()
+    _check_updated(res, "update_user_stats")
+
+def update_user_location(user_id: int, new_location: str):
+    str_id = str(user_id)
+    _require_db()
+    res = supabase.table("user_data").update({
+        "location": new_location
+    }).eq("user_id", str_id).execute()
+    _check_updated(res, "update_user_location")
+
+def update_user_market_purchase(user_id: int, new_money: int, new_honor: int, inventory: dict):
+    str_id = str(user_id)
+    _require_db()
+    res = supabase.table("user_data").update({
+        "money": new_money,
+        "honor": new_honor,
+        "inventory": inventory
+    }).eq("user_id", str_id).execute()
+    _check_updated(res, "update_user_market_purchase")
+
+def delete_user_data(user_id: int):
+    str_id = str(user_id)
+    _require_db()
+    res = supabase.table("user_data").delete().eq("user_id", str_id).execute()
+    _check_updated(res, "delete_user_data")
+
+# === 🏷️ 칭호 시스템 ===
+TITLES = {
+    "first_step":   {"name": "🌱 첫 발걸음",       "desc": "임무 1회 성공",                        "check": lambda s, i: s["success"] >= 1},
+    "veteran":      {"name": "🗡️ 노련한 청부꾼",   "desc": "임무 10회 성공",                       "check": lambda s, i: s["success"] >= 10},
+    "legend":       {"name": "💀 전설의 그림자",   "desc": "임무 50회 성공",                       "check": lambda s, i: s["success"] >= 50},
+    "master":       {"name": "🩻 소질이 뛰어난 자", "desc": "임무 100회 성공",                      "check": lambda s, i: s["success"] >= 100},
+    "hot_streak":   {"name": "🔥 불붙은 손길",     "desc": "임무 3연속 성공",                      "check": lambda s, i: s["best_streak"] >= 3},
+    "unstoppable":  {"name": "⚡ 멈추지 않는 자",  "desc": "임무 5연속 성공",                      "check": lambda s, i: s["best_streak"] >= 5},
+    "ledger_thief": {"name": "🏛️ 장부 도둑",       "desc": "'라이벌 보스의 장부 탈취' 5회 성공",   "check": lambda s, i: s["hard_success"] >= 5},
+    "unlucky":      {"name": "🩹 불운한 쥐새끼",   "desc": "임무 5회 실패",                        "check": lambda s, i: s["fail"] >= 5},
+    "rich":         {"name": "💰 검은 돈의 주인",  "desc": "보유 자금 $100,000 이상",               "check": lambda s, i: (i.get("money") or 0) >= 100000},
+    "respected":    {"name": "🎩 존경받는 자",     "desc": "조직 명예 300pt 이상 (솔다토 이상)",   "check": lambda s, i: (i.get("honor") or 0) >= 300},
+    "collector":    {"name": "🎒 장비 수집가",     "desc": "암시장 장비 10개 이상 보유",            "check": lambda s, i: len(i.get("inventory") or {}) >= 10},
+    "gambler":      {"name": "🎲 도박꾼",          "desc": "도박 10판 플레이",                     "check": lambda s, i: s["gamble_played"] >= 10},
+    "jackpot":      {"name": "🍀 잭팟의 주인공",   "desc": "슬롯머신 잭팟(7️⃣7️⃣7️⃣) 당첨",         "check": lambda s, i: s["jackpot"] >= 1},
+    "high_roller":  {"name": "💎 카지노의 큰손",   "desc": "도박 누적 베팅액 $100,000 이상",        "check": lambda s, i: s["gamble_wagered"] >= 100000},
+    "broke":        {"name": "💸 거덜 난 도박사",  "desc": "도박으로 보유 자금이 $0이 됨",         "check": lambda s, i: s["broke"] >= 1},
+}
+
+def get_title_blob(user_info: dict) -> dict:
+    raw = user_info.get("data")
+    blob = dict(raw) if isinstance(raw, dict) else {}
+    stats = blob.get("stats") if isinstance(blob.get("stats"), dict) else {}
+    for key in ("success", "fail", "streak", "best_streak", "hard_success",
+                "gamble_played", "gamble_won", "gamble_wagered", "gamble_net", "jackpot", "broke"):
+        stats[key] = int(stats.get(key, 0) or 0)
+    blob["stats"] = stats
+    blob["titles"] = list(blob.get("titles") or [])
+    blob["equipped"] = blob.get("equipped")
+    return blob
+
+def evaluate_new_titles(blob: dict, user_info: dict) -> list:
+    new_ids = []
+    for tid, t in TITLES.items():
+        if tid not in blob["titles"] and t["check"](blob["stats"], user_info):
+            blob["titles"].append(tid)
+            new_ids.append(tid)
+    if new_ids and blob.get("equipped") not in TITLES:
+        blob["equipped"] = new_ids[0]
+    return new_ids
+
+def save_title_blob(user_id: int, blob: dict):
+    _require_db()
+    res = supabase.table("user_data").update({"data": blob}).eq("user_id", str(user_id)).execute()
+    _check_updated(res, "save_title_blob")
+
+def get_equipped_title_name(user_info: dict) -> str:
+    equipped = get_title_blob(user_info).get("equipped")
+    return TITLES[equipped]["name"] if equipped in TITLES else "없음"
+
+def format_new_titles(new_ids: list) -> str:
+    if not new_ids:
+        return ""
+    names = ", ".join(TITLES[t]["name"] for t in new_ids)
+    return f"\n\n🏷️ **[새 칭호 획득]** {names}\n`/칭호` 명령어로 장착할 수 있습니다."
+
+def build_title_embed(user: discord.abc.User, blob: dict, new_ids: list = None) -> discord.Embed:
+    equipped = blob.get("equipped")
+    equipped_name = TITLES[equipped]["name"] if equipped in TITLES else "없음"
+    s = blob["stats"]
+
+    earned = [f"• {TITLES[t]['name']} — {TITLES[t]['desc']}" for t in blob["titles"] if t in TITLES]
+    locked = [f"• 🔒 ??? — {t['desc']}" for tid, t in TITLES.items() if tid not in blob["titles"]]
+
+    embed = discord.Embed(
+        title=f"🏷️ [{user.name} 님의 칭호]",
+        description=f"현재 장착 중인 칭호: **{equipped_name}**" + format_new_titles(new_ids or []),
+        color=discord.Color.gold()
+    )
+    embed.add_field(name=f"✅ 획득한 칭호 ({len(earned)}/{len(TITLES)})", value="\n".join(earned) if earned else "*아직 획득한 칭호가 없습니다.*", inline=False)
+    if locked:
+        embed.add_field(name="🔒 미획득 칭호", value="\n".join(locked), inline=False)
+    embed.add_field(
+        name="📊 임무 기록",
+        value=f"성공 `{s['success']}`회 / 실패 `{s['fail']}`회 / 최고 연속 성공 `{s['best_streak']}`회",
+        inline=False
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    return embed
+
+class TitleSelect(discord.ui.Select):
+    def __init__(self, owner: discord.abc.User, blob: dict):
+        self.owner = owner
+        options = [discord.SelectOption(label="칭호 해제", value="__none__", description="장착한 칭호를 내려놓습니다.", emoji="❌")]
+        for tid in blob["titles"]:
+            if tid in TITLES:
+                options.append(discord.SelectOption(
+                    label=TITLES[tid]["name"], value=tid,
+                    description=TITLES[tid]["desc"], default=(tid == blob.get("equipped"))
+                ))
+        super().__init__(placeholder="🏷️ 장착할 칭호를 선택하세요...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user != self.owner:
+            await interaction.response.send_message("❌ 타인의 칭호 창은 조작할 수 없습니다.", ephemeral=True)
+            return
+        await interaction.response.defer()
+
+        info = get_user_data(interaction.user.id)
+        blob = get_title_blob(info)
+        choice = self.values[0]
+        if choice == "__none__":
+            blob["equipped"] = None
+        elif choice in blob["titles"]:
+            blob["equipped"] = choice
+        else:
+            await interaction.followup.send("❌ 아직 획득하지 못한 칭호입니다.", ephemeral=True)
+            return
+        save_title_blob(interaction.user.id, blob)
+
+        await interaction.edit_original_response(
+            embed=build_title_embed(interaction.user, blob),
+            view=TitleView(owner=interaction.user, blob=blob)
+        )
+
+class TitleView(discord.ui.View):
+    def __init__(self, owner: discord.abc.User, blob: dict):
+        super().__init__(timeout=180)
+        self.add_item(TitleSelect(owner=owner, blob=blob))
+
+@bot.tree.command(name="칭호", description="[마피아 GM] 획득한 칭호를 확인하고 장착합니다.")
+async def titles_command(interaction: discord.Interaction):
+    global npc_cooldowns
+
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+    info = get_user_data(user.id)
+    blob = get_title_blob(info)
+
+    new_ids = evaluate_new_titles(blob, info)
+    if new_ids:
+        save_title_blob(user.id, blob)
+
+    embed = build_title_embed(user, blob, new_ids)
+    if blob["titles"]:
+        await interaction.response.send_message(embed=embed, view=TitleView(owner=user, blob=blob))
+    else:
+        await interaction.response.send_message(embed=embed)
+
+@bot.event
+async def on_ready():
+    try:
+        synced = await bot.tree.sync()
+        print(f"총 {len(synced)}개의 슬래시 명령어가 동기화되었습니다.")
+    except Exception as e:
+        print(e)
+    print(f'로그인 완료: {bot.user.name}')
+
+# === [공통 체크 함수] 점검 모드 확인 ===
+async def check_maintenance(interaction: discord.Interaction) -> bool:
+    if MAINTENANCE_MODE:
+        if not interaction.user.guild_permissions.administrator:
+            embed = discord.Embed(
+                title="🛠️ [시스템 점검 및 업데이트 안내]",
+                description="현재 패밀리 GM 봇을 업데이트 중입니다. 잠시만 기다려 주세요!",
+                color=discord.Color.orange()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return False
+    return True
+
+# === [공통 체크 함수] 마피아 또는 경찰 가입 여부 확인 ===
+async def check_membership(interaction: discord.Interaction) -> bool:
+    user = interaction.user
+    mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
+    police_role = discord.utils.get(interaction.guild.roles, name="경찰")
+    
+    is_mafia = mafia_role and mafia_role in user.roles
+    is_police = police_role and police_role in user.roles
+
+    if not is_mafia and not is_police:
+        await interaction.response.send_message(
+            "❌ 패밀리(마피아) 또는 치안국(경찰) 소속이 아닙니다! `/가입`을 먼저 진행해 주세요.",
+            ephemeral=True
+        )
+        return False
+    return True
+
+# ==========================================
+# ⚙️ 통합 설정 시스템
+#   /설정 → 설정칸(카드)이 표시되고, ◀ ▶ 버튼으로 칸 이동 / 가운데 버튼으로 켜기·끄기
+#
+#   ✅ 새 설정칸을 추가하는 방법
+#     1) 아래 SETTINGS_DEFS 에 딕셔너리 1개(항목)를 추가
+#     2) 해당 기능 코드에서 get_setting(유저데이터, "키") 로 값을 읽어서 사용
+# ==========================================
+SETTINGS_DEFS = [
+    {
+        "key": "auto_fail_guard",
+        "emoji": "🎟️",
+        "category": "임무 안전 장치",
+        "name": "임무 실패 방지권 자동 사용",
+        "desc": "임무 실패 시 가방의 방지권을 자동으로 소모해 수배를 방어합니다.\n"
+                "끄면 방지권이 있어도 사용하지 않고 일반 실패로 처리됩니다.",
+        "on_text": "자동 사용",
+        "off_text": "수동 사용",
+        "default": True,
+    },
+    {
+        "key": "alert_mode",
+        "emoji": "🔔",
+        "category": "시스템 알림 환경",
+        "name": "긴급 수배 및 이벤트 알림",
+        "desc": "주요 이벤트나 수배 경보 발생 시 멘션 알림을 받습니다.",
+        "on_text": "활성화",
+        "off_text": "차단",
+        "default": True,
+    },
+]
+SETTING_DEFAULTS = {d["key"]: d["default"] for d in SETTINGS_DEFS}
+ 
+def get_setting(user_info: dict, key: str) -> bool:
+    """유저 데이터에서 설정값을 읽음. 설정이 없거나 settings 가 비어(null) 있어도 기본값을 반환"""
+    settings = user_info.get("settings")
+    if isinstance(settings, dict) and key in settings:
+        return bool(settings[key])
+    return SETTING_DEFAULTS.get(key, False)
+ 
+def build_settings_embed(user: discord.abc.User, settings: dict, page: int) -> discord.Embed:
+    total = len(SETTINGS_DEFS)
+    info = {"settings": settings}
+    d = SETTINGS_DEFS[page]
+    on = get_setting(info, d["key"])
+    state = f"🟢 **켜짐** ({d['on_text']})" if on else f"🔴 **꺼짐** ({d['off_text']})"
+ 
+    embed = discord.Embed(
+        title="⚙️ [패밀리 시스템 통합 설정]",
+        description=f"**{user.mention}** 님의 게임 환경 설정을 관리합니다.\n"
+                    f"◀ ▶ 버튼으로 설정칸을 넘기고, 가운데 버튼으로 **켜기 / 끄기**를 바꾸세요.",
+        color=discord.Color.dark_purple()
+    )
+    embed.add_field(
+        name=f"📄 [설정칸 {page + 1}/{total}] {d['category']}",
+        value=f"• **항목:** {d['emoji']} {d['name']}\n"
+              f"• **설명:** {d['desc']}\n\n"
+              f"현재 상태: {state}",
+        inline=False
+    )
+ 
+    overview = []
+    for i, s in enumerate(SETTINGS_DEFS):
+        mark = "▶" if i == page else "▫️"
+        overview.append(f"{mark} {'🟢' if get_setting(info, s['key']) else '🔴'} {s['emoji']} {s['name']}")
+    embed.add_field(name="📋 전체 설정 현황", value="\n".join(overview), inline=False)
+ 
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    embed.set_footer(text=f"설정칸 {page + 1} / {total}")
+    return embed
+ 
+class SettingsView(discord.ui.View):
+    def __init__(self, user: discord.Member, settings: dict, page: int = 0):
+        super().__init__(timeout=180)
+        self.user = user
+        self.settings = settings      # 창을 열 때 한 번 읽어 두고, 칸 이동에는 DB를 쓰지 않음
+        self.page = page
+        self.message = None
+        self.refresh_toggle_button()
+ 
+    def refresh_toggle_button(self):
+        """현재 칸의 상태에 맞게 가운데 버튼(켜기/끄기)의 모양을 갱신"""
+        on = get_setting({"settings": self.settings}, SETTINGS_DEFS[self.page]["key"])
+        self.toggle_btn.label = "끄기" if on else "켜기"
+        self.toggle_btn.emoji = "🔴" if on else "🟢"
+        self.toggle_btn.style = discord.ButtonStyle.danger if on else discord.ButtonStyle.success
+ 
+    def current_embed(self) -> discord.Embed:
+        return build_settings_embed(self.user, self.settings, self.page)
+ 
+    async def _guard(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message("❌ 본인의 설정 창만 조작할 수 있습니다.", ephemeral=True)
+            return False
+        return True
+ 
+    async def _move(self, interaction: discord.Interaction, step: int):
+        self.page = (self.page + step) % len(SETTINGS_DEFS)    # 끝에서 다시 처음/끝으로 이어짐
+        self.refresh_toggle_button()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+ 
+    @discord.ui.button(label="이전", emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._guard(interaction): return
+        await self._move(interaction, -1)
+ 
+    @discord.ui.button(label="끄기", style=discord.ButtonStyle.danger)
+    async def toggle_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._guard(interaction): return
+        await interaction.response.defer()
+ 
+        key = SETTINGS_DEFS[self.page]["key"]
+        try:
+            # 다른 설정값을 덮어쓰지 않도록 DB의 최신 설정을 읽어서 해당 항목만 변경
+            settings = dict(get_user_data(self.user.id).get("settings") or {})
+            settings[key] = not get_setting({"settings": settings}, key)
+            update_user_settings(self.user.id, settings)
+        except Exception as e:
+            print(f"DB Error (settings toggle): {e}")
+            await interaction.followup.send("🚨 설정 저장 중 오류가 발생했습니다.", ephemeral=True)
+            return
+ 
+        self.settings = settings
+        self.refresh_toggle_button()
+        await interaction.edit_original_response(embed=self.current_embed(), view=self)
+ 
+    @discord.ui.button(label="다음", emoji="▶️", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._guard(interaction): return
+        await self._move(interaction, 1)
+ 
+    async def on_timeout(self):
+        # 시간이 지나면 죽은 버튼이 남지 않도록 비활성화
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+ 
+# === ⚙️ 통합 `/설정` 슬래시 명령어 ===
+@bot.tree.command(name="설정", description="[조직원/경찰 전용] 게임 내 통합 환경 설정 창을 엽니다.")
+async def settings_command(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if await check_jail(interaction): return
+    if not await check_membership(interaction): return
+ 
+    user = interaction.user
+    settings = dict(get_user_data(user.id).get("settings") or {})
+ 
+    view = SettingsView(user=user, settings=settings)
+    await interaction.response.send_message(embed=view.current_embed(), view=view, ephemeral=True)
+    view.message = await interaction.original_response()
+
+# === 🚨 [경찰 전용] `/검거` 명령어 (서버 공개 알림형) ===
+@bot.tree.command(name="검거", description="[경찰 전용] 지명수배 중인 마피아를 체포하여 감옥에 가둡니다.")
+@app_commands.describe(member="검거할 수배 대상 마피아")
+async def arrest_member(interaction: discord.Interaction, member: discord.Member):
+    if not await check_maintenance(interaction): return
+
+    police_role = discord.utils.get(interaction.guild.roles, name="경찰")
+    if not police_role or police_role not in interaction.user.roles:
+        await interaction.response.send_message("❌ 치안국 경찰만 검거 명령어를 사용할 수 있습니다!", ephemeral=True)
+        return
+
+    # 3초 타임아웃 방지용 defer (ephemeral=True를 제거하여 서버 공개 메시지로 전환)
+    await interaction.response.defer()
+
+    now = datetime.now()
+    target_id = member.id
+
+    # 수배 상태 검증
+    is_wanted = False
+    matched_key = None
+
+    for key in list(wanted_list.keys()):
+        if int(key) == int(target_id):
+            matched_key = key
+            expiry_time = wanted_list[key]
+            if now <= expiry_time:
+                is_wanted = True
+            break
+
+    if not is_wanted:
+        if matched_key is not None:
+            wanted_list.pop(matched_key, None)
+        # 수배 상태가 아닐 때는 나만 보이게(ephemeral=True) 처리
+        await interaction.followup.send(f"❌ **{member.display_name}** 님은 현재 지명수배 상태가 아니거나 증거가 인멸되었습니다.", ephemeral=True)
+        return
+
+    # 수배 해제 및 감옥 수감 (3분)
+    wanted_list.pop(matched_key, None)
+    jail_time_seconds = 180 
+    jail_list[target_id] = now + timedelta(seconds=jail_time_seconds)
+
+    # DB 위치 변경
+    try:
+        update_user_location(target_id, "감옥")
+    except Exception as e:
+        print(f"Location update error: {e}")
+
+    # 경찰 보상 지급
+    try:
+        update_user_stats(interaction.user.id, 500, 20)
+    except Exception:
+        pass
+
+    police_info = get_user_data(interaction.user.id)
+    police_rank = get_user_rank(police_info["honor"], is_police=True)
+
+    # 서버 전체에 보일 검거 임베드 생성
+    embed = discord.Embed(
+        title="🚨 [치안국 긴급 공지] 지명수배범 검거 완료",
+        description=(
+            f"🚔 **{interaction.user.mention}** 경찰관이 수배범 **{member.mention}** (을)를 현장에서 체포했습니다!\n\n"
+            f"⚖️ **처벌 내용:** **{jail_time_seconds // 60}분** 동안 감옥에 수감되며 프로필 외 모든 활동이 통제됩니다.\n"
+            f"📍 **현재 거점:** `감옥`\n\n"
+            f"💰 **검거 포상금:** `${500:,}`\n"
+            f"🏆 **경찰 실적:** `+20 pt` (현재 직급: `{police_rank}`)"
+        ),
+        color=discord.Color.dark_blue()
+    )
+    if member.avatar:
+        embed.set_thumbnail(url=member.avatar.url)
+
+    # 서버 전체(채널)에 공개적으로 메시지 전송
+    await interaction.followup.send(embed=embed)
+
+# === 👾 NPC 전투 대상 목록 ===
+NPC_DATA = {
+    "골목길 깡패": {
+        "name": "골목길 깡패",
+        "hp": 800,
+        "atk": 80,
+        "def": 5,
+        "reward_money": (200, 500),
+        "reward_honor": 5,
+        "desc": "칼렌데 뒷골목에서 서성이는 초보 깡패입니다."
+    },
+    "조직의 배신자": {
+        "name": "조직의 배신자",
+        "hp": 2000,
+        "atk": 180,
+        "def": 25,
+        "reward_money": (800, 1500),
+        "reward_honor": 15,
+        "desc": "패밀리의 기밀을 팔아넘기고 도망친 위험한 배신자입니다."
+    },
+    "암시장 악덕 거상": {
+        "name": "암시장 악덕 거상",
+        "hp": 3500,
+        "atk": 280,
+        "def": 40,
+        "reward_money": (2000, 4000),
+        "reward_honor": 30,
+        "desc": "고용한 보디가드들을 대동하고 다니는 악명 높은 거상입니다."
+    },
+    "지명수배자 보스": {
+        "name": "지명수배자 보스",
+        "hp": 6000,
+        "atk": 450,
+        "def": 60,
+        "reward_money": (5000, 10000),
+        "reward_honor": 60,
+        "desc": "치안국에서도 손대지 못하는 강력한 수배범 보스입니다."
+    }
+}
+
+# === 💖 후원 링크 뷰 클래스 ===
+class DonationView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        # url 파라미터를 사용하면 클릭 시 외부 웹사이트로 이동하는 버튼이 됩니다.
+        self.add_item(discord.ui.Button(
+            label="☕ 후원 페이지로 이동하기", 
+            style=discord.ButtonStyle.link, 
+            url="https://toss.me/본인아이디",  # 👈 여기에 연결할 본인의 후원 링크(토스, 페이팔 등)를 입력하세요!
+            emoji="🔗"
+        ))
+
+# === 💸 [조직원 전용] `/송금` 명령어 ===
+@bot.tree.command(name="송금", description="[조직원 전용] 다른 조직원에게 보유 자금을 양도합니다.")
+@app_commands.describe(member="돈을 받을 조직원", amount="보낼 금액 ($)")
+async def transfer_money(interaction: discord.Interaction, member: discord.Member, amount: int):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    sender = interaction.user
+    receiver = member
+
+    # 1. 자기 자신에게 송금하는지 확인
+    if sender.id == receiver.id:
+        await interaction.response.send_message("❌ 자기 자신에게는 돈을 송금할 수 없습니다.", ephemeral=True)
+        return
+
+    # 2. 송금 금액 유효성 검사 (0원 이하 방지)
+    if amount <= 0:
+        await interaction.response.send_message("❌ 송금 금액은 1원 이상이어야 합니다.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    # 3. 송금자(나)의 최신 데이터 조회
+    sender_data = get_user_data(sender.id)
+    sender_money = sender_data.get("money", 0)
+
+    # 잔액 부족 확인
+    if sender_money < amount:
+        await interaction.response.send_message(
+            f"❌ 보유 자금이 부족합니다!\n"
+            f"• 보유 중인 자금: `${sender_money:,}`\n"
+            f"• 송금하려는 금액: `${amount:,}`",
+            ephemeral=True
+        )
+        return
+
+    # 4. 수신자(상대방) 데이터 확인 (존재하지 않으면 기본값 생성 방지를 위해 체크)
+    receiver_data = get_user_data(receiver.id)
+    receiver_money = receiver_data.get("money", 0)
+
+    # 5. 금액 차감 및 적립 계산 (수수료 0% 또는 원하시는 경우 소폭 수수료 부과 가능)
+    new_sender_money = sender_money - amount
+    new_receiver_money = receiver_money + amount
+
+    try:
+        _require_db()
+        # 송금자 자금 업데이트
+        supabase.table("user_data").update({"money": new_sender_money}).eq("user_id", str(sender.id)).execute()
+        # 수신자 자금 업데이트
+        supabase.table("user_data").update({"money": new_receiver_money}).eq("user_id", str(receiver.id)).execute()
+    except Exception as e:
+        print(f"DB Error (Transfer Money): {e}")
+        await interaction.followup.send("❌ 데이터베이스 오류로 송금에 실패했습니다. 나중에 다시 시도해 주세요.", ephemeral=True)
+        return
+
+    # 6. 송금 완료 임베드 생성 (서버 전체 공개 또는 알림)
+    embed = discord.Embed(
+        title="💸 [조직 자금 이체 완료]",
+        description=(
+            f"**{sender.mention}** 님이 **{receiver.mention}** 님에게 자금을 안전하게 전달했습니다!\n\n"
+            f"💵 **송금 금액:** `${amount:,}`\n\n"
+            f"🏦 **{sender.display_name} 님의 남은 자금:** `${new_sender_money:,}`\n"
+            f"🏦 **{receiver.display_name} 님의 보유 자금:** `${new_receiver_money:,}`"
+        ),
+        color=discord.Color.green()
+    )
+    if sender.avatar:
+        embed.set_thumbnail(url=sender.avatar.url)
+
+    await interaction.followup.send(embed=embed)
+
+# === ⚔️ NPC 턴제 전투 View 클래스 (턴 제한 추가) ===
+class NPCBattleView(discord.ui.View):
+    def __init__(self, user: discord.Member, user_stats_dict: dict, npc_info: dict, max_turns: int = 10):
+        super().__init__(timeout=60)
+        self.user = user
+        self.npc_info = npc_info
+        self.max_turns = max_turns  # 👈 최대 턴 수 설정 (기본 10턴)
+        
+        # 유저 및 NPC 스탯 설정
+        self.u_hp = user_stats_dict["hp"]
+        self.u_max_hp = user_stats_dict["hp"]
+        self.u_atk = user_stats_dict["atk"]
+        self.u_def = user_stats_dict["def"]
+        self.u_guard = False
+
+        self.npc_hp = npc_info["hp"]
+        self.npc_max_hp = npc_info["hp"]
+        self.npc_atk = npc_info["atk"]
+        self.npc_def = npc_info["def"]
+        self.npc_guard = False
+
+        self.turn_count = 1
+        self.logs = [f"⚔️ {user.display_name} 님과 **[{npc_info['name']}]**의 전투가 시작되었습니다! (제한: {max_turns}턴)"]
+        self.message = None
+        self.finished = False
+
+    def get_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title=f"⚔️ [NPC 토벌 전투] 턴 {self.turn_count} / {self.max_turns}",
+            description=f"상대: **{self.npc_info['name']}**\n*{self.npc_info['desc']}*",
+            color=discord.Color.dark_purple()
+        )
+
+        embed.add_field(
+            name=f"🧑 {self.user.display_name} (나)",
+            value=f"❤️ 체력 : {self.u_hp} / {self.u_max_hp}\n⚔️ 공격력 : {self.u_atk}\n🛡️ 방어력 : {self.u_def}",
+            inline=True
+        )
+        embed.add_field(
+            name=f"👾 {self.npc_info['name']}",
+            value=f"❤️ 체력 : {self.npc_hp} / {self.npc_max_hp}\n⚔️ 공격력 : {self.npc_atk}\n🛡️ 방어력 : {self.npc_def}",
+            inline=True
+        )
+
+        log_text = "\n".join(self.logs[-6:])
+        embed.add_field(
+            name="📜 전투 현황 로그",
+            value=f"```diff\n{log_text}\n```",
+            inline=False
+        )
+        return embed
+
+    async def process_turn(self, interaction: discord.Interaction, action_type: str):
+        if interaction.user != self.user:
+            await interaction.response.send_message("❌ 본인의 전투 창만 조작할 수 있습니다.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        # 1. 유저 행동 처리
+        self.u_guard = False
+        if action_type == "attack":
+            dmg = max(10, self.u_atk - (self.npc_def * 2 if self.npc_guard else self.npc_def) + random.randint(-10, 10))
+            if self.npc_guard:
+                dmg = int(dmg * 0.5)
+                self.logs.append(f"+ {self.npc_info['name']}이(가) 방어 상태여서 대미지가 감소했습니다!")
+            self.npc_hp = max(0, self.npc_hp - dmg)
+            self.logs.append(f"+ {self.user.display_name}의 공격! {self.npc_info['name']}에게 {dmg} 대미지!")
+        elif action_type == "guard":
+            self.u_guard = True
+            self.logs.append(f"+ {self.user.display_name}이(가) 방어 자세를 취했습니다.")
+
+        # NPC 사망 확인 (승리)
+        if self.npc_hp <= 0:
+            await self.end_battle(interaction, outcome="win")
+            return
+
+        # 2. 턴 제한 확인 (유저 공격 후 NPC를 처치하지 못하고 최대 턴에 도달한 경우 강제 패배)
+        if self.turn_count >= self.max_turns:
+            self.logs.append(f"- ⏳ 지정된 {self.max_turns}턴이 지나 도망치지 못하고 제압당했습니다!")
+            await self.end_battle(interaction, outcome="turn_limit")
+            return
+
+        # 3. NPC 자동 반격 AI
+        self.npc_guard = False
+        if random.random() < 0.2:
+            self.npc_guard = True
+            self.logs.append(f"- {self.npc_info['name']}이(가) 방어 태세를 갖췄습니다.")
+        else:
+            npc_dmg = max(10, self.npc_atk - (self.u_def * 2 if self.u_guard else self.u_def) + random.randint(-10, 10))
+            if self.u_guard:
+                npc_dmg = int(npc_dmg * 0.5)
+                self.logs.append(f"- 방어 성공! 대미지를 절반으로 감소시켰습니다.")
+            self.u_hp = max(0, self.u_hp - npc_dmg)
+            self.logs.append(f"- {self.npc_info['name']}의 반격! {self.user.display_name}이(가) {npc_dmg} 대미지를 입었습니다.")
+
+        # 유저 사망 확인 (체력 0 패배)
+        if self.u_hp <= 0:
+            await self.end_battle(interaction, outcome="loss")
+            return
+
+        self.turn_count += 1
+        await interaction.edit_original_response(embed=self.get_embed(), view=self)
+
+    @discord.ui.button(label="⚔️ 공격하기", style=discord.ButtonStyle.danger)
+    async def attack_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_turn(interaction, "attack")
+
+    @discord.ui.button(label="🛡️ 방어하기", style=discord.ButtonStyle.primary)
+    async def guard_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_turn(interaction, "guard")
+
+    async def end_battle(self, interaction: discord.Interaction, outcome: str):
+        self.finished = True
+        self.stop()
+
+        for child in self.children:
+            child.disabled = True
+
+        user_data = get_user_data(self.user.id)
+        current_money = user_data.get("money", 0)
+        current_honor = user_data.get("honor", 0)
+
+        if outcome == "win":
+            earned_money = random.randint(*self.npc_info["reward_money"])
+            earned_honor = self.npc_info["reward_honor"]
+
+            new_money = current_money + earned_money
+            new_honor = current_honor + earned_honor
+
+            try:
+                _require_db()
+                supabase.table("user_data").update({
+                    "money": new_money,
+                    "honor": new_honor
+                }).eq("user_id", str(self.user.id)).execute()
+            except Exception as e:
+                print(f"DB Error (NPC Battle Win): {e}")
+
+            embed = discord.Embed(
+                title=f"🎉 [전투 승리] {self.npc_info['name']} 격퇴!",
+                description=f"**{self.user.mention}** 님이 **{self.npc_info['name']}**(을)를 완벽하게 쓰러뜨렸습니다!\n\n"
+                            f"💰 **획득 보상금:** `${earned_money:,}`\n"
+                            f"🏆 **획득 명예:** `+{earned_honor} pt`\n\n"
+                            f"🏦 **현재 보유 자금:** `${new_money:,}`\n"
+                            f"🏅 **현재 명예:** `{new_honor} pt`",
+                color=discord.Color.green()
+            )
+        else:
+            # 턴 초과 패배("turn_limit") 또는 사망 패배("loss")
+            penalty = min(current_money, 300)
+            new_money = max(0, current_money - penalty)
+
+            try:
+                _require_db()
+                supabase.table("user_data").update({"money": new_money}).eq("user_id", str(self.user.id)).execute()
+            except Exception as e:
+                print(f"DB Error (NPC Battle Loss): {e}")
+
+            reason_title = "⏳ [시간 초과 패배]" if outcome == "turn_limit" else "💥 [전투 패배]"
+            reason_desc = f"지정된 **{self.max_turns}턴**이 지나 작전에 실패했습니다." if outcome == "turn_limit" else f"**{self.npc_info['name']}**에게 쓰러졌습니다."
+
+            embed = discord.Embed(
+                title=f"{reason_title} {self.user.display_name} 패배...",
+                description=f"**{self.user.mention}** 님이 {reason_desc}\n\n"
+                            f"🩹 **치료/패널티 지출:** `${penalty:,}`\n"
+                            f"🏦 **남은 자금:** `${new_money:,}`",
+                color=discord.Color.red()
+            )
+
+        log_text = "\n".join(self.logs[-8:])
+        embed.add_field(name="📜 최종 전투 기록", value=f"```diff\n{log_text}\n```", inline=False)
+
+        if self.user.avatar:
+            embed.set_thumbnail(url=self.user.avatar.url)
+
+        await interaction.edit_original_response(embed=embed, view=self)
+        npc_cooldowns = {}
+
+@bot.tree.command(name="전투", description="[조직원 전용] NPC 이름을 직접 입력하여 1:1 턴제 전투를 시작합니다.")
+@app_commands.describe(npc_name="전투를 벌일 NPC 이름 (예: 골목길 깡패, 조직의 배신자)")
+async def fight_npc(interaction: discord.Interaction, npc_name: str):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+
+    # 쿨타임 체크 (20초)
+    now = datetime.now()
+    if user.id in npc_cooldowns:
+        remaining = int((npc_cooldowns[user.id] - now).total_seconds())
+        if remaining > 0:
+            await interaction.response.send_message(f"⏳ 부상에서 회복 중입니다. **{remaining}초** 뒤에 다시 전투할 수 있습니다.", ephemeral=True)
+            return
+
+    npc_cooldowns[user.id] = now + timedelta(seconds=20)
+
+    # 텍스트 입력값과 NPC 목록 매칭 확인
+    target_npc = NPC_DATA.get(npc_name.strip())
+    if not target_npc:
+        # 등록된 NPC 이름을 알려주는 에러 메시지 반환
+        available_npcs = ", ".join([f"`{name}`" for name in NPC_DATA.keys()])
+        await interaction.response.send_message(
+            f"❌ **[{npc_name}]** 은(는) 존재하지 않는 NPC입니다.\n"
+            f"",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+
+    # 유저 전투 스탯 계산 (명예 + 보유 장비)
+    user_stats = get_user_data(user.id)
+    inventory = user_stats.get("inventory", {})
+    base_honor = user_stats.get("honor", 0)
+
+    u_hp = 1000 + (base_honor * 5)
+    u_atk = 100 + int(base_honor * 0.5)
+    u_def = 10
+
+    if "👊🏻 슈퍼 울트라 주먹" in inventory: u_atk += 500; u_hp += 2000
+    elif "💉 수상한 주사기" in inventory: u_atk += 300; u_hp += 1000
+    elif "🏏 몽둥이" in inventory: u_atk += 200
+    elif "🔫 권총" in inventory: u_atk += 150
+    elif "🗡️ 단검" in inventory: u_atk += 80
+
+    if "🎟️ 임무 실패 방지권" in inventory: u_def += 20
+    if "🪪 치안국 위조 신분증" in inventory: u_def += 15
+
+    user_combat_stats = {"hp": u_hp, "atk": u_atk, "def": u_def}
+
+    view = NPCBattleView(user=user, user_stats_dict=user_combat_stats, npc_info=target_npc)
+    embed = view.get_embed()
+
+    msg = await interaction.followup.send(embed=embed, view=view)
+    view.message = msg
+    
+
+# === 시민 전용 아르바이트 쿨타임 사전 ===
+parttime_cooldowns = {}
+
+@bot.tree.command(name="아르바이트", description="[시민/공용] 합법적인 일거리를 통해 안전하게 소량의 자금을 벌어듭니다.")
+async def part_time_job(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if await check_jail(interaction): return
+
+    await interaction.response.defer()
+    user = interaction.user
+
+    now = datetime.now()
+    if user.id in parttime_cooldowns:
+        next_available = parttime_cooldowns[user.id]
+        if now < next_available:
+            remaining = int((next_available - now).total_seconds())
+            await interaction.followup.send(f"⏳ 피로를 푸는 중입니다. **{remaining}초** 뒤에 다시 일할 수 있습니다.", ephemeral=True)
+            return
+
+    parttime_cooldowns[user.id] = now + timedelta(seconds=10)
+
+    jobs = [
+        {"title": "🏪 편의점 야간 알바", "reward": (100, 250)},
+        {"title": "📦 물류 센터 상하차", "reward": (200, 350)},
+        {"title": "☕ 도시 카페 서빙", "reward": (120, 280)},
+        {"title": "🧹 중앙 광장 청소", "reward": (100, 200)}
+    ]
+    
+    selected_job = random.choice(jobs)
+    earned_money = random.randint(*selected_job["reward"])
+
+    update_user_stats(user.id, earned_money, 0)
+    user_stats = get_user_data(user.id)
+
+    embed = discord.Embed(
+        title=f"🛠️ [{selected_job['title']}] 완료",
+        description=f"**{user.mention}** 님이 정직한 노동으로 자금을 벌었습니다!\n\n"
+                    f"💰 **획득 급여:** `${earned_money:,}`\n"
+                    f"🏦 **현재 보유 자금:** `${user_stats['money']:,}`",
+        color=discord.Color.blue()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+
+    await interaction.followup.send(embed=embed)
+
+# ==========================================
+# 🎰 도박 시스템 (카지노)
+# ==========================================
+GAMBLE_MIN_BET = 1000
+GAMBLE_MAX_BET = 50000
+GAMBLE_COOLDOWN = 3
+COIN_WIN_RATE = 0.48
+
+SLOT_SYMBOLS = [
+    ("🍒", 30, 3),
+    ("🍋", 25, 5),
+    ("🔔", 20, 8),
+    ("💎", 10, 20),
+    ("7️⃣", 5, 100),
+]
+SLOT_PAIR_MULT = 1.0
+SLOT_JACKPOT_SYMBOL = "7️⃣"
+
+BLACKJACK_PAYOUT = {"blackjack": 2.5, "win": 2.0, "push": 1.0, "lose": 0}
+
+gamble_cooldowns = {}
+gamble_locks = {}
+active_blackjack = {}
+
+class InsufficientFunds(Exception):
+    pass
+
+def _gamble_lock(user_id: int) -> asyncio.Lock:
+    lock = gamble_locks.get(user_id)
+    if lock is None:
+        lock = gamble_locks[user_id] = asyncio.Lock()
+    return lock
+
+def fmt_net(n: int) -> str:
+    return f"{'+' if n >= 0 else '-'}${abs(n):,}"
+
+def settle_gamble(user_id: int, bet: int, payout: int, info: dict = None, prepaid: bool = False, jackpot: bool = False):
+    _require_db()
+    if info is None:
+        info = get_user_data(user_id)
+    money = int(info.get("money") or 0)
+
+    if not prepaid and money < bet:
+        raise InsufficientFunds(money)
+
+    new_money = money + (payout if prepaid else payout - bet)
+
+    blob = get_title_blob(info)
+    s = blob["stats"]
+    s["gamble_played"] += 1
+    s["gamble_wagered"] += bet
+    s["gamble_net"] += payout - bet
+    if payout > bet:
+        s["gamble_won"] += 1
+    if jackpot:
+        s["jackpot"] += 1
+    if new_money <= 0:
+        s["broke"] += 1
+    new_ids = evaluate_new_titles(blob, {**info, "money": new_money})
+
+    res = supabase.table("user_data").update({"money": new_money, "data": blob}).eq("user_id", str(user_id)).execute()
+    _check_updated(res, "settle_gamble")
+    return new_money, new_ids
+
+def take_bet(user_id: int, bet: int) -> int:
+    _require_db()
+    info = get_user_data(user_id)
+    money = int(info.get("money") or 0)
+    if money < bet:
+        raise InsufficientFunds(money)
+    res = supabase.table("user_data").update({"money": money - bet}).eq("user_id", str(user_id)).execute()
+    _check_updated(res, "take_bet")
+    return money - bet
+
+async def gamble_precheck(interaction: discord.Interaction) -> bool:
+    if not await check_maintenance(interaction): return False
+    if await check_jail(interaction): return False
+
+    now = datetime.now()
+    next_ok = gamble_cooldowns.get(interaction.user.id)
+    if next_ok and now < next_ok:
+        remaining = int((next_ok - now).total_seconds()) + 1
+        await interaction.response.send_message(f"⏳ 잠시 후 다시 베팅할 수 있습니다. (**{remaining}초**)", ephemeral=True)
+        return False
+    gamble_cooldowns[interaction.user.id] = now + timedelta(seconds=GAMBLE_COOLDOWN)
+    return True
+
+async def _safe_edit(interaction: discord.Interaction, **kwargs):
+    try:
+        await interaction.edit_original_response(**kwargs)
+    except discord.HTTPException:
+        pass
+
+def spin_slots() -> list:
+    return random.choices([s[0] for s in SLOT_SYMBOLS], weights=[s[1] for s in SLOT_SYMBOLS], k=3)
+
+def slot_multiplier(reels: list) -> float:
+    if reels[0] == reels[1] == reels[2]:
+        for emoji, _, mult in SLOT_SYMBOLS:
+            if emoji == reels[0]:
+                return float(mult)
+    if len(set(reels)) == 2:
+        return SLOT_PAIR_MULT
+    return 0.0
+
+def slot_rtp() -> float:
+    total_w = sum(w for _, w, _ in SLOT_SYMBOLS)
+    rtp = 0.0
+    for a in SLOT_SYMBOLS:
+        for b in SLOT_SYMBOLS:
+            for c in SLOT_SYMBOLS:
+                p = (a[1] / total_w) * (b[1] / total_w) * (c[1] / total_w)
+                rtp += p * slot_multiplier([a[0], b[0], c[0]])
+    return rtp
+
+def slot_board(reels: list) -> str:
+    return "🎰 ┃ " + " ┃ ".join(reels) + " ┃ 🎰"
+
+CARD_RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+CARD_SUITS = ["♠️", "♥️", "♦️", "♣️"]
+
+def new_deck() -> list:
+    deck = [(r, s) for r in CARD_RANKS for s in CARD_SUITS]
+    random.shuffle(deck)
+    return deck
+
+def hand_value(hand: list) -> int:
+    total = 0
+    aces = 0
+    for rank, _ in hand:
+        if rank == "A":
+            total += 11
+            aces += 1
+        elif rank in ("J", "Q", "K"):
+            total += 10
+        else:
+            total += int(rank)
+    while total > 21 and aces:
+        total -= 10
+        aces -= 1
+    return total
+
+def is_blackjack(hand: list) -> bool:
+    return len(hand) == 2 and hand_value(hand) == 21
+
+def card_str(card: tuple) -> str:
+    return f"**{card[0]}{card[1]}**"
+
+def hand_str(hand: list) -> str:
+    return " ".join(card_str(c) for c in hand)
+
+def blackjack_outcome(player: list, dealer: list) -> str:
+    p, d = hand_value(player), hand_value(dealer)
+    if p > 21:
+        return "lose"
+    if is_blackjack(player):
+        return "push" if is_blackjack(dealer) else "blackjack"
+    if is_blackjack(dealer):
+        return "lose"
+    if d > 21 or p > d:
+        return "win"
+    if p == d:
+        return "push"
+    return "lose"
+
+class BlackjackView(discord.ui.View):
+    def __init__(self, owner: discord.Member, bet: int):
+        super().__init__(timeout=60)
+        self.owner = owner
+        self.bet = bet
+        self.deck = new_deck()
+        self.player = [self.deck.pop(), self.deck.pop()]
+        self.dealer = [self.deck.pop(), self.deck.pop()]
+        self.finished = False
+        self.busy = False
+        self.message = None
+
+    def build_embed(self, reveal: bool = False, outcome: str = None, payout: int = 0,
+                    money: int = 0, new_ids: list = None, note: str = "") -> discord.Embed:
+        colors = {
+            None: discord.Color.dark_green(), "blackjack": discord.Color.gold(),
+            "win": discord.Color.green(), "push": discord.Color.blue(), "lose": discord.Color.red()
+        }
+        embed = discord.Embed(title="🃏 [블랙잭]", color=colors[outcome])
+
+        dealer_text = (f"{hand_str(self.dealer)}  (합계 **{hand_value(self.dealer)}**)" if reveal
+                       else f"{card_str(self.dealer[0])} **[?]**")
+        embed.add_field(name=f"🧑 {self.owner.display_name}의 패 (합계 {hand_value(self.player)})", value=hand_str(self.player), inline=False)
+        embed.add_field(name="🎩 딜러의 패", value=dealer_text, inline=False)
+
+        if outcome is None:
+            embed.description = f"💵 베팅금 **${self.bet:,}**\n🃏 **히트**(카드 받기) 또는 ✋ **스탠드**(멈추기)를 선택하세요. (60초 이내)"
+        else:
+            if note == "timeout":
+                msg = "⌛ **시간 초과** — 자동으로 패배 처리되었습니다."
+            elif outcome == "blackjack":
+                msg = "🃏 **블랙잭!** 3:2 배당으로 지급됩니다."
+            elif outcome == "win":
+                msg = "🎉 **승리!**" + (" 딜러가 버스트했습니다." if hand_value(self.dealer) > 21 else "")
+            elif outcome == "push":
+                msg = "🤝 **무승부** — 베팅금이 그대로 돌아옵니다."
+            else:
+                msg = "💥 **버스트!** 21을 초과했습니다." if hand_value(self.player) > 21 else "💀 **패배**"
+            net = payout - self.bet
+            embed.description = (f"{msg}\n\n💵 베팅금: `${self.bet:,}`\n💰 지급액: `${payout:,}`\n"
+                                 f"📈 손익: `{fmt_net(net)}`\n🏦 보유 자금: `${money:,}`{format_new_titles(new_ids or [])}")
+
+        embed.set_footer(text="딜러는 16 이하에서 카드를 받고 17 이상에서 멈춥니다 · 블랙잭 3:2")
+        if self.owner.avatar:
+            embed.set_thumbnail(url=self.owner.avatar.url)
+        return embed
+
+    async def finish(self, edit, outcome: str, note: str = ""):
+        self.finished = True
+        self.stop()
+        active_blackjack.pop(self.owner.id, None)
+
+        payout = int(self.bet * BLACKJACK_PAYOUT[outcome])
+        try:
+            async with _gamble_lock(self.owner.id):
+                new_money, new_ids = settle_gamble(self.owner.id, self.bet, payout, prepaid=True)
+        except Exception as e:
+            print(f"DB Error (blackjack settle): {e}")
+            await edit(embed=discord.Embed(
+                title="🚨 [블랙잭 정산 오류]",
+                description="데이터베이스 오류로 결과를 정산하지 못했습니다. 관리자에게 문의해주세요.",
+                color=discord.Color.red()), view=None)
+            return
+
+        await edit(embed=self.build_embed(reveal=True, outcome=outcome, payout=payout,
+                                          money=new_money, new_ids=new_ids, note=note), view=None)
+
+    async def dealer_turn(self, edit):
+        while hand_value(self.dealer) < 17:
+            self.dealer.append(self.deck.pop())
+        await self.finish(edit, blackjack_outcome(self.player, self.dealer))
+
+    async def _guard(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner.id:
+            await interaction.response.send_message("❌ 본인의 블랙잭 테이블만 조작할 수 있습니다.", ephemeral=True)
+            return False
+        await interaction.response.defer()
+        return not (self.finished or self.busy)
+
+    @discord.ui.button(label="히트 (카드 받기)", emoji="🃏", style=discord.ButtonStyle.primary)
+    async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._guard(interaction): return
+        self.busy = True
+        try:
+            self.player.append(self.deck.pop())
+            value = hand_value(self.player)
+            if value > 21:
+                await self.finish(interaction.edit_original_response, "lose")
+            elif value == 21:
+                await self.dealer_turn(interaction.edit_original_response)
+            else:
+                await interaction.edit_original_response(embed=self.build_embed(), view=self)
+        finally:
+            self.busy = False
+
+    @discord.ui.button(label="스탠드 (멈추기)", emoji="✋", style=discord.ButtonStyle.secondary)
+    async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._guard(interaction): return
+        self.busy = True
+        try:
+            await self.dealer_turn(interaction.edit_original_response)
+        finally:
+            self.busy = False
+
+    async def on_timeout(self):
+        if self.finished or self.busy or self.message is None:
+            return
+        await self.finish(self.message.edit, "lose", note="timeout")
+
+# ==========================================
+# 🎰 /도박 명령어 그룹
+# ==========================================
+gamble_group = app_commands.Group(name="도박", description="[카지노] 자금을 걸고 도박을 즐깁니다.")
+bot.tree.add_command(gamble_group)
+
+BET_DESC = f"베팅할 금액 (${GAMBLE_MIN_BET:,} ~ ${GAMBLE_MAX_BET:,})"
+
+@gamble_group.command(name="슬롯", description="🎰 슬롯머신을 돌립니다. (3개 일치 고배당 / 2개 일치 본전)")
+@app_commands.describe(베팅금=BET_DESC)
+async def gamble_slots(interaction: discord.Interaction, 베팅금: app_commands.Range[int, GAMBLE_MIN_BET, GAMBLE_MAX_BET]):
+    if not await gamble_precheck(interaction): return
+
+    user = interaction.user
+    bet = 베팅금
+
+    money = int(get_user_data(user.id).get("money") or 0)
+    if money < bet:
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.response.send_message(f"❌ 자금이 부족합니다! (보유 자금: ${money:,})", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    reels = spin_slots()
+    mult = slot_multiplier(reels)
+    payout = int(bet * mult)
+    jackpot = (reels[0] == reels[1] == reels[2] == SLOT_JACKPOT_SYMBOL)
+
+    try:
+        async with _gamble_lock(user.id):
+            new_money, new_ids = settle_gamble(user.id, bet, payout, jackpot=jackpot)
+    except InsufficientFunds:
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.edit_original_response(content="❌ 자금이 부족합니다!")
+        return
+    except Exception as e:
+        print(f"DB Error (slots): {e}")
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.edit_original_response(content="🚨 데이터베이스 오류로 베팅이 취소되었습니다. (자금은 차감되지 않았습니다)")
+        return
+
+    spinning = discord.Embed(title="🎰 [슬롯머신]", description=slot_board(["🔄", "🔄", "🔄"]) + f"\n\n💵 베팅금 `${bet:,}`", color=discord.Color.dark_gold())
+    await _safe_edit(interaction, embed=spinning)
+    await asyncio.sleep(0.8)
+    spinning.description = slot_board([reels[0], "🔄", "🔄"]) + f"\n\n💵 베팅금 `${bet:,}`"
+    await _safe_edit(interaction, embed=spinning)
+    await asyncio.sleep(0.8)
+    spinning.description = slot_board([reels[0], reels[1], "🔄"]) + f"\n\n💵 베팅금 `${bet:,}`"
+    await _safe_edit(interaction, embed=spinning)
+    await asyncio.sleep(0.8)
+
+    if jackpot:
+        msg, color = "🎊 **JACKPOT!!!** 7️⃣7️⃣7️⃣ 대박이 터졌습니다!", discord.Color.gold()
+    elif mult >= 2:
+        msg, color = f"✨ **{reels[0]} 3개 일치!** 배당 x{mult:g}", discord.Color.green()
+    elif mult == SLOT_PAIR_MULT and mult > 0:
+        msg, color = "🤝 **2개 일치** — 베팅금이 그대로 돌아옵니다.", discord.Color.blue()
+    else:
+        msg, color = "💨 **꽝!** 베팅금을 잃었습니다.", discord.Color.red()
+
+    embed = discord.Embed(
+        title="🎰 [슬롯머신] 결과",
+        description=(f"{slot_board(reels)}\n\n{msg}\n\n💵 베팅금: `${bet:,}`\n💰 지급액: `${payout:,}`\n"
+                     f"📈 손익: `{fmt_net(payout - bet)}`\n🏦 보유 자금: `${new_money:,}`{format_new_titles(new_ids)}"),
+        color=color
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    await _safe_edit(interaction, embed=embed)
+
+@gamble_group.command(name="동전", description="🪙 동전 던지기에 베팅합니다. (승리 시 2배)")
+@app_commands.describe(베팅금=BET_DESC, 선택="동전의 어느 면에 걸까요?")
+@app_commands.choices(선택=[
+    app_commands.Choice(name="🪙 앞면", value="front"),
+    app_commands.Choice(name="🌑 뒷면", value="back")
+])
+async def gamble_coin(interaction: discord.Interaction, 베팅금: app_commands.Range[int, GAMBLE_MIN_BET, GAMBLE_MAX_BET], 선택: app_commands.Choice[str]):
+    if not await gamble_precheck(interaction): return
+
+    user = interaction.user
+    bet = 베팅금
+
+    money = int(get_user_data(user.id).get("money") or 0)
+    if money < bet:
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.response.send_message(f"❌ 자금이 부족합니다! (보유 자금: ${money:,})", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    names = {"front": "🪙 앞면", "back": "🌑 뒷면"}
+    won = random.random() < COIN_WIN_RATE
+    result_side = 선택.value if won else ("back" if 선택.value == "front" else "front")
+    payout = bet * 2 if won else 0
+
+    try:
+        async with _gamble_lock(user.id):
+            new_money, new_ids = settle_gamble(user.id, bet, payout)
+    except InsufficientFunds:
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.edit_original_response(content="❌ 자금이 부족합니다!")
+        return
+    except Exception as e:
+        print(f"DB Error (coin): {e}")
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.edit_original_response(content="🚨 데이터베이스 오류로 베팅이 취소되었습니다. (자금은 차감되지 않았습니다)")
+        return
+
+    flipping = discord.Embed(
+        title="🪙 [동전 던지기]",
+        description=f"{user.mention} 님이 **{names[선택.value]}**에 `${bet:,}` 를 걸었습니다!\n\n🪙 동전이 공중에서 회전 중...",
+        color=discord.Color.dark_gold()
+    )
+    await _safe_edit(interaction, embed=flipping)
+    await asyncio.sleep(1.2)
+
+    embed = discord.Embed(
+        title="🪙 [동전 던지기] 결과",
+        description=(f"결과: **{names[result_side]}**\n"
+                     f"{'🎉 **적중!** 베팅금의 2배를 받았습니다.' if won else '💨 **빗나갔습니다.** 베팅금을 잃었습니다.'}\n\n"
+                     f"💵 베팅금: `${bet:,}`\n💰 지급액: `${payout:,}`\n"
+                     f"📈 손익: `{fmt_net(payout - bet)}`\n🏦 보유 자금: `${new_money:,}`{format_new_titles(new_ids)}"),
+        color=discord.Color.green() if won else discord.Color.red()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    await _safe_edit(interaction, embed=embed)
+
+@gamble_group.command(name="블랙잭", description="🃏 딜러와 블랙잭 승부를 겨룹니다. (블랙잭 3:2 / 승리 2배)")
+@app_commands.describe(베팅금=BET_DESC)
+async def gamble_blackjack(interaction: discord.Interaction, 베팅금: app_commands.Range[int, GAMBLE_MIN_BET, GAMBLE_MAX_BET]):
+    if not await gamble_precheck(interaction): return
+
+    user = interaction.user
+    bet = 베팅금
+
+    if user.id in active_blackjack:
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.response.send_message("⚠️ 이미 진행 중인 블랙잭 테이블이 있습니다! 먼저 끝내주세요.", ephemeral=True)
+        return
+
+    money = int(get_user_data(user.id).get("money") or 0)
+    if money < bet:
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.response.send_message(f"❌ 자금이 부족합니다! (보유 자금: ${money:,})", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    try:
+        async with _gamble_lock(user.id):
+            take_bet(user.id, bet)
+    except InsufficientFunds:
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.edit_original_response(content="❌ 자금이 부족합니다!")
+        return
+    except Exception as e:
+        print(f"DB Error (blackjack take_bet): {e}")
+        gamble_cooldowns.pop(user.id, None)
+        await interaction.edit_original_response(content="🚨 데이터베이스 오류로 베팅이 취소되었습니다. (자금은 차감되지 않았습니다)")
+        return
+
+    view = BlackjackView(owner=user, bet=bet)
+    active_blackjack[user.id] = view
+
+    if is_blackjack(view.player) or is_blackjack(view.dealer):
+        view.message = await interaction.edit_original_response(embed=view.build_embed())
+        await view.finish(interaction.edit_original_response, blackjack_outcome(view.player, view.dealer))
+    else:
+        view.message = await interaction.edit_original_response(embed=view.build_embed(), view=view)
+
+@gamble_group.command(name="규칙", description="📖 카지노 규칙·배당표와 나의 도박 기록을 확인합니다.")
+async def gamble_rules(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+
+    s = get_title_blob(get_user_data(interaction.user.id))["stats"]
+    paytable = "\n".join(f"{e}{e}{e} → **x{m}**" for e, _, m in SLOT_SYMBOLS)
+    net = s["gamble_net"]
+
+    embed = discord.Embed(
+        title="📖 [칼렌데 카지노 규칙]",
+        description=f"💵 베팅 한도: **${GAMBLE_MIN_BET:,} ~ ${GAMBLE_MAX_BET:,}** · 베팅 간격 {GAMBLE_COOLDOWN}초\n"
+                    f"⚠️ 도박은 평균적으로 자금이 줄어듭니다. 감옥에서는 이용할 수 없습니다.",
+        color=discord.Color.dark_gold()
+    )
+    embed.add_field(
+        name="🎰 `/도박 슬롯`",
+        value=f"{paytable}\n같은 그림 **2개** → 베팅금 반환 / 모두 다르면 꽝\n📊 환수율 약 **{slot_rtp() * 100:.1f}%**",
+        inline=False
+    )
+    embed.add_field(name="🪙 `/도박 동전`", value=f"앞면/뒷면 중 선택 · 적중 시 **2배** (승률 **{COIN_WIN_RATE * 100:.0f}%**)", inline=False)
+    embed.add_field(
+        name="🃏 `/도박 블랙잭`",
+        value="21에 가까운 쪽이 승리 (21 초과 시 버스트)\n승리 **2배** · 블랙잭(처음 2장 21) **2.5배** · 무승부 베팅금 반환\n딜러는 16 이하 히트 / 17 이상 스탠드 · 60초 내 미선택 시 패배",
+        inline=False
+    )
+    embed.add_field(
+        name="📊 나의 도박 기록",
+        value=f"총 `{s['gamble_played']}`판 / 승리 `{s['gamble_won']}`판 / 누적 베팅 `${s['gamble_wagered']:,}`\n누적 손익 `{fmt_net(net)}` / 잭팟 `{s['jackpot']}`회",
+        inline=False
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# 쿨타임 관리를 위한 사전
+duel_cooldowns = {}
+npc_cooldowns = {}
+
+# === ⚔️ 턴제 PVP 결투 시스템 (버튼 선택형) ===
+class DuelBattleView(discord.ui.View):
+    def __init__(self, challenger: discord.Member, target: discord.Member, bet: int, c_stats: dict, t_stats: dict):
+        super().__init__(timeout=30)
+        self.challenger = challenger
+        self.target = target
+        self.bet = bet
+        
+        # 스탯 및 전투 데이터 초기화
+        self.players = {
+            challenger.id: {"member": challenger, "hp": c_stats["hp"], "max_hp": c_stats["hp"], "atk": c_stats["atk"], "def": c_stats["def"], "guard": False},
+            target.id: {"member": target, "hp": t_stats["hp"], "max_hp": t_stats["hp"], "atk": t_stats["atk"], "def": t_stats["def"], "guard": False}
+        }
+        
+        self.current_turn_id = challenger.id  # 도전자부터 시작
+        self.turn_count = 1
+        self.logs = [f"⚔️ {challenger.display_name} 님과 {target.display_name} 님의 결투가 시작되었습니다!"]
+        self.message = None
+        self.winner = None
+
+    def get_embed(self) -> discord.Embed:
+        c_p = self.players[self.challenger.id]
+        t_p = self.players[self.target.id]
+        
+        current_turn_user = self.players[self.current_turn_id]["member"]
+
+        embed = discord.Embed(
+            title=f"⚔️ [패밀리 결투 아레나] 턴 {self.turn_count}",
+            description=f"현재 차례: **{current_turn_user.mention}** 님의 행동을 기다리는 중... (제한 시간 30초)",
+            color=discord.Color.dark_red()
+        )
+
+        embed.add_field(
+            name=f"🧑 {c_p['member'].display_name}",
+            value=f"❤️ 체력 : {c_p['hp']} / {c_p['max_hp']}\n⚔️ 공격력 : {c_p['atk']}\n🛡️ 방어력 : {c_p['def']}",
+            inline=True
+        )
+        embed.add_field(
+            name=f"🧑 {t_p['member'].display_name}",
+            value=f"❤️ 체력 : {t_p['hp']} / {t_p['max_hp']}\n⚔️ 공격력 : {t_p['atk']}\n🛡️ 방어력 : {t_p['def']}",
+            inline=True
+        )
+
+        log_text = "\n".join(self.logs[-6:])  # 최근 로그 6개만 표시
+        embed.add_field(
+            name="📜 전투 현황 로그",
+            value=f"```diff\n{log_text}\n```",
+            inline=False
+        )
+        return embed
+
+    async def process_action(self, interaction: discord.Interaction, action_type: str):
+        if interaction.user.id != self.current_turn_id:
+            await interaction.response.send_message("❌ 지금은 당신의 차례가 아닙니다!", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        attacker_id = self.current_turn_id
+        defender_id = self.target.id if attacker_id == self.challenger.id else self.challenger.id
+        
+        att = self.players[attacker_id]
+        defn = self.players[defender_id]
+
+        # 방어 상태 초기화
+        att["guard"] = False
+
+        if action_type == "attack":
+            # 기본 공격 계산
+            damage = max(10, att["atk"] - (defn["def"] * 2 if defn["guard"] else defn["def"]) + random.randint(-15, 15))
+            if defn["guard"]:
+                damage = int(damage * 0.5)  # 방어 중이면 50% 경감
+                self.logs.append(f"+ {defn['member'].display_name}이(가) 방어 자세를 취해 피해를 줄였습니다!")
+            
+            defn["hp"] = max(0, defn["hp"] - damage)
+            self.logs.append(f"+ {att['member'].display_name}의 공격! {defn['member'].display_name}의 체력 - {damage}")
+
+        elif action_type == "guard":
+            att["guard"] = True
+            self.logs.append(f"+ {att['member'].display_name}이(가) 단단히 방어 태세를 갖췄습니다. (다음 피격 대미지 50% 감소)")
+
+        # 승리 조건 체크
+        if defn["hp"] <= 0:
+            self.winner = att["member"]
+            await self.end_battle(interaction)
+            return
+
+        # 턴 넘기기
+        self.current_turn_id = defender_id
+        if self.current_turn_id == self.challenger.id:
+            self.turn_count += 1
+
+        await self.message.edit(embed=self.get_embed(), view=self)
+
+    @discord.ui.button(label="⚔️ 공격하기", style=discord.ButtonStyle.danger)
+    async def attack_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_action(interaction, "attack")
+
+    @discord.ui.button(label="🛡️ 방어하기", style=discord.ButtonStyle.primary)
+    async def guard_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_action(interaction, "guard")
+
+    async def end_battle(self, interaction: discord.Interaction):
+        self.stop()
+        
+        loser = self.target if self.winner == self.challenger else self.challenger
+        w_stats = get_user_data(self.winner.id)
+        l_stats = get_user_data(loser.id)
+
+        new_w_honor = w_stats["honor"] + self.bet
+        new_l_honor = max(0, l_stats["honor"] - self.bet)
+
+        try:
+            _require_db()
+            supabase.table("user_data").update({"honor": new_w_honor}).eq("user_id", str(self.winner.id)).execute()
+            supabase.table("user_data").update({"honor": new_l_honor}).eq("user_id", str(loser.id)).execute()
+        except Exception as e:
+            print(f"DB Error (turn duel end): {e}")
+
+        embed = discord.Embed(
+            title="🏆 [결투 종료: 승패 결정]",
+            description=f"⚔️ 피비린내 나는 공방 끝에 **{self.winner.mention}** 님이 승리했습니다!\n\n"
+                        f"📈 **명예 변동:**\n"
+                        f"• {self.winner.mention} `+{self.bet} pt` (총 {new_w_honor} pt)\n"
+                        f"• {loser.mention} `-{self.bet} pt` (총 {new_l_honor} pt)",
+            color=discord.Color.gold()
+        )
+        log_text = "\n".join(self.logs[-8:])
+        embed.add_field(name="📜 최종 전투 기록", value=f"```diff\n{log_text}\n```", inline=False)
+
+        if self.winner.avatar:
+            embed.set_thumbnail(url=self.winner.avatar.url)
+
+        for child in self.children:
+            child.disabled = True
+
+        await interaction.edit_original_response(embed=embed, view=self)
+
+    async def on_timeout(self):
+        if self.winner:
+            return
+        # 시간 초과 시 먼저 누른 사람의 승리 처리 혹은 무승부 처리
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(content="⌛ 결투 시간이 초과되어 무승부로 종료되었습니다.", view=self)
+            except:
+                pass
+
+
+# === /결투 슬래시 명령어 ===
+duel_cooldowns = {}
+npc_cooldowns = {}
+
+@bot.tree.command(name="결투", description="[조직원 전용] 버튼을 눌러 턴제로 진행하는 1:1 결투를 신청합니다.")
+@app_commands.describe(member="결투를 신청할 상대 조직원", 베팅명예="걸고 싸울 명예 포인트 (기본 10pt)")
+async def duel_member(interaction: discord.Interaction, member: discord.Member, 베팅명예: int = 10):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+
+    if member.id == user.id:
+        await interaction.response.send_message("❌ 자기 자신과는 결투할 수 없습니다!", ephemeral=True)
+        return
+    if member.bot:
+        await interaction.response.send_message("❌ 봇과는 결투할 수 없습니다.", ephemeral=True)
+        return
+
+    now = datetime.now()
+    if user.id in duel_cooldowns:
+        remaining = int((duel_cooldowns[user.id] - now).total_seconds())
+        if remaining > 0:
+            await interaction.response.send_message(f"⏳ 결투 여파로 지쳐 있습니다. **{remaining}초** 뒤에 다시 도전할 수 있습니다.", ephemeral=True)
+            return
+
+    duel_cooldowns[user.id] = now + timedelta(seconds=30)
+
+    mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
+    if not mafia_role or mafia_role not in member.roles:
+        await interaction.response.send_message(f"⚠️ {member.mention} 님은 조직원이 아니므로 결투할 수 없습니다.", ephemeral=True)
+        return
+
+    if member.id in jail_list and now < jail_list[member.id]:
+        await interaction.response.send_message(f"❌ {member.mention} 님은 현재 감옥에 수감 중이어서 결투할 수 없습니다.", ephemeral=True)
+        return
+
+    user_stats = get_user_data(user.id)
+    target_stats = get_user_data(member.id)
+
+    if user_stats["honor"] < 베팅명예:
+        await interaction.response.send_message(f"❌ 보유한 명예 포인트가 부족합니다! (현재 명예: {user_stats['honor']} pt)", ephemeral=True)
+        return
+    if target_stats["honor"] < 베팅명예:
+        await interaction.response.send_message(f"❌ 상대방의 명예 포인트가 부족하여 해당 금액으로 결투할 수 없습니다.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    # 장비 스탯 계산 함수
+    def get_combat_stats(inventory: dict, base_honor: int):
+        hp = 1000 + (base_honor * 5)
+        atk = 100 + int(base_honor * 0.5)
+        def_val = 10
+        
+        if "👊🏻 슈퍼 울트라 주먹" in inventory: atk += 500; hp += 2000
+        elif "💉 수상한 주사기" in inventory: atk += 300; hp += 1000
+        elif "🏏 몽둥이" in inventory: atk += 200
+        elif "🔫 권총" in inventory: atk += 150
+        elif "🗡️ 단검" in inventory: atk += 80
+
+        if "🎟️ 임무 실패 방지권" in inventory: def_val += 20
+        if "🪪 치안국 위조 신분증" in inventory: def_val += 15
+        
+        return {"hp": hp, "atk": atk, "def": def_val}
+
+    c_stats = get_combat_stats(user_stats.get("inventory", {}), user_stats["honor"])
+    t_stats = get_combat_stats(target_stats.get("inventory", {}), target_stats["honor"])
+
+    view = DuelBattleView(challenger=user, target=member, bet=베팅명예, c_stats=c_stats, t_stats=t_stats)
+    embed = view.get_embed()
+
+    msg = await interaction.followup.send(embed=embed, view=view)
+    view.message = msg
+    
+class WeaponShopSelect(discord.ui.Select):
+    def __init__(self, owner: discord.Member):
+        self.owner = owner
+        options = [
+            discord.SelectOption(
+                label=item["name"],
+                description=f"가격: ${item['price']:,} | {item['desc']}",
+                value=item["id"]
+            ) for item in WEAPON_SHOP_ITEMS
+        ]
+        super().__init__(placeholder="🛒 구매할 물품을 선택하세요...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        if interaction.user != self.owner:
+            await interaction.followup.send("❌ 다른 사람의 상점 메뉴는 조작할 수 없습니다.", ephemeral=True)
+            return
+
+        user = interaction.user
+        user_stats = get_user_data(user.id)
+        current_money = user_stats.get("money", 0)
+        inventory = user_stats.get("inventory", {})
+
+        target_item = next((item for item in WEAPON_SHOP_ITEMS if item["id"] == self.values[0]), None)
+        if not target_item:
+            await interaction.followup.send("❌ 존재하지 않는 아이템입니다.", ephemeral=True)
+            return
+
+        item_name = target_item["name"]
+        item_price = target_item["price"]
+
+        if current_money < item_price:
+            await interaction.followup.send(f"❌ 자금이 부족합니다! (필요: `${item_price:,}`, 보유: `${current_money:,}`)", ephemeral=True)
+            return
+
+        current_money -= item_price
+        inventory[item_name] = inventory.get(item_name, 0) + 1
+
+        try:
+            _require_db()
+            supabase.table("user_data").update({
+                "money": current_money,
+                "inventory": inventory
+            }).eq("user_id", str(user.id)).execute()
+        except Exception as e:
+            print(f"DB Error (weapon shop buy): {e}")
+            await interaction.followup.send("🚨 구매 처리 중 DB 오류가 발생했습니다.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🛍️ [무기 상점] 구매 완료",
+            description=f"**{user.mention}** 님이 **{item_name}**을(를) 구매하셨습니다!\n\n"
+                        f"💳 **지불 금액:** `${item_price:,}`\n"
+                        f"🏦 **잔여 자금:** `${current_money:,}`\n"
+                        f"🎒 **효과:** `{target_item['desc']}`",
+            color=discord.Color.green()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+class WeaponShopView(discord.ui.View):
+    def __init__(self, owner: discord.Member):
+        super().__init__(timeout=60)
+        self.add_item(WeaponShopSelect(owner))
+
+# === 1. 셀프 가입 버튼 뷰 ===
+class SelfJoinView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🔫 마피아 조직 입단", style=discord.ButtonStyle.danger, custom_id="join_mafia_btn")
+    async def join_mafia(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_join(interaction, target_role_name="조직원", rank_title="마피아 조직원")
+
+    @discord.ui.button(label="🚔 치안국 경찰 임용", style=discord.ButtonStyle.primary, custom_id="join_police_btn")
+    async def join_police(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_join(interaction, target_role_name="경찰", rank_title="순경")
+
+    async def process_join(self, interaction: discord.Interaction, target_role_name: str, rank_title: str):
+        if MAINTENANCE_MODE and not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("🛠️ 현재 점검 중입니다.", ephemeral=True)
+            return
+
+        user = interaction.user
+        citizen_role = discord.utils.get(interaction.guild.roles, name="시민")
+        target_role = discord.utils.get(interaction.guild.roles, name=target_role_name)
+        
+        if not target_role:
+            await interaction.response.send_message(f"❌ 서버에 '{target_role_name}' 역할이 없습니다! 관리자에게 문의하세요.", ephemeral=True)
+            return
+
+        mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
+        police_role = discord.utils.get(interaction.guild.roles, name="경찰")
+
+        if (mafia_role and mafia_role in user.roles) or (police_role and police_role in user.roles):
+            await interaction.response.send_message("⚠️ 당신은 이미 소속(마피아 또는 경찰)이 결정되었습니다!", ephemeral=True)
+            return
+
+        try:
+            if citizen_role and citizen_role in user.roles:
+                await user.remove_roles(citizen_role)
+            await user.add_roles(target_role)
+        except discord.Forbidden:
+            await interaction.response.send_message("🚨 봇의 역할 권한 순서를 올려주세요.", ephemeral=True)
+            return
+
+        user_stats = get_user_data(user.id)
+
+        embed = discord.Embed(
+            title=f"📜 [{rank_title} 발령/입단]",
+            description=f"**{user.mention}** 님이 시민의 삶을 마치고 **{target_role_name}**(으)로 새로운 활동을 시작합니다!\n\n"
+                        f"🏷️ **신분 변화:** `시민` ➔ `{target_role_name}`",
+            color=discord.Color.gold()
+        )
+        if user.avatar:
+            embed.set_thumbnail(url=user.avatar.url)
+
+        await interaction.response.send_message(embed=embed)
+
+# === 2. 탈퇴 확인/취소 버튼 뷰 ===
+class LeaveConfirmView(discord.ui.View):
+    def __init__(self, target_user: discord.Member):
+        super().__init__(timeout=60)
+        self.target_user = target_user
+
+    @discord.ui.button(label="네, 탈퇴하겠습니다", style=discord.ButtonStyle.danger, custom_id="confirm_leave")
+    async def confirm_leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.target_user:
+            await interaction.response.send_message("❌ 본인의 탈퇴 확인 창만 조작할 수 있습니다.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        member = interaction.user
+        mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
+        police_role = discord.utils.get(interaction.guild.roles, name="경찰")
+        citizen_role = discord.utils.get(interaction.guild.roles, name="시민")
+
+        try:
+            if mafia_role and mafia_role in member.roles:
+                await member.remove_roles(mafia_role)
+            if police_role and police_role in member.roles:
+                await member.remove_roles(police_role)
+                
+            if citizen_role and citizen_role not in member.roles:
+                await member.add_roles(citizen_role)
+        except discord.Forbidden:
+            await interaction.followup.send("🚨 역할 변경 권한이 없습니다.", ephemeral=True)
+            return
+
+        try:
+            delete_user_data(member.id)
+        except Exception:
+            pass
+
+        mission_cooldowns.pop(member.id, None)
+        parttime_cooldowns.pop(member.id, None)
+        gamble_cooldowns.pop(member.id, None)
+        open_table = active_blackjack.pop(member.id, None)
+        if open_table:
+            open_table.finished = True
+            open_table.stop()
+
+        for child in self.children:
+            child.disabled = True
+
+        embed = discord.Embed(
+            title="💥 [소속 해임 및 세이브 데이터 초기화]",
+            description=(
+                f"**{member.mention}** 님이 소속을 최종 탈퇴하셨습니다.\n\n"
+                f"⚠️ **초기화 완료:** 모든 보유 자금, 명예, 인벤토리 아이템 및 기록이 DB에서 완전히 삭제되었습니다.\n"
+                f"🏷️ **신분 변화:** `마피아/경찰` ➔ `시민`"
+            ),
+            color=discord.Color.dark_gray()
+        )
+        if member.avatar:
+            embed.set_thumbnail(url=member.avatar.url)
+
+        await interaction.edit_original_response(embed=embed, view=self)
+
+    @discord.ui.button(label="취소 (소속 잔류)", style=discord.ButtonStyle.secondary, custom_id="cancel_leave")
+    async def cancel_leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.target_user:
+            await interaction.response.send_message("❌ 본인의 탈퇴 확인 창만 조작할 수 있습니다.", ephemeral=True)
+            return
+
+        for child in self.children:
+            child.disabled = True
+
+        embed = discord.Embed(
+            title="🛡️ [탈퇴 철회]",
+            description="탈퇴 신청이 취소되었습니다.",
+            color=discord.Color.blue()
+        )
+        await interaction.edit_original_response(embed=embed, view=self)
+
+# === 3. 임무 선택 뷰 ===
+class MissionSelect(discord.ui.Select):
+    def __init__(self, owner: discord.Member):
+        self.owner = owner
+        options = [
+            discord.SelectOption(label="타 조직 구역 비밀 조사", description="난이도: 하 | 보상: $300~$700 / 명예 +10pt", emoji="🕶️", value="mission_1"),
+            discord.SelectOption(label="밀수품 비밀 운송 작업", description="난이도: 중 | 보상: $600~$1,500 / 명예 +25pt", emoji="💼", value="mission_2"),
+            discord.SelectOption(label="라이벌 보스의 장부 탈취", description="난이도: 상 | 보상: $1,500~$3,500 / 명예 +50pt", emoji="🏛️", value="mission_3"),
+            discord.SelectOption(label="기밀 문서 야간 밀반출", description="난이도: 중상 | 보상: $1,200~$2,500 / 명예 +35pt", emoji="📁", value="mission_4"),
+            discord.SelectOption(label="중앙 은행 호송 차량 습격", description="난이도: 최상 | 보상: $3,000~$6,000 / 명예 +80pt", emoji="💰", value="mission_5"),
+        ]
+        super().__init__(placeholder="🎯 수행할 비밀 임무를 선택하세요...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+        if interaction.user != self.owner:
+            await interaction.followup.send("❌ 타인의 임무 선택 창은 조작할 수 없습니다.", ephemeral=True)
+            return
+
+        user = interaction.user
+        user_stats = get_user_data(user.id)
+        old_rank = get_user_rank(user_stats.get("honor", 0))
+        inventory = user_stats.get("inventory", {})
+
+        now = datetime.now()
+        if user.id in mission_cooldowns:
+            next_available = mission_cooldowns[user.id]
+            if now < next_available:
+                remaining = int((next_available - now).total_seconds())
+                await interaction.edit_original_response(view=MissionView(owner=self.owner))
+                await interaction.followup.send(f"⏳ 체력을 회복 중입니다. **{remaining}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
+                return
+
+        cooldown_seconds = 10
+        if "⏱️ 고급 크로노그래프 시계" in inventory or "🛵 통신용 특수 바이크" in inventory:
+            cooldown_seconds = 5
+
+        mission_cooldowns[user.id] = now + timedelta(seconds=cooldown_seconds)
+
+        mission_data = {
+            "mission_1": {"title": "🕶️ 타 조직 구역 비밀 조사", "success_rate": 70, "reward": (300, 700), "honor": 10},
+            "mission_2": {"title": "💼 밀수품 비밀 운송 작업", "success_rate": 50, "reward": (600, 1500), "honor": 25},
+            "mission_3": {"title": "🏛️ 라이벌 보스의 장부 탈취", "success_rate": 30, "reward": (1500, 3500), "honor": 50},
+            "mission_4": {"title": "📁 기밀 문서 야간 밀반출", "success_rate": 40, "reward": (1200, 2500), "honor": 35},
+            "mission_5": {"title": "💰 중앙 은행 호송 차량 습격", "success_rate": 10, "reward": (3000, 6000), "honor": 80},
+        }
+
+        selected = mission_data[self.values[0]]
+        current_loc = user_stats.get("location", "레벤하임")
+
+        success_bonus = 0
+        money_mult = 1.0
+        honor_mult = 1.0
+        active_buffs = []
+
+        if "🔑 녹슨 락픽 세트" in inventory:
+            success_bonus += 10
+            active_buffs.append("🔑 락픽 (+10%)")
+        if "🥷 익명의 덮개" in inventory:
+            success_bonus += 10
+            active_buffs.append("🥷 덮개 (+10%)")
+        if "🗡️ 암시장 야시경" in inventory:
+            success_bonus += 15
+            active_buffs.append("🗡️ 야시경 (+15%)")
+        if "🗺️ 해적 비밀 항해 지도" in inventory:
+            success_bonus += 20
+            active_buffs.append("🗺️ 항해 지도 (+20%)")
+        if "📻 해상 무전 도청기" in inventory:
+            success_bonus += 15
+            money_mult += 0.10
+            active_buffs.append("📻 도청기 (+15% 성공률 & +10% 자금)")
+        if "🥊 강화 작업용 장갑" in inventory:
+            money_mult += 0.15
+            active_buffs.append("🥊 장갑 (+15% 자금)")
+        if "🍾 밀수된 고급 양주" in inventory:
+            honor_mult += 1.0
+            active_buffs.append("🍾 양주 (명예 2배)")
+
+        final_success_rate = min(98, selected["success_rate"] + success_bonus)
+        is_success = random.randint(1, 100) <= final_success_rate
+        buff_desc = f"\n✨ **적용된 보너스:** {', '.join(active_buffs)}" if active_buffs else ""
+
+        current_money = user_stats.get("money", 0)
+        current_honor = user_stats.get("honor", 0)
+        
+        fail_msg = ""
+        rank_up_msg = ""
+
+        blob = get_title_blob(user_stats)
+        s = blob["stats"]
+
+        if is_success:
+            base_money = random.randint(*selected["reward"])
+            earned_money = int(base_money * money_mult)
+            earned_honor = int(selected["honor"] * honor_mult)
+            
+            current_money += earned_money
+            current_honor += earned_honor
+
+            s["success"] += 1
+            s["streak"] += 1
+            s["best_streak"] = max(s["best_streak"], s["streak"])
+            if self.values[0] in ("mission_3", "mission_5"):
+                s["hard_success"] += 1
+
+            new_rank = get_user_rank(current_honor)
+            if old_rank != new_rank:
+                rank_up_msg = f"\n\n🎉 **[조직 승급 축하]** **{old_rank}** ➔ **{new_rank}**(으)로 승급하셨습니다!"
+
+            new_title_ids = evaluate_new_titles(blob, {**user_stats, "money": current_money, "honor": current_honor})
+            rank_up_msg += format_new_titles(new_title_ids)
+
+            embed = discord.Embed(
+                title=f"🎯 [{current_loc}] 임무 성공",
+                description=f"**{user.mention}** 님이 작전을 완벽하게 완수했습니다!{buff_desc}\n\n"
+                            f"📌 **작전명:** {selected['title']}\n"
+                            f"💰 **획득 보상금:** `${earned_money:,}`\n"
+                            f"🏆 **획득 명예:** `+{earned_honor} pt`\n\n"
+                            f"🗡️ **현재 직급:** `{new_rank}`\n"
+                            f"🏦 **보유 자금:** `${current_money:,}`\n"
+                            f"🏅 **총 명예:** `{current_honor} pt`{rank_up_msg}",
+                color=discord.Color.green()
+            )
+        else:
+            settings = user_stats.get("settings", {"auto_fail_guard": True})
+            guard_item_key = "🎟️ 임무 실패 방지권"
+            guard_used = False
+
+            if settings.get("auto_fail_guard", True) and inventory.get(guard_item_key, 0) > 0:
+                inventory[guard_item_key] -= 1
+                if inventory[guard_item_key] <= 0:
+                    del inventory[guard_item_key]
+                guard_used = True
+
+            if guard_used:
+                fail_msg = "🛡️ **[실패 방지권 발동]** 임무에 실패했으나, 가방에 있던 **🎟️ 임무 실패 방지권**이 소모되어 수배 및 패널티가 면제되었습니다!"
+            else:
+                wanted_list[user.id] = datetime.now() + timedelta(seconds=60)
+                if "🪪 치안국 위조 신분증" in inventory:
+                    fail_msg = "⚠️ 임무에 실패했으나 **🪪 치안국 위조 신분증** 덕분에 지명수배를 면했습니다!"
+                    wanted_list.pop(user.id, None)
+                else:
+                    fail_msg = "🚨 **작전 실패!** 현장에 흔적이 남아 **1분간 경찰 지명수배 상태**가 됩니다!"
+
+            s["fail"] += 1
+            s["streak"] = 0
+            new_title_ids = evaluate_new_titles(blob, user_stats)
+
+            current_rank = get_user_rank(current_honor)
+            embed = discord.Embed(
+                title=f"💥 [{current_loc}] 임무 실패",
+                description=f"**{user.mention}** 님이 작전 도중 문제가 발생했습니다!{buff_desc}\n\n"
+                            f"📌 **작전명:** {selected['title']}\n"
+                            f"{fail_msg}\n\n"
+                            f"🗡️ **현재 직급:** `{current_rank}`\n"
+                            f"🏦 **보유 자금:** `${current_money:,}`\n"
+                            f"🏅 **총 명예:** `{current_honor} pt`{format_new_titles(new_title_ids)}",
+                color=discord.Color.red()
+            )
+
+        try:
+            _require_db()
+            supabase.table("user_data").update({
+                "money": current_money,
+                "honor": current_honor,
+                "inventory": inventory,
+                "data": blob
+            }).eq("user_id", str(user.id)).execute()
+        except Exception as e:
+            print(f"DB Error (mission update): {e}")
+            await interaction.followup.send("🚨 DB 저장 중 오류가 발생했습니다.", ephemeral=True)
+            return
+
+        if user.avatar:
+            embed.set_thumbnail(url=user.avatar.url)
+
+        await interaction.edit_original_response(embed=embed, view=None)
+
+class MissionView(discord.ui.View):
+    def __init__(self, owner: discord.Member):
+        super().__init__(timeout=180)
+        self.add_item(MissionSelect(owner=owner))
+
+# === 4. 암시장 드롭다운 뷰 ===
+class MarketSelect(discord.ui.Select):
+    def __init__(self, owner: discord.Member, location: str):
+        self.owner = owner
+        self.location = location
+        items = BLACK_MARKET_ITEMS.get(location, [])
+        options = [discord.SelectOption(label=f"{i['name']} (${i['price']:,})", description=i['desc'], emoji=i['emoji'], value=i['id']) for i in items]
+        super().__init__(placeholder=f"🛒 {location} 암시장 상품을 선택하세요...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user != self.owner:
+            await interaction.response.send_message("❌ 타인의 거래 창은 조작할 수 없습니다.", ephemeral=True)
+            return
+
+        selected_id = self.values[0]
+        items = BLACK_MARKET_ITEMS.get(self.location, [])
+        target_item = next((item for item in items if item['id'] == selected_id), None)
+
+        if not target_item:
+            await interaction.response.send_message("❌ 존재하지 않는 아이템입니다.", ephemeral=True)
+            return
+
+        user_info = get_user_data(interaction.user.id)
+        old_rank = get_user_rank(user_info.get("honor", 0))
+        inventory = user_info.get("inventory", {})
+        item_name = f"{target_item['emoji']} {target_item['name']}"
+        special_effect_text = f"\n✨ **특수 효과:** {target_item['desc']}"
+
+        if inventory.get(item_name, 0) >= 1:
+            await interaction.response.send_message("⚠️ 이미 소지 중인 장비입니다.", ephemeral=True)
+            return
+
+        if user_info["money"] < target_item["price"]:
+            await interaction.response.send_message("❌ 자금이 부족합니다!", ephemeral=True)
+            return
+
+        new_money = user_info["money"] - target_item["price"]
+        new_honor = user_info["honor"]
+        inventory[item_name] = 1
+
+        update_user_market_purchase(interaction.user.id, new_money, new_honor, inventory)
+
+        new_rank = get_user_rank(new_honor)
+        rank_up_msg = ""
+        if old_rank != new_rank:
+            rank_up_msg = f"\n🎉 **[조직 승급]** **{new_rank}**(으)로 승급하셨습니다!"
+
+        embed = discord.Embed(
+            title="💰 [암시장 거래 성사]",
+            description=f"**{interaction.user.mention}** 님이 **{item_name}**을(를) 구매했습니다!{special_effect_text}{rank_up_msg}\n\n"
+                        f"🏦 **남은 자금:** `${new_money:,}`\n"
+                        f"🏆 **현재 명예:** `{new_honor} pt`",
+            color=discord.Color.gold()
+        )
+        if interaction.user.avatar:
+            embed.set_thumbnail(url=interaction.user.avatar.url)
+
+        await interaction.response.edit_message(embed=embed, view=None)
+
+class MarketView(discord.ui.View):
+    def __init__(self, owner: discord.Member, location: str):
+        super().__init__(timeout=60)
+        self.add_item(MarketSelect(owner=owner, location=location))
+
+# === 명령어 목록 ===
+@bot.tree.command(name="가입", description="[마피아 GM] 패밀리 가입 버튼을 소환합니다.")
+async def join_family(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    embed = discord.Embed(title="📜 [패밀리 입단 안내]", description="아래 버튼을 눌러 패밀리에 합류하세요.", color=discord.Color.gold())
+    await interaction.response.send_message(embed=embed, view=SelfJoinView())
+
+@bot.tree.command(name="탈퇴", description="[마피아 GM] 패밀리 탈퇴 절차를 진행합니다.")
+async def leave_family(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+    embed = discord.Embed(title="⚠️ [패밀리 탈퇴 경고]", description=f"**{user.mention}**님, 정말로 탈퇴하시겠습니까? (모든 기록이 초기화됩니다)", color=discord.Color.red())
+    await interaction.response.send_message(embed=embed, view=LeaveConfirmView(target_user=user), ephemeral=True)
+
+@bot.tree.command(name="임무", description="[조직원 전용] 원하는 비밀 임무를 직접 선택하여 수행합니다.")
+async def execute_mission(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+    await interaction.response.defer()
+
+    user = interaction.user
+    user_stats = get_user_data(user.id)
+    current_loc = user_stats.get("location", "레벤하임")
+
+    now = datetime.now()
+    cooldown_notice = ""
+    
+    if user.id in mission_cooldowns:
+        next_available = mission_cooldowns[user.id]
+        if now < next_available:
+            remaining = int((next_available - now).total_seconds()) + 1
+            cooldown_notice = f"⏳ **현재 체력을 회복 중입니다. (남은 쿨타임: {remaining}초)**\n\n"
+
+    embed = discord.Embed(
+        title=f"📂 [{current_loc}] 비밀 임무 작전 하달",
+        description=cooldown_notice + f"**{user.mention}** 님, 수행할 작전을 선택해 주십시오.",
+        color=discord.Color.dark_purple()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+
+    await interaction.followup.send(embed=embed, view=MissionView(owner=user))
+
+# === 🪪 [공용] `/프로필` 명령어 (이미지 증명서 - 아날로그 종이 테마) ===
+# 필요한 파일(봇 파일과 같은 폴더 또는 assets 폴더): paper_background.jpg, font_1.ttf (또는 font_fallback.otf)
+PROFILE_BG_NAMES = ("paper_background.jpg",)
+PROFILE_FONT_NAMES = ("font_1.ttf", "font.ttf", "font_fallback.otf")   # 앞에서부터 시도, 안 되면 다음 폰트
+PROFILE_AREA = (70, 60, 468, 330)      # 배경(543x394) 안쪽 점선 테두리 안에서 글씨를 쓸 영역 (x1, y1, x2, y2)
+PROFILE_SCALE = 2                      # 배경이 작아서 2배로 키워 그림 (글씨가 선명해짐)
+PROFILE_INK = (60, 40, 20)             # 짙은 세피아 잉크색
+PROFILE_MUTED = (125, 98, 66)          # 라벨·하단 문구용 옅은 갈색
+PROFILE_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _asset_paths(names):
+    """봇 폴더 → assets 폴더 순서로 실제 존재하는 파일 경로를 하나씩 반환"""
+    for folder in (PROFILE_BASE_DIR, os.path.join(PROFILE_BASE_DIR, "assets")):
+        for name in names:
+            path = os.path.join(folder, name)
+            if os.path.isfile(path):
+                yield path
+
+def _draws_hangul(font, size: int) -> bool:
+    """폰트가 한글을 실제로 그리는지 확인 (한글이 없으면 '가'와 '힣'이 똑같은 빈칸 모양으로 나옴)"""
+    def glyph(ch):
+        img = Image.new("L", (size * 2, size * 2), 0)
+        ImageDraw.Draw(img).text((size // 4, size // 4), ch, fill=255, font=font)
+        return img.tobytes()
+    return glyph("가") != glyph("힣")
+
+@lru_cache(maxsize=1)
+def _profile_font_path():
+    """한글이 실제로 그려지는 첫 번째 폰트 파일 (손상된 파일/한글 없는 폰트는 건너뜀). 처음 한 번만 검사"""
+    for path in _asset_paths(PROFILE_FONT_NAMES):
+        try:
+            if _draws_hangul(ImageFont.truetype(path, 40), 40):
+                return path
+            print(f"⚠️ 한글 글자가 없는 폰트라 건너뜁니다: {path}")
+        except OSError:
+            print(f"⚠️ 폰트를 불러올 수 없어 건너뜁니다 (파일 손상?): {path}")
+    print("🚨 사용 가능한 한글 폰트가 없습니다! font_1.ttf 또는 font_fallback.otf 를 봇 폴더에 넣어주세요.")
+    return None
+
+@lru_cache(maxsize=None)
+def _profile_font(size: int):
+    path = _profile_font_path()
+    return ImageFont.truetype(path, size) if path else ImageFont.load_default(size)
+
+def _clean_text(text) -> str:
+    """이미지 폰트로 그릴 수 없는 이모지·기호 제거 (예: '🌱 깡패' -> '깡패')"""
+    return "".join(
+        c for c in str(text)
+        if unicodedata.category(c) not in ("So", "Sk", "Cf", "Cs", "Co", "Cn") and c != "\ufe0f"
+    ).strip()
+
+def _fit_text(draw, text: str, font, max_width: int) -> str:
+    """글자가 칸을 넘으면 '…' 로 줄임"""
+    if draw.textlength(text, font=font) <= max_width:
+        return text
+    while text and draw.textlength(text + "…", font=font) > max_width:
+        text = text[:-1]
+    return text + "…"
+
+async def _load_avatar(member: discord.Member, size: int = 190) -> Image.Image:
+    """프로필 사진을 가져와 오래된 증명사진처럼 세피아 톤으로 변환 (실패하면 빈 사진)"""
+    try:
+        data = await member.display_avatar.replace(size=256, static_format="png").read()
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception as e:
+        print(f"Avatar load error: {e}")
+        img = Image.new("RGB", (256, 256), (185, 172, 150))
+    img = img.resize((size, size), Image.Resampling.LANCZOS)
+    return ImageOps.colorize(ImageOps.grayscale(img), black=(35, 22, 10), white=(238, 224, 196))
+
+def make_profile_image(kind: str, rows: list, user_id: int, avatar: Image.Image) -> io.BytesIO:
+    """증명서 이미지를 그려서 PNG 바이트로 반환. kind: police / mafia / citizen"""
+    S = PROFILE_SCALE
+    path = next(_asset_paths(PROFILE_BG_NAMES), None)
+    if path:
+        paper = Image.open(path).convert("RGBA")
+        paper = paper.resize((paper.width * S, paper.height * S), Image.Resampling.LANCZOS)
+    else:
+        print("⚠️ paper_background.jpg 를 찾을 수 없어 기본 종이색을 사용합니다.")
+        paper = Image.new("RGBA", (543 * S, 394 * S), (234, 228, 205, 255))
+
+    draw = ImageDraw.Draw(paper)
+    x1, y1, x2, y2 = (v * S for v in PROFILE_AREA)
+    cx = (x1 + x2) // 2
+
+    # [1] 제목 + 이중선
+    title = {"police": "치안국 신분증", "mafia": "패밀리 증명서", "citizen": "시민 등록증"}[kind]
+    draw.text((cx, y1 + 8), " ".join(title), fill=PROFILE_INK, font=_profile_font(54), anchor="mt")
+    draw.line((x1 + 30, y1 + 88, x2 - 30, y1 + 88), fill=PROFILE_INK, width=3)
+    draw.line((x1 + 30, y1 + 96, x2 - 30, y1 + 96), fill=PROFILE_INK, width=1)
+    draw.text((x2 - 30, y1 + 108), f"No. {str(user_id)[-6:]}", fill=PROFILE_MUTED, font=_profile_font(24), anchor="ra")
+
+    # [2] 증명사진 (오른쪽)
+    top = y1 + 140
+    photo_x = x2 - 30 - (avatar.width + 12)
+    paper.paste(ImageOps.expand(avatar, border=6, fill=PROFILE_INK), (photo_x, top))
+
+    # [3] 인적 사항 (왼쪽): 라벨 + 값 + 밑줄
+    f_label, f_value = _profile_font(26), _profile_font(34)
+    label_x, value_x = x1 + 30, x1 + 150
+    line_end = photo_x - 30
+    for i, (label, value) in enumerate(rows):
+        y = top + i * 58
+        draw.text((label_x, y + 6), label, fill=PROFILE_MUTED, font=f_label)
+        draw.text((value_x, y), _fit_text(draw, value, f_value, line_end - value_x), fill=PROFILE_INK, font=f_value)
+        draw.line((label_x, y + 50, line_end, y + 50), fill=(170, 145, 110), width=1)
+
+    # [4] 붉은 도장 (사진 아래쪽에 살짝 걸치게)
+    stamp = Image.new("RGBA", (170, 170), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(stamp)
+    red = (170, 40, 40, 210)
+    sd.ellipse((6, 6, 164, 164), outline=red, width=6)
+    sd.ellipse((20, 20, 150, 150), outline=red, width=2)
+    sd.text((85, 85), "승인", fill=red, font=_profile_font(52), anchor="mm")
+    stamp = stamp.rotate(-14, resample=Image.Resampling.BICUBIC)
+    paper.alpha_composite(stamp, (photo_x - 20, top + avatar.height + 12 - 50))
+
+    # [5] 하단 발급 문구
+    footer = f"발급처  패밀리 GM 통합 정보국   ·   발급일  {datetime.now():%Y-%m-%d}"
+    draw.text((cx, y2 - 6), footer, fill=PROFILE_MUTED, font=_profile_font(22), anchor="mb")
+
+    buf = io.BytesIO()
+    paper.convert("RGB").save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+@bot.tree.command(name="프로필", description="[공용] 본인 또는 다른 유저의 아날로그 증명서를 이미지로 발급합니다.")
+@app_commands.describe(member="조회할 유저 (비우면 본인)")
+async def profile_image_command(interaction: discord.Interaction, member: discord.Member = None):
+    if not await check_maintenance(interaction): return
+    await interaction.response.defer()   # 이미지 생성 시간이 걸릴 수 있어 먼저 응답 예약
+
+    target = member or interaction.user
+    data = get_user_data(target.id)
+
+    role_names = {r.name for r in target.roles}
+    kind = "police" if "경찰" in role_names else "mafia" if "조직원" in role_names else "citizen"
+    honor = data.get("honor", 0)
+
+    rows = [
+        ("성 명", _clean_text(target.display_name) or _clean_text(target.name) or "무명"),
+        ("직 급", "시민" if kind == "citizen" else _clean_text(get_user_rank(honor, is_police=(kind == "police")))),
+        ("칭 호", _clean_text(get_equipped_title_name(data))),
+        ("거 점", _clean_text(data.get("location", "레벤하임"))),
+        ("자 금", f"${data.get('money', 0):,}"),
+        ("명 예", f"{honor:,} pt"),
+    ]
+
+    try:
+        avatar = await _load_avatar(target)
+        buf = await asyncio.to_thread(make_profile_image, kind, rows, target.id, avatar)
+    except Exception as e:
+        print(f"Profile image error: {e}")
+        await interaction.followup.send("🚨 증명서를 발급하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
+        return
+
+    await interaction.followup.send(file=discord.File(buf, filename=f"profile_{target.id}.png"))
+
+@bot.tree.command(name="인벤토리", description="[마피아 GM] 소지한 장비를 확인합니다.")
+async def show_inventory(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    user_stats = get_user_data(interaction.user.id)
+    inventory = user_stats.get("inventory", {})
+
+    embed = discord.Embed(title=f"🎒 [{interaction.user.name} 님의 장비 가방]", color=discord.Color.dark_green())
+    inv_list = [f"• **{item}** `[보유 중]`" for item in inventory.keys()] if inventory else ["*가방이 비어 있습니다.*"]
+    embed.add_field(name="📦 보유 중인 전용 장비", value="\n".join(inv_list), inline=False)
+    
+    if interaction.user.avatar:
+        embed.set_thumbnail(url=interaction.user.avatar.url)
+
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="무기상점", description="[조직원 전용] 특수 무기(?)-장비를 판매하는 상점을 엽니다.")
+async def open_weapon_shop(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    await interaction.response.defer()
+
+    user = interaction.user
+    user_stats = get_user_data(user.id)
+    current_money = user_stats.get("money", 0)
+
+    items_desc = "\n".join([
+        f"• **{item['name']}** - `${item['price']:,}`\n  └ *{item['desc']}*"
+        for item in WEAPON_SHOP_ITEMS
+    ])
+
+    embed = discord.Embed(
+        title="🔫 [지하 무기 상점] 비밀 카탈로그",
+        description=f"**{user.mention}** 님, 환영합니다. 결투에 필요한 특수 장비들을 구매할 수 있습니다.\n\n"
+                    f"{items_desc}\n\n"
+                    f"🏦 **현재 보유 자금:** `${current_money:,}`",
+        color=discord.Color.dark_red()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+
+    await interaction.followup.send(embed=embed, view=WeaponShopView(owner=user))
+
+@bot.tree.command(name="이동", description="[마피아 GM] 다른 지역으로 이동합니다.")
+@app_commands.choices(지역=[
+    app_commands.Choice(name="🏛️ 레벤하임 (수도)", value="레벤하임"),
+    app_commands.Choice(name="⚙️ 던베르크 (공업지대)", value="던베르크"),
+    app_commands.Choice(name="🏚️ 블랙워드 (빈민가)", value="블랙워드"),
+    app_commands.Choice(name="⚓ 에르느코항 (항구도시)", value="에르느코항"),
+    app_commands.Choice(name="🍸 로젠펠트 (유흥업소)", value="로젠펠트")
+])
+async def move_location(interaction: discord.Interaction, 지역: app_commands.Choice[str]):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+    selected_loc = 지역.value
+    loc_info = LOCATIONS[selected_loc]
+
+    update_user_location(user.id, selected_loc)
+
+    embed = discord.Embed(
+        title=f"{loc_info['emoji']} [{selected_loc}] (으)로 이동 완료",
+        description=f"**{user.mention}** 님이 성공적으로 도착했습니다.",
+        color=discord.Color.dark_blue()
+    )
+    embed.add_field(name="📜 지역 특징", value=loc_info["desc"], inline=False)
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="암시장", description="[조직원 전용] 암시장에 입장합니다.")
+async def open_market(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+    user_stats = get_user_data(user.id)
+    current_loc = user_stats.get("location", "레벤하임")
+    loc_emoji = LOCATIONS.get(current_loc, {}).get("emoji", "📍")
+    items = BLACK_MARKET_ITEMS.get(current_loc, [])
+
+    item_details = [f"• **{i['emoji']} {i['name']}** (`${i['price']:,}`)\n  └ {i['desc']}" for i in items]
+
+    embed = discord.Embed(
+        title=f"🕵️‍♂️ {loc_emoji} [{current_loc} 비밀 암시장]",
+        description=f"현재 보유 자금: **${user_stats['money']:,}**\n\n📜 **[판매 물품]**\n" + "\n".join(item_details),
+        color=discord.Color.gold()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+
+    await interaction.response.send_message(embed=embed, view=MarketView(owner=user, location=current_loc))
+
+@bot.tree.command(name="추방", description="[간부 전용] 조직원을 추방합니다.")
+@app_commands.describe(member="추방할 조직원", reason="추방 사유")
+async def kick_member(interaction: discord.Interaction, member: discord.Member, reason: str = "규율 위반"):
+    if not await check_maintenance(interaction): return
+
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ 관리자 권한이 필요합니다!", ephemeral=True)
+        return
+
+    role = discord.utils.get(interaction.guild.roles, name="조직원")
+    citizen_role = discord.utils.get(interaction.guild.roles, name="시민")
+    
+    if not role or role not in member.roles:
+        await interaction.response.send_message(f"⚠️ {member.mention} 님은 조직원이 아닙니다.", ephemeral=True)
+        return
+
+    try:
+        await member.remove_roles(role)
+        if citizen_role:
+            await member.add_roles(citizen_role)
+        delete_user_data(member.id)
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title="⚖️ [패밀리 숙청]",
+        description=f"**{member.mention}** 님이 추방되고 모든 기록이 초기화되었습니다.",
+        color=discord.Color.dark_embed()
+    )
+    await interaction.response.send_message(embed=embed)
+
+# === 📖 [공용] 통합 `/정보` 명령어 ===
+@bot.tree.command(name="정보", description="[공용] 특정 명령어 또는 아이템의 상세 정보와 사용법을 검색합니다.")
+@app_commands.describe(keyword="알고 싶은 명령어 또는 아이템 이름 (예: 전투, 송금, 주먹)")
+async def info_command(interaction: discord.Interaction, keyword: str):
+    if not await check_maintenance(interaction): return
+
+    kw = keyword.strip()
+
+    # 1. 명령어 정보 사전
+    command_infos = {
+        "전투": {
+            "title": "⚔️ 명령어: /전투 [npc이름]",
+            "desc": "지정한 NPC와 1:1 턴제 결투를 벌입니다.\n• **특징:** 공격(ATK)과 방어(DEF)를 선택하며 제한 턴(10턴) 내에 처치해야 합니다.\n• **보상:** 승리 시 대량의 자금과 명예 획득",
+        },
+        "송금": {
+            "title": "💸 명령어: /송금 [대상] [금액]",
+            "desc": "보유 중인 자금을 다른 조직원에게 안전하게 양도합니다.\n• **주의:** 자기 자신에게는 보낼 수 없으며, 잔액이 부족하면 송금할 수 없습니다.",
+        },
+        "검거": {
+            "title": "🚨 명령어: /검거 [대상] (경찰 전용)",
+            "desc": "치안국 경찰관이 임무 실패 등으로 지명수배된 마피아를 체포합니다.\n• **효과:** 대상은 감옥에 수감되며, 경찰은 포상금과 실적을 획득합니다.",
+        },
+        "무기상점": {
+            "title": "🛒 명령어: /무기상점",
+            "desc": "전투력을 올려주는 강력한 무기와 장비를 구매하고 인벤토리에 등록합니다.",
+        },
+        "프로필": {
+            "title": "👤 명령어: /프로필",
+            "desc": "자신의 현재 직급, 자금, 명예 점수, 장착된 장비 및 거점 상태를 확인합니다.",
+        }
+    }
+
+    # 2. 아이템 정보 사전
+    item_infos = {
+        "슈퍼 울트라 주먹": {
+            "title": "👊🏻 아이템: 슈퍼 울트라 주먹",
+            "desc": "• **분류:** 무기 (최상급)\n• **효과:** 공격력 대폭 상승 (+500), 최대 체력 증가 (+2,000)\n• **설명:** 패밀리 최고의 파괴력을 자랑하는 전설의 주먹입니다.",
+        },
+        "수상한 주사기": {
+            "title": "💉 아이템: 수상한 주사기",
+            "desc": "• **분류:** 무기 (특수)\n• **효과:** 공격력 상승 (+300), 체력 증가 (+1,000)\n• **설명:** 신체 능력을 극단적으로 끌어올리는 위험한 약물입니다.",
+        },
+        "몽둥이": {
+            "title": "🏏 아이템: 몽둥이",
+            "desc": "• **분류:** 무기 (초급)\n• **효과:** 공격력 상승 (+200)\n• **설명:** 뒷골목 싸움에서 가장 흔하게 쓰이는 든든한 무기입니다.",
+        },
+        "권총": {
+            "title": "🔫 아이템: 권총",
+            "desc": "• **분류:** 무기 (중급)\n• **효과:** 공격력 상승 (+150)\n• **설명:** 원거리에서 적을 위협할 수 있는 표준 화기입니다.",
+        },
+        "단검": {
+            "title": "🗡️ 아이템: 단검",
+            "desc": "• **분류:** 무기 (초급)\n• **효과:** 공격력 상승 (+80)\n• **설명:** 은밀하고 빠르게 적을 제압할 수 있는 날카로운 단검입니다.",
+        },
+        "임무 실패 방지권": {
+            "title": "🎟️ 아이템: 임무 실패 방지권",
+            "desc": "• **분류:** 유틸리티 / 방어구\n• **효과:** 방어력 상승 (+20)\n• **설명:** 위기 상황에서 감옥행을 모면하게 해주는 티켓입니다.",
+        },
+        "치안국 위조 신분증": {
+            "title": "🪪 아이템: 치안국 위조 신분증",
+            "desc": "• **분류:** 유틸리티 / 방어구\n• **효과:** 방어력 상승 (+15)\n• **설명:** 경찰의 눈을 잠시 속일 수 있는 정교한 위조 신분증입니다.",
+        }
+    }
+
+    # 3. 검색 매칭 로직
+    target_info = None
+
+    # 명령어 우선 검색
+    if kw in command_infos:
+        target_info = command_infos[kw]
+    # 아이템 이름 검색
+    elif kw in item_infos:
+        target_info = item_infos[kw]
+    else:
+        # 키워드가 포함된 항목이 있는지 부분 검색 시도
+        for name, data in {**command_infos, **item_infos}.items():
+            if kw in name:
+                target_info = data
+                break
+
+    # 일치하는 정보가 없을 경우
+    if not target_info:
+        available_keys = list(command_infos.keys()) + list(item_infos.keys())
+        keys_str = ", ".join([f"`{k}`" for k in available_keys])
+        
+        await interaction.response.send_message(
+            f"❌ **[{kw}]**에 대한 정보를 찾을 수 없습니다.\n\n"
+            f"💡 **검색 가능한 항목 목록:**\n{keys_str}",
+            ephemeral=True
+        )
+        return
+
+    # 4. 임베드 생성 및 출력
+    embed = discord.Embed(
+        title=target_info["title"],
+        description=target_info["desc"],
+        color=discord.Color.dark_red()
+    )
+    embed.set_footer(text="마피아 RPG 패밀리 GM 통합 정보 시스템")
+
+    if interaction.user.avatar:
+        embed.set_thumbnail(url=interaction.user.avatar.url)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+bot.run(os.getenv("DISCORD_TOKEN"))
