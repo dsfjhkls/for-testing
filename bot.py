@@ -2302,42 +2302,88 @@ async def execute_mission(interaction: discord.Interaction):
 
     await interaction.followup.send(embed=embed, view=MissionView(owner=user))
 
-@bot.tree.command(name="프로필", description="[마피아 GM] 조직원 신원 조회 서류를 확인합니다.")
-async def profile(interaction: discord.Interaction):
+# === 🪪 [공용] `/프로필` 명령어 (증명서/신분증 스타일) ===
+@bot.tree.command(name="프로필", description="[공용] 본인 또는 다른 조직원의 신분증 및 정보 증명서를 확인합니다.")
+@app_commands.describe(member="조회할 조직원 (선택하지 않을 시 본인)")
+async def profile_command(interaction: discord.Interaction, member: discord.Member = None):
     if not await check_maintenance(interaction): return
 
-    user = interaction.user
-    mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
+    target = member or interaction.user
+    user_data = get_user_data(target.id)
+
+    money = user_data.get("money", 0)
+    honor = user_data.get("honor", 0)
+    location = user_data.get("location", "패밀리 은신처")
+    inventory = user_data.get("inventory", {})
+
+    # 경찰 역할 보유 여부에 따른 직급 계산
     police_role = discord.utils.get(interaction.guild.roles, name="경찰")
-    
-    if police_role and police_role in user.roles:
-        user_stats = get_user_data(user.id)
-        user_rank = get_user_rank(user_stats.get("honor", 0), is_police=True)
-    elif mafia_role and mafia_role in user.roles:
-        user_stats = get_user_data(user.id)
-        user_rank = get_user_rank(user_stats.get("honor", 0), is_police=False)
-    else:
-        user_rank = "시민"
-        user_stats = get_user_data(user.id)
+    is_police = police_role is not None and police_role in target.roles
+    rank_name = get_user_rank(honor, is_police=is_police)
+
+    # 장착 중인 주요 장비 정리
+    equipped_items = []
+    for item_name in inventory.keys():
+        if item_name in ["👊🏻 슈퍼 울트라 주먹", "💉 수상한 주사기", "🏏 몽둥이", "🔫 권총", "🗡️ 단검"]:
+            equipped_items.append(f"⚔️ {item_name}")
+        elif item_name in ["🎟️ 임무 실패 방지권", "🪪 치안국 위조 신분증"]:
+            equipped_items.append(f"🛡️ {item_name}")
+
+    equipped_str = "\n".join(equipped_items) if equipped_items else "• 착용한 장비 없음"
+
+    # 조직원 / 치안국 테마 구분 (경찰은 파란색, 마피아는 다크 레드)
+    embed_color = discord.Color.dark_blue() if is_police else discord.Color.dark_red()
+    org_type = "🏛️ 치안국 신분증" if is_police else "🪪 패밀리 조직원 증명서"
 
     embed = discord.Embed(
-        title="🕵️‍♂️ [패밀리 비밀 문서] 신원 조회",
-        description=f"**{user.name}** 님의 보안 기록입니다.",
-        color=discord.Color.dark_red()
+        title=f"━━━ [ {org_type} ] ━━━",
+        description=f"**성명:** {target.mention} (`{target.display_name}`)\n**고유 식별번호:** `{target.id}`",
+        color=embed_color
     )
-    if user.avatar:
-        embed.set_thumbnail(url=user.avatar.url)
 
-    embed.add_field(name="📜 신분 / 명칭", value=user.mention, inline=True)
-    embed.add_field(name="🗡️ 현재 직급", value=user_rank, inline=True)
-    embed.add_field(name="🏷️ 칭호", value=get_equipped_title_name(user_stats), inline=True)
-    embed.add_field(name="💰 보유 자금", value=f"${user_stats['money']:,}", inline=True)
-    embed.add_field(name="🏆 조직 명예", value=f"{user_stats['honor']} pt", inline=True)
-    embed.add_field(name="📍 현재 거점", value=user_stats.get('location', '레벤하임'), inline=False)
-    
-    inventory = user_stats.get("inventory", {})
-    inv_text = "\n".join([f"• **{item}**: `소지 중`" for item in inventory.keys()]) if inventory else "*소지한 아이템이 없습니다.*"
-    embed.add_field(name="🎒 소지품 (인벤토리)", value=inv_text, inline=False)
+    # 신분증/증명서 스타일 정보 배치
+    embed.add_field(
+        name="🎖️ 소속 및 직급",
+        value=f"```yaml\n{rank_name}\n```",
+        inline=True
+    )
+    embed.add_field(
+        name="📍 현재 거점",
+        value=f"```fix\n{location}\n```",
+        inline=True
+    )
+
+    # 구분선 역할
+    embed.add_field(name="\u200b", value="━━"*15, inline=False)
+
+    embed.add_field(
+        name="💰 보유 자금",
+        value=f"`${money:,}`",
+        inline=True
+    )
+    embed.add_field(
+        name="🏆 명예 점수",
+        value=f"`{honor:,} pt`",
+        inline=True
+    )
+
+    # 보유 장비 목록
+    embed.add_field(
+        name="🎒 소지품 및 인벤토리",
+        value=equipped_str,
+        inline=False
+    )
+
+    # 유저의 프로필 사진을 증명사진처럼 썸네일에 고화질로 설정
+    if target.avatar:
+        embed.set_thumbnail(url=target.avatar.url)
+    else:
+        embed.set_thumbnail(url=target.default_avatar.url)
+
+    embed.set_footer(
+        text=f"발급처: 패밀리 GM 통합 정보국 • 발급일시: {datetime.now().strftime('%Y-%m-%d')}",
+        icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+    )
 
     await interaction.response.send_message(embed=embed)
 
