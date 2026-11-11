@@ -630,23 +630,34 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
         await interaction.response.send_message("❌ 치안국 경찰만 검거 명령어를 사용할 수 있습니다!", ephemeral=True)
         return
 
+    await interaction.response.defer(ephemeral=True)
+
     now = datetime.now()
     target_id = member.id
 
-    # 1. 수배 상태 완벽 검증 (유효 시간 체크)
+    # 디버깅용 로그 출력 (콘솔 창에서 수배 목록 확인용)
+    print(f"ℹ️ [검거 시도] 대상 ID: {target_id} ({member.display_name}) / 현재 수배 명단: {wanted_list}")
+
+    # 1. 수배 상태 여부 확인 (정수형/문자열 모두 대응 및 안전 검증)
     is_wanted = False
-    if target_id in wanted_list:
-        if now <= wanted_list[target_id]:
-            is_wanted = True
-        else:
-            wanted_list.pop(target_id, None)
+    matched_key = None
+
+    for key in list(wanted_list.keys()):
+        if int(key) == int(target_id):
+            matched_key = key
+            expiry_time = wanted_list[key]
+            if now <= expiry_time:
+                is_wanted = True
+            break
 
     if not is_wanted:
-        await interaction.response.send_message(f"❌ {member.mention} 님은 현재 지명수배 상태가 아니거나 증거가 인멸되었습니다.", ephemeral=True)
+        if matched_key is not None:
+            wanted_list.pop(matched_key, None) # 만료된 경우 제거
+        await interaction.followup.send(f"❌ **{member.display_name}** 님은 현재 지명수배 상태가 아니거나 증거가 인멸되었습니다.", ephemeral=True)
         return
 
     # 2. 수배 상태 해제 후 감옥 투옥 (180초 = 3분)
-    wanted_list.pop(target_id, None)
+    wanted_list.pop(matched_key, None)
     jail_time_seconds = 180 
     jail_list[target_id] = now + timedelta(seconds=jail_time_seconds)
 
@@ -679,7 +690,8 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
     if member.avatar:
         embed.set_thumbnail(url=member.avatar.url)
 
-    await interaction.response.send_message(embed=embed)
+    # 경찰관에게는 개인 메시지(Ephemeral)로 알리고, 일반 채널에도 공지하고 싶다면 send_message 사용 가능
+    await interaction.followup.send(embed=embed)
 
 # === 👾 NPC 전투 대상 목록 ===
 NPC_DATA = {
