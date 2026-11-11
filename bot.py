@@ -721,12 +721,13 @@ NPC_DATA = {
     }
 }
 
-# === ⚔️ NPC 턴제 전투 View 클래스 ===
+# === ⚔️ NPC 턴제 전투 View 클래스 (턴 제한 추가) ===
 class NPCBattleView(discord.ui.View):
-    def __init__(self, user: discord.Member, user_stats_dict: dict, npc_info: dict):
+    def __init__(self, user: discord.Member, user_stats_dict: dict, npc_info: dict, max_turns: int = 10):
         super().__init__(timeout=60)
         self.user = user
         self.npc_info = npc_info
+        self.max_turns = max_turns  # 👈 최대 턴 수 설정 (기본 10턴)
         
         # 유저 및 NPC 스탯 설정
         self.u_hp = user_stats_dict["hp"]
@@ -742,13 +743,13 @@ class NPCBattleView(discord.ui.View):
         self.npc_guard = False
 
         self.turn_count = 1
-        self.logs = [f"⚔️ {user.display_name} 님과 **[{npc_info['name']}]**의 전투가 시작되었습니다!"]
+        self.logs = [f"⚔️ {user.display_name} 님과 **[{npc_info['name']}]**의 전투가 시작되었습니다! (제한: {max_turns}턴)"]
         self.message = None
         self.finished = False
 
     def get_embed(self) -> discord.Embed:
         embed = discord.Embed(
-            title=f"⚔️ [NPC 토벌 전투] 턴 {self.turn_count}",
+            title=f"⚔️ [NPC 토벌 전투] 턴 {self.turn_count} / {self.max_turns}",
             description=f"상대: **{self.npc_info['name']}**\n*{self.npc_info['desc']}*",
             color=discord.Color.dark_purple()
         )
@@ -794,10 +795,16 @@ class NPCBattleView(discord.ui.View):
 
         # NPC 사망 확인 (승리)
         if self.npc_hp <= 0:
-            await self.end_battle(interaction, is_win=True)
+            await self.end_battle(interaction, outcome="win")
             return
 
-        # 2. NPC 자동 반격 AI (20% 확률로 방어, 80% 확률로 공격)
+        # 2. 턴 제한 확인 (유저 공격 후 NPC를 처치하지 못하고 최대 턴에 도달한 경우 강제 패배)
+        if self.turn_count >= self.max_turns:
+            self.logs.append(f"- ⏳ 지정된 {self.max_turns}턴이 지나 도망치지 못하고 제압당했습니다!")
+            await self.end_battle(interaction, outcome="turn_limit")
+            return
+
+        # 3. NPC 자동 반격 AI
         self.npc_guard = False
         if random.random() < 0.2:
             self.npc_guard = True
@@ -810,9 +817,9 @@ class NPCBattleView(discord.ui.View):
             self.u_hp = max(0, self.u_hp - npc_dmg)
             self.logs.append(f"- {self.npc_info['name']}의 반격! {self.user.display_name}이(가) {npc_dmg} 대미지를 입었습니다.")
 
-        # 유저 사망 확인 (패배)
+        # 유저 사망 확인 (체력 0 패배)
         if self.u_hp <= 0:
-            await self.end_battle(interaction, is_win=False)
+            await self.end_battle(interaction, outcome="loss")
             return
 
         self.turn_count += 1
@@ -826,7 +833,7 @@ class NPCBattleView(discord.ui.View):
     async def guard_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.process_turn(interaction, "guard")
 
-    async def end_battle(self, interaction: discord.Interaction, is_win: bool):
+    async def end_battle(self, interaction: discord.Interaction, outcome: str):
         self.finished = True
         self.stop()
 
@@ -837,7 +844,7 @@ class NPCBattleView(discord.ui.View):
         current_money = user_data.get("money", 0)
         current_honor = user_data.get("honor", 0)
 
-        if is_win:
+        if outcome == "win":
             earned_money = random.randint(*self.npc_info["reward_money"])
             earned_honor = self.npc_info["reward_honor"]
 
@@ -863,7 +870,7 @@ class NPCBattleView(discord.ui.View):
                 color=discord.Color.green()
             )
         else:
-            # 패배 시 소량의 치료비 손실 또는 수배
+            # 턴 초과 패배("turn_limit") 또는 사망 패배("loss")
             penalty = min(current_money, 300)
             new_money = max(0, current_money - penalty)
 
@@ -873,10 +880,13 @@ class NPCBattleView(discord.ui.View):
             except Exception as e:
                 print(f"DB Error (NPC Battle Loss): {e}")
 
+            reason_title = "⏳ [시간 초과 패배]" if outcome == "turn_limit" else "💥 [전투 패배]"
+            reason_desc = f"지정된 **{self.max_turns}턴**이 지나 작전에 실패했습니다." if outcome == "turn_limit" else f"**{self.npc_info['name']}**에게 쓰러졌습니다."
+
             embed = discord.Embed(
-                title=f"💥 [전투 패배] 쓰러짐...",
-                description=f"**{self.user.mention}** 님이 **{self.npc_info['name']}**에게 쓰러져 부상을 입었습니다.\n\n"
-                            f"🩹 **치료비 지출:** `${penalty:,}`\n"
+                title=f"{reason_title} {self.user.display_name} 패배...",
+                description=f"**{self.user.mention}** 님이 {reason_desc}\n\n"
+                            f"🩹 **치료/패널티 지출:** `${penalty:,}`\n"
                             f"🏦 **남은 자금:** `${new_money:,}`",
                 color=discord.Color.red()
             )
