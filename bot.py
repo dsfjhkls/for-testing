@@ -619,7 +619,7 @@ async def settings_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=view.current_embed(), view=view, ephemeral=True)
     view.message = await interaction.original_response()
 
-# === 🚨 [경찰 전용] `/검거` 명령어 (수정완료) ===
+# === 🚨 [경찰 전용] `/검거` 명령어 (서버 공개 알림형) ===
 @bot.tree.command(name="검거", description="[경찰 전용] 지명수배 중인 마피아를 체포하여 감옥에 가둡니다.")
 @app_commands.describe(member="검거할 수배 대상 마피아")
 async def arrest_member(interaction: discord.Interaction, member: discord.Member):
@@ -630,15 +630,13 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
         await interaction.response.send_message("❌ 치안국 경찰만 검거 명령어를 사용할 수 있습니다!", ephemeral=True)
         return
 
-    await interaction.response.defer(ephemeral=True)
+    # 3초 타임아웃 방지용 defer (ephemeral=True를 제거하여 서버 공개 메시지로 전환)
+    await interaction.response.defer()
 
     now = datetime.now()
     target_id = member.id
 
-    # 디버깅용 로그 출력 (콘솔 창에서 수배 목록 확인용)
-    print(f"ℹ️ [검거 시도] 대상 ID: {target_id} ({member.display_name}) / 현재 수배 명단: {wanted_list}")
-
-    # 1. 수배 상태 여부 확인 (정수형/문자열 모두 대응 및 안전 검증)
+    # 수배 상태 검증
     is_wanted = False
     matched_key = None
 
@@ -652,22 +650,23 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
 
     if not is_wanted:
         if matched_key is not None:
-            wanted_list.pop(matched_key, None) # 만료된 경우 제거
+            wanted_list.pop(matched_key, None)
+        # 수배 상태가 아닐 때는 나만 보이게(ephemeral=True) 처리
         await interaction.followup.send(f"❌ **{member.display_name}** 님은 현재 지명수배 상태가 아니거나 증거가 인멸되었습니다.", ephemeral=True)
         return
 
-    # 2. 수배 상태 해제 후 감옥 투옥 (180초 = 3분)
+    # 수배 해제 및 감옥 수감 (3분)
     wanted_list.pop(matched_key, None)
     jail_time_seconds = 180 
     jail_list[target_id] = now + timedelta(seconds=jail_time_seconds)
 
-    # 3. DB 위치 '감옥'으로 변경
+    # DB 위치 변경
     try:
         update_user_location(target_id, "감옥")
     except Exception as e:
         print(f"Location update error: {e}")
 
-    # 4. 경찰 실적 보상 (자금 $500, 명예 +20pt)
+    # 경찰 보상 지급
     try:
         update_user_stats(interaction.user.id, 500, 20)
     except Exception:
@@ -676,13 +675,14 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
     police_info = get_user_data(interaction.user.id)
     police_rank = get_user_rank(police_info["honor"], is_police=True)
 
+    # 서버 전체에 보일 검거 임베드 생성
     embed = discord.Embed(
-        title="🚨 [지명수배자 검거 완료]",
+        title="🚨 [치안국 긴급 공지] 지명수배범 검거 완료",
         description=(
             f"🚔 **{interaction.user.mention}** 경찰관이 수배범 **{member.mention}** (을)를 현장에서 체포했습니다!\n\n"
-            f"⚖️ **처벌:** **{jail_time_seconds // 60}분** 동안 감옥에 수감되며 프로필 외 명령어가 통제됩니다.\n"
+            f"⚖️ **처벌 내용:** **{jail_time_seconds // 60}분** 동안 감옥에 수감되며 프로필 외 모든 활동이 통제됩니다.\n"
             f"📍 **현재 거점:** `감옥`\n\n"
-            f"💰 **검거 포상금:** `$500`\n"
+            f"💰 **검거 포상금:** `${500:,}`\n"
             f"🏆 **경찰 실적:** `+20 pt` (현재 직급: `{police_rank}`)"
         ),
         color=discord.Color.dark_blue()
@@ -690,7 +690,7 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
     if member.avatar:
         embed.set_thumbnail(url=member.avatar.url)
 
-    # 경찰관에게는 개인 메시지(Ephemeral)로 알리고, 일반 채널에도 공지하고 싶다면 send_message 사용 가능
+    # 서버 전체(채널)에 공개적으로 메시지 전송
     await interaction.followup.send(embed=embed)
 
 # === 👾 NPC 전투 대상 목록 ===
