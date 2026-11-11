@@ -848,22 +848,16 @@ class NPCBattleView(discord.ui.View):
         await interaction.edit_original_response(embed=embed, view=self)
         npc_cooldowns = {}
 
-@bot.tree.command(name="전투", description="[조직원 전용] 지정한 NPC와 1:1 턴제 전투를 시작합니다.")
-@app_commands.describe(npc_name="전투를 벌일 NPC 선택")
-@app_commands.choices(npc_name=[
-    app_commands.Choice(name="골목길 깡패 (난이도: 쉬움)", value="골목길 깡패"),
-    app_commands.Choice(name="조직의 배신자 (난이도: 보통)", value="조직의 배신자"),
-    app_commands.Choice(name="암시장 악덕 거상 (난이도: 어려움)", value="암시장 악덕 거상"),
-    app_commands.Choice(name="지명수배자 보스 (난이도: 극극)", value="지명수배자 보스"),
-])
-async def fight_npc(interaction: discord.Interaction, npc_name: app_commands.Choice[str]):
+@bot.tree.command(name="전투", description="[조직원 전용] NPC 이름을 직접 입력하여 1:1 턴제 전투를 시작합니다.")
+@app_commands.describe(npc_name="전투를 벌일 NPC 이름 (예: 골목길 깡패, 조직의 배신자)")
+async def fight_npc(interaction: discord.Interaction, npc_name: str):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
 
     user = interaction.user
 
-    # 쿨타임 체크 (예: 20초)
+    # 쿨타임 체크 (20초)
     now = datetime.now()
     if user.id in npc_cooldowns:
         remaining = int((npc_cooldowns[user.id] - now).total_seconds())
@@ -873,9 +867,16 @@ async def fight_npc(interaction: discord.Interaction, npc_name: app_commands.Cho
 
     npc_cooldowns[user.id] = now + timedelta(seconds=20)
 
-    target_npc = NPC_DATA.get(npc_name.value)
+    # 텍스트 입력값과 NPC 목록 매칭 확인
+    target_npc = NPC_DATA.get(npc_name.strip())
     if not target_npc:
-        await interaction.response.send_message("❌ 존재하지 않는 NPC입니다.", ephemeral=True)
+        # 등록된 NPC 이름을 알려주는 에러 메시지 반환
+        available_npcs = ", ".join([f"`{name}`" for name in NPC_DATA.keys()])
+        await interaction.response.send_message(
+            f"❌ **[{npc_name}]** 은(는) 존재하지 않는 NPC입니다.\n"
+            f"💡 **전투 가능한 NPC 목록:** {available_npcs}",
+            ephemeral=True
+        )
         return
 
     await interaction.response.defer()
