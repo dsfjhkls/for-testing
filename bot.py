@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 # === PIL (Pillow) 관련 Import ===
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+import urllib.request
 from urllib.request import urlopen
 
 # 렌더 포트 검사를 통과하기 위한 가짜 웹 서버
@@ -2366,21 +2367,24 @@ async def profile_image_command(interaction: discord.Interaction, member: discor
     w = draw.textlength(title_text, font=font_title)
     draw.text(((width - w) / 2, 40), title_text, fill=text_color, font=font_title)
 
-    # [2] 유저 증명사진 처리 (우측 상단 사각형 배치)
     avatar_url = target.avatar.url if target.avatar else target.default_avatar.url
-    with urlopen(avatar_url) as avatar_response:
+    req = urllib.request.Request(
+        avatar_url,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    )
+    with urllib.request.urlopen(req) as avatar_response:
         avatar_img = Image.open(io.BytesIO(avatar_response.read())).convert("RGBA")
     
-    # 증명사진 크기 및 위치 (규격: 200x200, 테두리 추가)
-    avatar_size = (200, 200)
-    avatar_img = avatar_img.resize(avatar_size)
+        # 증명사진 크기 및 위치 (규격: 200x200, 테두리 추가)
+        avatar_size = (200, 200)
+        avatar_img = avatar_img.resize(avatar_size)
     
-    # 아날로그 느낌 테두리 추가
-    border_color = (80, 60, 40, 255)
-    avatar_img = ImageOps.expand(avatar_img, border=5, fill=border_color)
+        # 아날로그 느낌 테두리 추가
+        border_color = (80, 60, 40, 255)
+        avatar_img = ImageOps.expand(avatar_img, border=5, fill=border_color)
     
-    # 증명사진 붙이기
-    background.paste(avatar_img, (650, 130), avatar_img)
+        # 증명사진 붙이기
+        background.paste(avatar_img, (650, 130), avatar_img)
 
     # [3] 기본 인적 사항 (좌측 하단 정보)
     info_x = 70
