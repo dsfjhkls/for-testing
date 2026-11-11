@@ -1164,7 +1164,161 @@ async def gamble_rules(interaction: discord.Interaction):
 # 쿨타임 관리를 위한 사전
 duel_cooldowns = {}
 
-@bot.tree.command(name="결투", description="[조직원 전용] 장비와 스탯을 활용해 다른 조직원과 본격적인 전투를 벌입니다.")
+# === ⚔️ 턴제 PVP 결투 시스템 (버튼 선택형) ===
+class DuelBattleView(discord.ui.View):
+    def __init__(self, challenger: discord.Member, target: discord.Member, bet: int, c_stats: dict, t_stats: dict):
+        super().__init__(timeout=30)
+        self.challenger = challenger
+        self.target = target
+        self.bet = bet
+        
+        # 스탯 및 전투 데이터 초기화
+        self.players = {
+            challenger.id: {"member": challenger, "hp": c_stats["hp"], "max_hp": c_stats["hp"], "atk": c_stats["atk"], "def": c_stats["def"], "guard": False},
+            target.id: {"member": target, "hp": t_stats["hp"], "max_hp": t_stats["hp"], "atk": t_stats["atk"], "def": t_stats["def"], "guard": False}
+        }
+        
+        self.current_turn_id = challenger.id  # 도전자부터 시작
+        self.turn_count = 1
+        self.logs = [f"⚔️ {challenger.display_name} 님과 {target.display_name} 님의 결투가 시작되었습니다!"]
+        self.message = None
+        self.winner = None
+
+    def get_embed(self) -> discord.Embed:
+        c_p = self.players[self.challenger.id]
+        t_p = self.players[self.target.id]
+        
+        current_turn_user = self.players[self.current_turn_id]["member"]
+
+        embed = discord.Embed(
+            title=f"⚔️ [패밀리 결투 아레나] 턴 {self.turn_count}",
+            description=f"현재 차례: **{current_turn_user.mention}** 님의 행동을 기다리는 중... (제한 시간 30초)",
+            color=discord.Color.dark_red()
+        )
+
+        embed.add_field(
+            name=f"🧑 {c_p['member'].display_name}",
+            value=f"❤️ 체력 : {c_p['hp']} / {c_p['max_hp']}\n⚔️ 공격력 : {c_p['atk']}\n🛡️ 방어력 : {c_p['def']}",
+            inline=True
+        )
+        embed.add_field(
+            name=f"🧑 {t_p['member'].display_name}",
+            value=f"❤️ 체력 : {t_p['hp']} / {t_p['max_hp']}\n⚔️ 공격력 : {t_p['atk']}\n🛡️ 방어력 : {t_p['def']}",
+            inline=True
+        )
+
+        log_text = "\n".join(self.logs[-6:])  # 최근 로그 6개만 표시
+        embed.add_field(
+            name="📜 전투 현황 로그",
+            value=f"```diff\n{log_text}\n```",
+            inline=False
+        )
+        return embed
+
+    async def process_action(self, interaction: discord.Interaction, action_type: str):
+        if interaction.user.id != self.current_turn_id:
+            await interaction.response.send_message("❌ 지금은 당신의 차례가 아닙니다!", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        attacker_id = self.current_turn_id
+        defender_id = self.target.id if attacker_id == self.challenger.id else self.challenger.id
+        
+        att = self.players[attacker_id]
+        defn = self.players[defender_id]
+
+        # 방어 상태 초기화
+        att["guard"] = False
+
+        if action_type == "attack":
+            # 기본 공격 계산
+            damage = max(10, att["atk"] - (defn["def"] * 2 if defn["guard"] else defn["def"]) + random.randint(-15, 15))
+            if defn["guard"]:
+                damage = int(damage * 0.5)  # 방어 중이면 50% 경감
+                self.logs.append(f"+ {defn['member'].display_name}이(가) 방어 자세를 취해 피해를 줄였습니다!")
+            
+            defn["hp"] = max(0, defn["hp"] - damage)
+            self.logs.append(f"+ {att['member'].display_name}의 공격! {defn['member'].display_name}의 체력 - {damage}")
+
+        elif action_type == "guard":
+            att["guard"] = True
+            self.logs.append(f"+ {att['member'].display_name}이(가) 단단히 방어 태세를 갖췄습니다. (다음 피격 대미지 50% 감소)")
+
+        # 승리 조건 체크
+        if defn["hp"] <= 0:
+            self.winner = att["member"]
+            await self.end_battle(interaction)
+            return
+
+        # 턴 넘기기
+        self.current_turn_id = defender_id
+        if self.current_turn_id == self.challenger.id:
+            self.turn_count += 1
+
+        await self.message.edit(embed=self.get_embed(), view=self)
+
+    @discord.ui.button(label="⚔️ 공격하기", style=discord.ButtonStyle.danger)
+    async def attack_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_action(interaction, "attack")
+
+    @discord.ui.button(label="🛡️ 방어하기", style=discord.ButtonStyle.primary)
+    async def guard_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_action(interaction, "guard")
+
+    async def end_battle(self, interaction: discord.Interaction):
+        self.stop()
+        
+        loser = self.target if self.winner == self.challenger else self.challenger
+        w_stats = get_user_data(self.winner.id)
+        l_stats = get_user_data(loser.id)
+
+        new_w_honor = w_stats["honor"] + self.bet
+        new_l_honor = max(0, l_stats["honor"] - self.bet)
+
+        try:
+            _require_db()
+            supabase.table("user_data").update({"honor": new_w_honor}).eq("user_id", str(self.winner.id)).execute()
+            supabase.table("user_data").update({"honor": new_l_honor}).eq("user_id", str(loser.id)).execute()
+        except Exception as e:
+            print(f"DB Error (turn duel end): {e}")
+
+        embed = discord.Embed(
+            title="🏆 [결투 종료: 승패 결정]",
+            description=f"⚔️ 피비린내 나는 공방 끝에 **{self.winner.mention}** 님이 승리했습니다!\n\n"
+                        f"📈 **명예 변동:**\n"
+                        f"• {self.winner.mention} `+{self.bet} pt` (총 {new_w_honor} pt)\n"
+                        f"• {loser.mention} `-{self.bet} pt` (총 {new_l_honor} pt)",
+            color=discord.Color.gold()
+        )
+        log_text = "\n".join(self.logs[-8:])
+        embed.add_field(name="📜 최종 전투 기록", value=f"```diff\n{log_text}\n```", inline=False)
+
+        if self.winner.avatar:
+            embed.set_thumbnail(url=self.winner.avatar.url)
+
+        for child in self.children:
+            child.disabled = True
+
+        await interaction.edit_original_response(embed=embed, view=self)
+
+    async def on_timeout(self):
+        if self.winner:
+            return
+        # 시간 초과 시 먼저 누른 사람의 승리 처리 혹은 무승부 처리
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(content="⌛ 결투 시간이 초과되어 무승부로 종료되었습니다.", view=self)
+            except:
+                pass
+
+
+# === /결투 슬래시 명령어 ===
+duel_cooldowns = {}
+
+@bot.tree.command(name="결투", description="[조직원 전용] 버튼을 눌러 턴제로 진행하는 1:1 결투를 신청합니다.")
 @app_commands.describe(member="결투를 신청할 상대 조직원", 베팅명예="걸고 싸울 명예 포인트 (기본 10pt)")
 async def duel_member(interaction: discord.Interaction, member: discord.Member, 베팅명예: int = 10):
     if not await check_maintenance(interaction): return
@@ -1176,7 +1330,6 @@ async def duel_member(interaction: discord.Interaction, member: discord.Member, 
     if member.id == user.id:
         await interaction.response.send_message("❌ 자기 자신과는 결투할 수 없습니다!", ephemeral=True)
         return
-
     if member.bot:
         await interaction.response.send_message("❌ 봇과는 결투할 수 없습니다.", ephemeral=True)
         return
@@ -1211,14 +1364,12 @@ async def duel_member(interaction: discord.Interaction, member: discord.Member, 
 
     await interaction.response.defer()
 
-    # --- ⚔️ 장비/무기 스탯 계산 함수 ---
+    # 장비 스탯 계산 함수
     def get_combat_stats(inventory: dict, base_honor: int):
-        # 기본 스탯 (체력 1000, 공격력 100, 방어력 10 + 명예 보정)
         hp = 1000 + (base_honor * 5)
         atk = 100 + int(base_honor * 0.5)
         def_val = 10
         
-        # 무기 상점 및 암시장 장비 반영
         if "👊🏻 슈퍼 울트라 주먹" in inventory: atk += 500; hp += 2000
         elif "💉 수상한 주사기" in inventory: atk += 300; hp += 1000
         elif "🏏 몽둥이" in inventory: atk += 200
@@ -1228,92 +1379,16 @@ async def duel_member(interaction: discord.Interaction, member: discord.Member, 
         if "🎟️ 임무 실패 방지권" in inventory: def_val += 20
         if "🪪 치안국 위조 신분증" in inventory: def_val += 15
         
-        return hp, atk, def_val
+        return {"hp": hp, "atk": atk, "def": def_val}
 
-    u_hp, u_atk, u_def = get_combat_stats(user_stats.get("inventory", {}), user_stats["honor"])
-    t_hp, t_atk, t_def = get_combat_stats(target_stats.get("inventory", {}), target_stats["honor"])
+    c_stats = get_combat_stats(user_stats.get("inventory", {}), user_stats["honor"])
+    t_stats = get_combat_stats(target_stats.get("inventory", {}), target_stats["honor"])
 
-    # --- 🎲 턴제 시뮬레이션 로그 생성 ---
-    logs = []
-    turn = 1
-    max_turns = 6
-    
-    current_u_hp, current_t_hp = u_hp, t_hp
+    view = DuelBattleView(challenger=user, target=member, bet=베팅명예, c_stats=c_stats, t_stats=t_stats)
+    embed = view.get_embed()
 
-    while current_u_hp > 0 and current_t_hp > 0 and turn <= max_turns:
-        # 유저 공격
-        u_dmg = max(10, u_atk - t_def + random.randint(-20, 20))
-        current_t_hp = max(0, current_t_hp - u_dmg)
-        logs.append(f"+ {user.display_name}의 공격! {member.display_name}의 체력 - {u_dmg}")
-
-        if current_t_hp <= 0:
-            break
-
-        # 상대 공격
-        t_dmg = max(10, t_atk - u_def + random.randint(-20, 20))
-        current_u_hp = max(0, current_u_hp - t_dmg)
-        logs.append(f"+ {member.display_name}의 반격! {user.display_name}의 체력 - {t_dmg}")
-        
-        turn += 1
-
-    is_user_win = current_u_hp >= current_t_hp
-
-    winner = user if is_user_win else member
-    loser = member if is_user_win else user
-    winner_stats = user_stats if is_user_win else target_stats
-    loser_stats = target_stats if is_user_win else user_stats
-    winner_id = user.id if is_user_win else member.id
-    loser_id = member.id if is_user_win else user.id
-
-    new_winner_honor = winner_stats["honor"] + 베팅명예
-    new_loser_honor = max(0, loser_stats["honor"] - 베팅명예)
-
-    try:
-        _require_db()
-        supabase.table("user_data").update({"honor": new_winner_honor}).eq("user_id", str(winner_id)).execute()
-        supabase.table("user_data").update({"honor": new_loser_honor}).eq("user_id", str(loser_id)).execute()
-    except Exception as e:
-        print(f"DB Error (duel): {e}")
-        await interaction.followup.send("🚨 결투 정산 중 데이터베이스 오류가 발생했습니다.", ephemeral=True)
-        return
-
-    # --- 📊 스크린샷 스타일 임베드 구성 ---
-    embed = discord.Embed(
-        title=f"⚔️ 패밀리 혈투: {user.display_name} VS {member.display_name}",
-        color=discord.Color.dark_red()
-    )
-
-    # 양측 스탯 비교 필드
-    embed.add_field(
-        name=f"{user.display_name}",
-        value=f"❤️ 체력 : {current_u_hp} / {u_hp}\n⚔️ 공격력 : {u_atk}\n🛡️ 방어력 : {u_def}",
-        inline=True
-    )
-    embed.add_field(
-        name=f"{member.display_name}",
-        value=f"❤️ 체력 : {current_t_hp} / {t_hp}\n⚔️ 공격력 : {t_atk}\n🛡️ 방어력 : {t_def}",
-        inline=True
-    )
-
-    # 전투 현황 로그 상자
-    log_text = "\n".join(logs) if logs else "+ 조우 직후 싱겁게 끝났습니다."
-    embed.add_field(
-        name="전투 현황",
-        value=f"```diff\n{log_text}\n```",
-        inline=False
-    )
-
-    embed.description = (
-        f"🏆 **승리자:** {winner.mention}\n\n"
-        f"📈 **명예 변동:**\n"
-        f"• {winner.mention} `+{베팅명예} pt` (총 {new_winner_honor} pt)\n"
-        f"• {loser.mention} `-{베팅명예} pt` (총 {new_loser_honor} pt)"
-    )
-
-    if winner.avatar:
-        embed.set_thumbnail(url=winner.avatar.url)
-
-    await interaction.followup.send(embed=embed)
+    msg = await interaction.followup.send(embed=embed, view=view)
+    view.message = msg
     
 class WeaponShopSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
