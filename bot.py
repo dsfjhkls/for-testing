@@ -7,9 +7,9 @@ import asyncio
 from datetime import datetime, timedelta
 
 # === PIL (Pillow) 관련 Import ===
+import unicodedata
+from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont, ImageOps
-import urllib.request
-from urllib.request import urlopen
 
 # 렌더 포트 검사를 통과하기 위한 가짜 웹 서버
 app = Flask('')
@@ -2308,125 +2308,163 @@ async def execute_mission(interaction: discord.Interaction):
 
     await interaction.followup.send(embed=embed, view=MissionView(owner=user))
 
-# === 🪪 [공용] `/프로필` 명령어 (이미지 생성형 - 아날로그 증명서 테마) ===
-@bot.tree.command(name="프로필", description="[공용] 본인 또는 다른 조직원의 아날로그 증명서 사진을 조회합니다.")
-@app_commands.describe(member="조회할 조직원 (선택하지 않을 시 본인)")
+# === 🪪 [공용] `/프로필` 명령어 (이미지 증명서 - 아날로그 종이 테마) ===
+# 필요한 파일(봇 파일과 같은 폴더 또는 assets 폴더): paper_background.jpg, font_1.ttf (또는 font_fallback.otf)
+PROFILE_BG_NAMES = ("paper_background.jpg",)
+PROFILE_FONT_NAMES = ("font_1.ttf", "font.ttf", "font_fallback.otf")   # 앞에서부터 시도, 안 되면 다음 폰트
+PROFILE_AREA = (70, 60, 468, 330)      # 배경(543x394) 안쪽 점선 테두리 안에서 글씨를 쓸 영역 (x1, y1, x2, y2)
+PROFILE_SCALE = 2                      # 배경이 작아서 2배로 키워 그림 (글씨가 선명해짐)
+PROFILE_INK = (60, 40, 20)             # 짙은 세피아 잉크색
+PROFILE_MUTED = (125, 98, 66)          # 라벨·하단 문구용 옅은 갈색
+PROFILE_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _asset_paths(names):
+    """봇 폴더 → assets 폴더 순서로 실제 존재하는 파일 경로를 하나씩 반환"""
+    for folder in (PROFILE_BASE_DIR, os.path.join(PROFILE_BASE_DIR, "assets")):
+        for name in names:
+            path = os.path.join(folder, name)
+            if os.path.isfile(path):
+                yield path
+
+def _draws_hangul(font, size: int) -> bool:
+    """폰트가 한글을 실제로 그리는지 확인 (한글이 없으면 '가'와 '힣'이 똑같은 빈칸 모양으로 나옴)"""
+    def glyph(ch):
+        img = Image.new("L", (size * 2, size * 2), 0)
+        ImageDraw.Draw(img).text((size // 4, size // 4), ch, fill=255, font=font)
+        return img.tobytes()
+    return glyph("가") != glyph("힣")
+
+@lru_cache(maxsize=1)
+def _profile_font_path():
+    """한글이 실제로 그려지는 첫 번째 폰트 파일 (손상된 파일/한글 없는 폰트는 건너뜀). 처음 한 번만 검사"""
+    for path in _asset_paths(PROFILE_FONT_NAMES):
+        try:
+            if _draws_hangul(ImageFont.truetype(path, 40), 40):
+                return path
+            print(f"⚠️ 한글 글자가 없는 폰트라 건너뜁니다: {path}")
+        except OSError:
+            print(f"⚠️ 폰트를 불러올 수 없어 건너뜁니다 (파일 손상?): {path}")
+    print("🚨 사용 가능한 한글 폰트가 없습니다! font_1.ttf 또는 font_fallback.otf 를 봇 폴더에 넣어주세요.")
+    return None
+
+@lru_cache(maxsize=None)
+def _profile_font(size: int):
+    path = _profile_font_path()
+    return ImageFont.truetype(path, size) if path else ImageFont.load_default(size)
+
+def _clean_text(text) -> str:
+    """이미지 폰트로 그릴 수 없는 이모지·기호 제거 (예: '🌱 깡패' -> '깡패')"""
+    return "".join(
+        c for c in str(text)
+        if unicodedata.category(c) not in ("So", "Sk", "Cf", "Cs", "Co", "Cn") and c != "\ufe0f"
+    ).strip()
+
+def _fit_text(draw, text: str, font, max_width: int) -> str:
+    """글자가 칸을 넘으면 '…' 로 줄임"""
+    if draw.textlength(text, font=font) <= max_width:
+        return text
+    while text and draw.textlength(text + "…", font=font) > max_width:
+        text = text[:-1]
+    return text + "…"
+
+async def _load_avatar(member: discord.Member, size: int = 190) -> Image.Image:
+    """프로필 사진을 가져와 오래된 증명사진처럼 세피아 톤으로 변환 (실패하면 빈 사진)"""
+    try:
+        data = await member.display_avatar.replace(size=256, static_format="png").read()
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception as e:
+        print(f"Avatar load error: {e}")
+        img = Image.new("RGB", (256, 256), (185, 172, 150))
+    img = img.resize((size, size), Image.Resampling.LANCZOS)
+    return ImageOps.colorize(ImageOps.grayscale(img), black=(35, 22, 10), white=(238, 224, 196))
+
+def make_profile_image(kind: str, rows: list, user_id: int, avatar: Image.Image) -> io.BytesIO:
+    """증명서 이미지를 그려서 PNG 바이트로 반환. kind: police / mafia / citizen"""
+    S = PROFILE_SCALE
+    path = next(_asset_paths(PROFILE_BG_NAMES), None)
+    if path:
+        paper = Image.open(path).convert("RGBA")
+        paper = paper.resize((paper.width * S, paper.height * S), Image.Resampling.LANCZOS)
+    else:
+        print("⚠️ paper_background.jpg 를 찾을 수 없어 기본 종이색을 사용합니다.")
+        paper = Image.new("RGBA", (543 * S, 394 * S), (234, 228, 205, 255))
+
+    draw = ImageDraw.Draw(paper)
+    x1, y1, x2, y2 = (v * S for v in PROFILE_AREA)
+    cx = (x1 + x2) // 2
+
+    # [1] 제목 + 이중선
+    title = {"police": "치안국 신분증", "mafia": "패밀리 증명서", "citizen": "시민 등록증"}[kind]
+    draw.text((cx, y1 + 8), " ".join(title), fill=PROFILE_INK, font=_profile_font(54), anchor="mt")
+    draw.line((x1 + 30, y1 + 88, x2 - 30, y1 + 88), fill=PROFILE_INK, width=3)
+    draw.line((x1 + 30, y1 + 96, x2 - 30, y1 + 96), fill=PROFILE_INK, width=1)
+    draw.text((x2 - 30, y1 + 108), f"No. {str(user_id)[-6:]}", fill=PROFILE_MUTED, font=_profile_font(24), anchor="ra")
+
+    # [2] 증명사진 (오른쪽)
+    top = y1 + 140
+    photo_x = x2 - 30 - (avatar.width + 12)
+    paper.paste(ImageOps.expand(avatar, border=6, fill=PROFILE_INK), (photo_x, top))
+
+    # [3] 인적 사항 (왼쪽): 라벨 + 값 + 밑줄
+    f_label, f_value = _profile_font(26), _profile_font(34)
+    label_x, value_x = x1 + 30, x1 + 150
+    line_end = photo_x - 30
+    for i, (label, value) in enumerate(rows):
+        y = top + i * 58
+        draw.text((label_x, y + 6), label, fill=PROFILE_MUTED, font=f_label)
+        draw.text((value_x, y), _fit_text(draw, value, f_value, line_end - value_x), fill=PROFILE_INK, font=f_value)
+        draw.line((label_x, y + 50, line_end, y + 50), fill=(170, 145, 110), width=1)
+
+    # [4] 붉은 도장 (사진 아래쪽에 살짝 걸치게)
+    stamp = Image.new("RGBA", (170, 170), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(stamp)
+    red = (170, 40, 40, 210)
+    sd.ellipse((6, 6, 164, 164), outline=red, width=6)
+    sd.ellipse((20, 20, 150, 150), outline=red, width=2)
+    sd.text((85, 85), "승인", fill=red, font=_profile_font(52), anchor="mm")
+    stamp = stamp.rotate(-14, resample=Image.Resampling.BICUBIC)
+    paper.alpha_composite(stamp, (photo_x - 20, top + avatar.height + 12 - 50))
+
+    # [5] 하단 발급 문구
+    footer = f"발급처  패밀리 GM 통합 정보국   ·   발급일  {datetime.now():%Y-%m-%d}"
+    draw.text((cx, y2 - 6), footer, fill=PROFILE_MUTED, font=_profile_font(22), anchor="mb")
+
+    buf = io.BytesIO()
+    paper.convert("RGB").save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+@bot.tree.command(name="프로필", description="[공용] 본인 또는 다른 유저의 아날로그 증명서를 이미지로 발급합니다.")
+@app_commands.describe(member="조회할 유저 (비우면 본인)")
 async def profile_image_command(interaction: discord.Interaction, member: discord.Member = None):
     if not await check_maintenance(interaction): return
+    await interaction.response.defer()   # 이미지 생성 시간이 걸릴 수 있어 먼저 응답 예약
 
     target = member or interaction.user
-    
-    # 디퍼(Defer) 처리 - 이미지 생성 시간이 걸릴 수 있으므로 3초 대기를 방지
-    await interaction.response.defer()
+    data = get_user_data(target.id)
 
-    # 1. DB에서 데이터 조회
-    user_data = get_user_data(target.id)
-    money = user_data.get("money", 0)
-    honor = user_data.get("honor", 0)
-    inventory = user_data.get("inventory", {})
+    role_names = {r.name for r in target.roles}
+    kind = "police" if "경찰" in role_names else "mafia" if "조직원" in role_names else "citizen"
+    honor = data.get("honor", 0)
 
-    # 경찰 역할 보유 여부에 따른 직급 계산
-    police_role = discord.utils.get(interaction.guild.roles, name="경찰")
-    is_police = police_role is not None and police_role in target.roles
-    rank_name = get_user_rank(honor, is_police=is_police)
+    rows = [
+        ("성 명", _clean_text(target.display_name) or _clean_text(target.name) or "무명"),
+        ("직 급", "시민" if kind == "citizen" else _clean_text(get_user_rank(honor, is_police=(kind == "police")))),
+        ("칭 호", _clean_text(get_equipped_title_name(data))),
+        ("거 점", _clean_text(data.get("location", "레벤하임"))),
+        ("자 금", f"${data.get('money', 0):,}"),
+        ("명 예", f"{honor:,} pt"),
+    ]
 
-    # === 이미지 생성 로직 (Pillow) ===
-    
-    # 2. 이미지 생성용 기본 설정 (크기: 900x550, 증명서 느낌)
-    width = 900
-    height = 550
-    
     try:
-        # 배경 종이 이미지 로드 (반드시 paper_background.jpg가 경로에 있어야 함)
-        background = Image.open("assets/paper_background.jpg").convert("RGBA")
-        background = background.resize((width, height))
-    except FileNotFoundError:
-        # 파일이 없을 경우 기본 배경색 (크라프트지 색상 대용)
-        background = Image.new("RGBA", (width, height), (210, 180, 140, 255))
+        avatar = await _load_avatar(target)
+        buf = await asyncio.to_thread(make_profile_image, kind, rows, target.id, avatar)
+    except Exception as e:
+        print(f"Profile image error: {e}")
+        await interaction.followup.send("🚨 증명서를 발급하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
+        return
 
-    # 그리기 도구 및 폰트 설정 (반드시 font.ttf가 경로에 있어야 함)
-    draw = ImageDraw.Draw(background)
-    
-    try:
-        font_main = ImageFont.truetype("assets/font.ttf", 35) # 일반 정보용
-        font_rank = ImageFont.truetype("assets/font.ttf", 28) # 직급용 (약간 작게)
-        font_title = ImageFont.truetype("assets/font.ttf", 45) # 제목용
-        font_date = ImageFont.truetype("assets/font.ttf", 20) # 하단 날짜용
-    except OSError:
-        # 폰트가 없을 경우 기본 시스템 폰트 사용 (폰트 지정이 더 좋습니다)
-        font_main = font_rank = font_title = font_date = ImageFont.load_default()
-
-    # 텍스트 색상 설정 (종이 질감과 어울리는 짙은 갈색/세피아 톤)
-    text_color = (60, 40, 20, 255)
-
-    # 3. 구성요소 그리기 (최대한 간단하게)
-
-    # [1] 제목 (조직원/치안국 구분)
-    title_text = "[ 🏛️ 치안국 신분증 ]" if is_police else "[ 🪪 패밀리 증명서 ]"
-    # 텍스트 가운데 정렬을 위한 계산 (Pillow 버전에 따라 getsize가 다를 수 있음)
-    w = draw.textlength(title_text, font=font_title)
-    draw.text(((width - w) / 2, 40), title_text, fill=text_color, font=font_title)
-
-    avatar_url = target.avatar.url if target.avatar else target.default_avatar.url
-    req = urllib.request.Request(
-        avatar_url,
-        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    )
-    with urllib.request.urlopen(req) as avatar_response:
-        avatar_img = Image.open(io.BytesIO(avatar_response.read())).convert("RGBA")
-    
-        # 증명사진 크기 및 위치 (규격: 200x200, 테두리 추가)
-        avatar_size = (200, 200)
-        avatar_img = avatar_img.resize(avatar_size)
-    
-        # 아날로그 느낌 테두리 추가
-        border_color = (80, 60, 40, 255)
-        avatar_img = ImageOps.expand(avatar_img, border=5, fill=border_color)
-    
-        # 증명사진 붙이기
-        background.paste(avatar_img, (650, 130), avatar_img)
-
-    # [3] 기본 인적 사항 (좌측 하단 정보)
-    info_x = 70
-    info_y = 150
-    line_spacing = 60
-
-    draw.text((info_x, info_y), f"성명: {target.display_name}", fill=text_color, font=font_main)
-    info_y += line_spacing
-    
-    # 고유번호 (ID) - 작게
-    draw.text((info_x, info_y), f"고유번호: {target.id}", fill=text_color, font=font_rank)
-    info_y += line_spacing
-
-    draw.text((info_x, info_y), f"직급: {rank_name}", fill=text_color, font=font_main)
-    info_y += line_spacing
-    
-    # 얇은 구분선 (간단하게)
-    draw.line((info_x, info_y, width-info_x, info_y), fill=border_color, width=2)
-    info_y += 30
-
-    draw.text((info_x, info_y), f"보유 자금: ${money:,}", fill=text_color, font=font_main)
-    info_y += line_spacing
-    
-    draw.text((info_x, info_y), f"명예 점수: {honor:,} pt", fill=text_color, font=font_main)
-
-    # [4] 하단 발급 정보 및 날짜
-    issue_date = datetime.now().strftime("%Y-%m-%d")
-    footer_text = f"발급처: 패밀리 GM 통합 정보국 • 발급일시: {issue_date}"
-    fw = draw.textlength(footer_text, font=font_date)
-    draw.text(((width - fw) / 2, height - 50), footer_text, fill=border_color, font=font_date)
-
-    # === 파일 전송 로직 (Discord.io) ===
-    
-    # 4. 생성된 이미지를 바이트 단위로 변환하여 메모리에 저장
-    final_buffer = io.BytesIO()
-    background.save(final_buffer, format="PNG") # 종이 질감을 위해 PNG 추천
-    final_buffer.seek(0)
-    
-    # 5. 디스코드 파일 개체로 변환하여 전송 (임베드 아님)
-    profile_file = discord.File(final_buffer, filename=f"profile_{target.id}.png")
-    
-    await interaction.followup.send(file=profile_file)
+    await interaction.followup.send(file=discord.File(buf, filename=f"profile_{target.id}.png"))
 
 @bot.tree.command(name="인벤토리", description="[마피아 GM] 소지한 장비를 확인합니다.")
 async def show_inventory(interaction: discord.Interaction):
