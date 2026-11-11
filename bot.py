@@ -2473,29 +2473,109 @@ async def kick_member(interaction: discord.Interaction, member: discord.Member, 
     )
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="도움말", description="[마피아 GM] 명령어 가이드를 확인합니다.")
-async def help_command(interaction: discord.Interaction):
+# === 📖 [공용] 통합 `/정보` 명령어 ===
+@bot.tree.command(name="정보", description="[공용] 특정 명령어 또는 아이템의 상세 정보와 사용법을 검색합니다.")
+@app_commands.describe(keyword="알고 싶은 명령어 또는 아이템 이름 (예: 전투, 송금, 주먹)")
+async def info_command(interaction: discord.Interaction, keyword: str):
     if not await check_maintenance(interaction): return
 
-    embed = discord.Embed(title="📜 [패밀리 GM] 시스템 가이드", color=discord.Color.dark_red())
-    embed.add_field(name="🔫 `/가입`", value="조직에 가입합니다. (시민 ➔ 조직원 역할 전환)", inline=False)
-    embed.add_field(name="🕵️‍♂️ `/프로필`", value="나의 신원 서류와 직급을 확인합니다. (누구나 조회 가능)", inline=False)
-    embed.add_field(name="🚪 `/탈퇴`", value="탈퇴 시 모든 데이터가 초기화되고 시민으로 돌아갑니다.", inline=False)
-    embed.add_field(name="📍 `/이동` / 🕵️‍♂️ `/암시장` / 🎒 `/인벤토리` / 🗡️ `/임무` / 🏷️ `/칭호`", value="[조직원 전용 명령어]", inline=False)
-    embed.add_field(
-        name="🎰 `/도박 슬롯` · `/도박 동전` · `/도박 블랙잭` · `/도박 규칙`",
-        value="[누구나 이용 가능] 자금을 걸고 도박을 즐깁니다. 규칙과 배당표는 `/도박 규칙`에서 확인하세요. (감옥 수감 중 이용 불가)",
-        inline=False
-    ) 
-    embed.add_field(
-        name="🔫 무기 상점 및 결투 시스템",
-        value=(
-            "• **/무기상점**: 결투에 필요한 특수 장비들을 구매할 수 있습니다.\n"
-            "• **/결투 @상대 [베팅명예]**: 다른 조직원과 1:1 결투를 벌여 명예 포인트를 걸고 승부를 겨룹니다.\n"
-            "  *(보유한 장비의 보너스 수치와 명예에 따라 승률이 결정됩니다!)*"
-        ),
-        inline=False
+    kw = keyword.strip()
+
+    # 1. 명령어 정보 사전
+    command_infos = {
+        "전투": {
+            "title": "⚔️ 명령어: /전투 [npc이름]",
+            "desc": "지정한 NPC와 1:1 턴제 결투를 벌입니다.\n• **특징:** 공격(ATK)과 방어(DEF)를 선택하며 제한 턴(10턴) 내에 처치해야 합니다.\n• **보상:** 승리 시 대량의 자금과 명예 획득",
+        },
+        "송금": {
+            "title": "💸 명령어: /송금 [대상] [금액]",
+            "desc": "보유 중인 자금을 다른 조직원에게 안전하게 양도합니다.\n• **주의:** 자기 자신에게는 보낼 수 없으며, 잔액이 부족하면 송금할 수 없습니다.",
+        },
+        "검거": {
+            "title": "🚨 명령어: /검거 [대상] (경찰 전용)",
+            "desc": "치안국 경찰관이 임무 실패 등으로 지명수배된 마피아를 체포합니다.\n• **효과:** 대상은 감옥에 수감되며, 경찰은 포상금과 실적을 획득합니다.",
+        },
+        "무기상점": {
+            "title": "🛒 명령어: /무기상점",
+            "desc": "전투력을 올려주는 강력한 무기와 장비를 구매하고 인벤토리에 등록합니다.",
+        },
+        "프로필": {
+            "title": "👤 명령어: /프로필",
+            "desc": "자신의 현재 직급, 자금, 명예 점수, 장착된 장비 및 거점 상태를 확인합니다.",
+        }
+    }
+
+    # 2. 아이템 정보 사전
+    item_infos = {
+        "슈퍼 울트라 주먹": {
+            "title": "👊🏻 아이템: 슈퍼 울트라 주먹",
+            "desc": "• **분류:** 무기 (최상급)\n• **효과:** 공격력 대폭 상승 (+500), 최대 체력 증가 (+2,000)\n• **설명:** 패밀리 최고의 파괴력을 자랑하는 전설의 주먹입니다.",
+        },
+        "수상한 주사기": {
+            "title": "💉 아이템: 수상한 주사기",
+            "desc": "• **분류:** 무기 (특수)\n• **효과:** 공격력 상승 (+300), 체력 증가 (+1,000)\n• **설명:** 신체 능력을 극단적으로 끌어올리는 위험한 약물입니다.",
+        },
+        "몽둥이": {
+            "title": "🏏 아이템: 몽둥이",
+            "desc": "• **분류:** 무기 (초급)\n• **효과:** 공격력 상승 (+200)\n• **설명:** 뒷골목 싸움에서 가장 흔하게 쓰이는 든든한 무기입니다.",
+        },
+        "권총": {
+            "title": "🔫 아이템: 권총",
+            "desc": "• **분류:** 무기 (중급)\n• **효과:** 공격력 상승 (+150)\n• **설명:** 원거리에서 적을 위협할 수 있는 표준 화기입니다.",
+        },
+        "단검": {
+            "title": "🗡️ 아이템: 단검",
+            "desc": "• **분류:** 무기 (초급)\n• **효과:** 공격력 상승 (+80)\n• **설명:** 은밀하고 빠르게 적을 제압할 수 있는 날카로운 단검입니다.",
+        },
+        "임무 실패 방지권": {
+            "title": "🎟️ 아이템: 임무 실패 방지권",
+            "desc": "• **분류:** 유틸리티 / 방어구\n• **효과:** 방어력 상승 (+20)\n• **설명:** 위기 상황에서 감옥행을 모면하게 해주는 티켓입니다.",
+        },
+        "치안국 위조 신분증": {
+            "title": "🪪 아이템: 치안국 위조 신분증",
+            "desc": "• **분류:** 유틸리티 / 방어구\n• **효과:** 방어력 상승 (+15)\n• **설명:** 경찰의 눈을 잠시 속일 수 있는 정교한 위조 신분증입니다.",
+        }
+    }
+
+    # 3. 검색 매칭 로직
+    target_info = None
+
+    # 명령어 우선 검색
+    if kw in command_infos:
+        target_info = command_infos[kw]
+    # 아이템 이름 검색
+    elif kw in item_infos:
+        target_info = item_infos[kw]
+    else:
+        # 키워드가 포함된 항목이 있는지 부분 검색 시도
+        for name, data in {**command_infos, **item_infos}.items():
+            if kw in name:
+                target_info = data
+                break
+
+    # 일치하는 정보가 없을 경우
+    if not target_info:
+        available_keys = list(command_infos.keys()) + list(item_infos.keys())
+        keys_str = ", ".join([f"`{k}`" for k in available_keys])
+        
+        await interaction.response.send_message(
+            f"❌ **[{kw}]**에 대한 정보를 찾을 수 없습니다.\n\n"
+            f"💡 **검색 가능한 항목 목록:**\n{keys_str}",
+            ephemeral=True
+        )
+        return
+
+    # 4. 임베드 생성 및 출력
+    embed = discord.Embed(
+        title=target_info["title"],
+        description=target_info["desc"],
+        color=discord.Color.dark_red()
     )
+    embed.set_footer(text="마피아 RPG 패밀리 GM 통합 정보 시스템")
+
+    if interaction.user.avatar:
+        embed.set_thumbnail(url=interaction.user.avatar.url)
+
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 bot.run(os.getenv("DISCORD_TOKEN"))
