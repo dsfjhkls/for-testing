@@ -1433,6 +1433,7 @@ async def gamble_rules(interaction: discord.Interaction):
 
 # 쿨타임 관리를 위한 사전
 duel_cooldowns = {}
+npc_cooldowns = {}
 
 # === ⚔️ 턴제 PVP 결투 시스템 (버튼 선택형) ===
 class DuelBattleView(discord.ui.View):
@@ -1587,6 +1588,7 @@ class DuelBattleView(discord.ui.View):
 
 # === /결투 슬래시 명령어 ===
 duel_cooldowns = {}
+npc_cooldowns = {}
 
 @bot.tree.command(name="결투", description="[조직원 전용] 버튼을 눌러 턴제로 진행하는 1:1 결투를 신청합니다.")
 @app_commands.describe(member="결투를 신청할 상대 조직원", 베팅명예="걸고 싸울 명예 포인트 (기본 10pt)")
