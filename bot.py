@@ -5,6 +5,10 @@ import random
 import asyncio
 from datetime import datetime, timedelta
 
+# === PIL (Pillow) 관련 Import ===
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+import requests
+
 # 렌더 포트 검사를 통과하기 위한 가짜 웹 서버
 app = Flask('')
 
@@ -2302,18 +2306,21 @@ async def execute_mission(interaction: discord.Interaction):
 
     await interaction.followup.send(embed=embed, view=MissionView(owner=user))
 
-# === 🪪 [공용] `/프로필` 명령어 (증명서/신분증 스타일) ===
-@bot.tree.command(name="프로필", description="[공용] 본인 또는 다른 조직원의 신분증 및 정보 증명서를 확인합니다.")
+# === 🪪 [공용] `/프로필` 명령어 (이미지 생성형 - 아날로그 증명서 테마) ===
+@bot.tree.command(name="프로필", description="[공용] 본인 또는 다른 조직원의 아날로그 증명서 사진을 조회합니다.")
 @app_commands.describe(member="조회할 조직원 (선택하지 않을 시 본인)")
-async def profile_command(interaction: discord.Interaction, member: discord.Member = None):
+async def profile_image_command(interaction: discord.Interaction, member: discord.Member = None):
     if not await check_maintenance(interaction): return
 
     target = member or interaction.user
-    user_data = get_user_data(target.id)
+    
+    # 디퍼(Defer) 처리 - 이미지 생성 시간이 걸릴 수 있으므로 3초 대기를 방지
+    await interaction.response.defer()
 
+    # 1. DB에서 데이터 조회
+    user_data = get_user_data(target.id)
     money = user_data.get("money", 0)
     honor = user_data.get("honor", 0)
-    location = user_data.get("location", "패밀리 은신처")
     inventory = user_data.get("inventory", {})
 
     # 경찰 역할 보유 여부에 따른 직급 계산
@@ -2321,71 +2328,100 @@ async def profile_command(interaction: discord.Interaction, member: discord.Memb
     is_police = police_role is not None and police_role in target.roles
     rank_name = get_user_rank(honor, is_police=is_police)
 
-    # 장착 중인 주요 장비 정리
-    equipped_items = []
-    for item_name in inventory.keys():
-        if item_name in ["👊🏻 슈퍼 울트라 주먹", "💉 수상한 주사기", "🏏 몽둥이", "🔫 권총", "🗡️ 단검"]:
-            equipped_items.append(f"⚔️ {item_name}")
-        elif item_name in ["🎟️ 임무 실패 방지권", "🪪 치안국 위조 신분증"]:
-            equipped_items.append(f"🛡️ {item_name}")
+    # === 이미지 생성 로직 (Pillow) ===
+    
+    # 2. 이미지 생성용 기본 설정 (크기: 900x550, 증명서 느낌)
+    width = 900
+    height = 550
+    
+    try:
+        # 배경 종이 이미지 로드 (반드시 paper_background.jpg가 경로에 있어야 함)
+        background = Image.open("assets/paper_background.jpg").convert("RGBA")
+        background = background.resize((width, height))
+    except FileNotFoundError:
+        # 파일이 없을 경우 기본 배경색 (크라프트지 색상 대용)
+        background = Image.new("RGBA", (width, height), (210, 180, 140, 255))
 
-    equipped_str = "\n".join(equipped_items) if equipped_items else "• 착용한 장비 없음"
+    # 그리기 도구 및 폰트 설정 (반드시 font.ttf가 경로에 있어야 함)
+    draw = ImageDraw.Draw(background)
+    
+    try:
+        font_main = ImageFont.truetype("assets/font.ttf", 35) # 일반 정보용
+        font_rank = ImageFont.truetype("assets/font.ttf", 28) # 직급용 (약간 작게)
+        font_title = ImageFont.truetype("assets/font.ttf", 45) # 제목용
+        font_date = ImageFont.truetype("assets/font.ttf", 20) # 하단 날짜용
+    except OSError:
+        # 폰트가 없을 경우 기본 시스템 폰트 사용 (폰트 지정이 더 좋습니다)
+        font_main = font_rank = font_title = font_date = ImageFont.load_default()
 
-    # 조직원 / 치안국 테마 구분 (경찰은 파란색, 마피아는 다크 레드)
-    embed_color = discord.Color.dark_blue() if is_police else discord.Color.dark_red()
-    org_type = "🏛️ 치안국 신분증" if is_police else "🪪 패밀리 조직원 증명서"
+    # 텍스트 색상 설정 (종이 질감과 어울리는 짙은 갈색/세피아 톤)
+    text_color = (60, 40, 20, 255)
 
-    embed = discord.Embed(
-        title=f"━━━ [ {org_type} ] ━━━",
-        description=f"**성명:** {target.mention} (`{target.display_name}`)\n**고유 식별번호:** `{target.id}`",
-        color=embed_color
-    )
+    # 3. 구성요소 그리기 (최대한 간단하게)
 
-    # 신분증/증명서 스타일 정보 배치
-    embed.add_field(
-        name="🎖️ 소속 및 직급",
-        value=f"```yaml\n{rank_name}\n```",
-        inline=True
-    )
-    embed.add_field(
-        name="📍 현재 거점",
-        value=f"```fix\n{location}\n```",
-        inline=True
-    )
+    # [1] 제목 (조직원/치안국 구분)
+    title_text = "[ 🏛️ 치안국 신분증 ]" if is_police else "[ 🪪 패밀리 증명서 ]"
+    # 텍스트 가운데 정렬을 위한 계산 (Pillow 버전에 따라 getsize가 다를 수 있음)
+    w = draw.textlength(title_text, font=font_title)
+    draw.text(((width - w) / 2, 40), title_text, fill=text_color, font=font_title)
 
-    # 구분선 역할
-    embed.add_field(name="\u200b", value="━━"*15, inline=False)
+    # [2] 유저 증명사진 처리 (우측 상단 사각형 배치)
+    avatar_url = target.avatar.url if target.avatar else target.default_avatar.url
+    avatar_response = requests.get(avatar_url)
+    avatar_img = Image.open(io.BytesIO(avatar_response.content)).convert("RGBA")
+    
+    # 증명사진 크기 및 위치 (규격: 200x200, 테두리 추가)
+    avatar_size = (200, 200)
+    avatar_img = avatar_img.resize(avatar_size)
+    
+    # 아날로그 느낌 테두리 추가
+    border_color = (80, 60, 40, 255)
+    avatar_img = ImageOps.expand(avatar_img, border=5, fill=border_color)
+    
+    # 증명사진 붙이기
+    background.paste(avatar_img, (650, 130), avatar_img)
 
-    embed.add_field(
-        name="💰 보유 자금",
-        value=f"`${money:,}`",
-        inline=True
-    )
-    embed.add_field(
-        name="🏆 명예 점수",
-        value=f"`{honor:,} pt`",
-        inline=True
-    )
+    # [3] 기본 인적 사항 (좌측 하단 정보)
+    info_x = 70
+    info_y = 150
+    line_spacing = 60
 
-    # 보유 장비 목록
-    embed.add_field(
-        name="🎒 소지품 및 인벤토리",
-        value=equipped_str,
-        inline=False
-    )
+    draw.text((info_x, info_y), f"성명: {target.display_name}", fill=text_color, font=font_main)
+    info_y += line_spacing
+    
+    # 고유번호 (ID) - 작게
+    draw.text((info_x, info_y), f"고유번호: {target.id}", fill=text_color, font=font_rank)
+    info_y += line_spacing
 
-    # 유저의 프로필 사진을 증명사진처럼 썸네일에 고화질로 설정
-    if target.avatar:
-        embed.set_thumbnail(url=target.avatar.url)
-    else:
-        embed.set_thumbnail(url=target.default_avatar.url)
+    draw.text((info_x, info_y), f"직급: {rank_name}", fill=text_color, font=font_main)
+    info_y += line_spacing
+    
+    # 얇은 구분선 (간단하게)
+    draw.line((info_x, info_y, width-info_x, info_y), fill=border_color, width=2)
+    info_y += 30
 
-    embed.set_footer(
-        text=f"발급처: 패밀리 GM 통합 정보국 • 발급일시: {datetime.now().strftime('%Y-%m-%d')}",
-        icon_url=interaction.guild.icon.url if interaction.guild.icon else None
-    )
+    draw.text((info_x, info_y), f"보유 자금: ${money:,}", fill=text_color, font=font_main)
+    info_y += line_spacing
+    
+    draw.text((info_x, info_y), f"명예 점수: {honor:,} pt", fill=text_color, font=font_main)
 
-    await interaction.response.send_message(embed=embed)
+    # [4] 하단 발급 정보 및 날짜
+    issue_date = datetime.now().strftime("%Y-%m-%d")
+    footer_text = f"발급처: 패밀리 GM 통합 정보국 • 발급일시: {issue_date}"
+    fw = draw.textlength(footer_text, font=font_date)
+    draw.text(((width - fw) / 2, height - 50), footer_text, fill=border_color, font=font_date)
+
+    # === 파일 전송 로직 (Discord.io) ===
+    
+    # 4. 생성된 이미지를 바이트 단위로 변환하여 메모리에 저장
+    final_buffer = io.BytesIO()
+    background.save(final_buffer, format="PNG") # 종이 질감을 위해 PNG 추천
+    final_buffer.seek(0)
+    
+    # 5. 디스코드 파일 개체로 변환하여 전송 (임베드 아님)
+    profile_file = discord.File(final_buffer, filename=f"profile_{target.id}.png")
+    
+    await interaction.followup.send(file=profile_file)
 
 @bot.tree.command(name="인벤토리", description="[마피아 GM] 소지한 장비를 확인합니다.")
 async def show_inventory(interaction: discord.Interaction):
