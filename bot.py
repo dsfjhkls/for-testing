@@ -364,7 +364,9 @@ TITLES = {
     "unlucky":      {"name": "🩹 불운한 쥐새끼",   "desc": "임무 5회 실패",                        "check": lambda s, i: s["fail"] >= 5},
     "rich":         {"name": "💰 검은 돈의 주인",  "desc": "보유 자금 $100,000 이상",               "check": lambda s, i: (i.get("money") or 0) >= 100000},
     "respected":    {"name": "🎩 존경받는 자",     "desc": "조직 명예 300pt 이상 (솔다토 이상)",   "check": lambda s, i: (i.get("honor") or 0) >= 300},
-    "collector":    {"name": "🎒 장비 수집가",     "desc": "암시장 장비 10개 이상 보유",            "check": lambda s, i: len(i.get("inventory") or {}) >= 10},
+    "collector":    {"name": "🎒 장비 수집가",     "desc": "암시장 장비 10개 이상 보유",            "check": lambda s, i: len([k for k in (i.get("inventory") or {}) if not k.startswith("🏆")]) >= 10},
+    "named_hunter": {"name": "🐺 네임드 사냥꾼",   "desc": "네임드 몬스터 1종 처치",                "check": lambda s, i: any(k.startswith("🏆") for k in (i.get("inventory") or {}))},
+    "named_slayer": {"name": "☠️ 네임드 학살자",   "desc": "네임드 몬스터 4종 모두 처치",          "check": lambda s, i: sum(1 for k in (i.get("inventory") or {}) if k.startswith("🏆")) >= 4},
     "gambler":      {"name": "🎲 도박꾼",          "desc": "도박 10판 플레이",                     "check": lambda s, i: s["gamble_played"] >= 10},
     "jackpot":      {"name": "🍀 잭팟의 주인공",   "desc": "슬롯머신 잭팟(7️⃣7️⃣7️⃣) 당첨",         "check": lambda s, i: s["jackpot"] >= 1},
     "high_roller":  {"name": "💎 카지노의 큰손",   "desc": "도박 누적 베팅액 $100,000 이상",        "check": lambda s, i: s["gamble_wagered"] >= 100000},
@@ -826,6 +828,42 @@ HIDDEN_BOSS = {
     "desc": "전투의 살기에 이끌려 모습을 드러낸 칼렌데 지하 세계의 지배자입니다. 15턴 안에 쓰러뜨리지 못하면 제압당합니다."
 }
 
+# === 🐺 네임드(강화) 몬스터 ===
+# 일반 NPC보다 훨씬 강하고, 체력이 절반 아래로 떨어지면 격노(enrage)해서 공격력이 오릅니다.
+# 처음 처치하면 고유 전리품(🏆)을 얻고, 명예는 조금만 주므로 대부 달성 속도에는 거의 영향이 없습니다.
+# min_honor 는 입장 조건, 12턴 안에 못 쓰러뜨리면 패배합니다.
+NAMED_COOLDOWN_SEC = 240
+NAMED_MONSTERS = {
+    "marco": {
+        "name": "🔪 [네임드] 백정 마르코", "named": True, "min_honor": 500, "max_turns": 12,
+        "hp": 4200, "atk": 330, "def": 55, "enrage": 1.5,
+        "reward_money": (1500, 3000), "reward_honor": 4,
+        "drop": "🏆 마르코의 정육 칼",
+        "desc": "블랙워드 도살장을 지배하는 청부 해결사. 피를 보면 더 사나워집니다."
+    },
+    "bianca": {
+        "name": "🐍 [네임드] 독사 비앙카", "named": True, "min_honor": 1500, "max_turns": 12,
+        "hp": 8000, "atk": 520, "def": 100, "enrage": 1.5,
+        "reward_money": (3000, 5500), "reward_honor": 8,
+        "drop": "🏆 비앙카의 독니 반지",
+        "desc": "로젠펠트 뒷무대의 독살 전문가. 체력이 줄면 맹독을 뿌리며 덤빕니다."
+    },
+    "boronin": {
+        "name": "🛡️ [네임드] 철의 장군 보로닌", "named": True, "min_honor": 2500, "max_turns": 12,
+        "hp": 14000, "atk": 800, "def": 170, "enrage": 1.5,
+        "reward_money": (5000, 9000), "reward_honor": 14,
+        "drop": "🏆 보로닌의 철 훈장",
+        "desc": "퇴역 후 용병단을 이끄는 철벽의 장군. 방어가 매우 단단합니다."
+    },
+    "executioner": {
+        "name": "🌙 [네임드] 붉은 달의 처형자", "named": True, "min_honor": 4000, "max_turns": 12,
+        "hp": 22000, "atk": 1200, "def": 260, "enrage": 1.6,
+        "reward_money": (8000, 14000), "reward_honor": 24,
+        "drop": "🏆 처형자의 붉은 가면",
+        "desc": "칼렌데 지하 세계가 두려워하는 전설의 처형자. 정상급 장비가 없으면 상대도 안 됩니다."
+    },
+}
+
 # === 💖 후원 링크 뷰 클래스 ===
 class DonationView(discord.ui.View):
     def __init__(self):
@@ -999,7 +1037,14 @@ class NPCBattleView(discord.ui.View):
             self.npc_guard = True
             self.logs.append(f"- {self.npc_info['name']}이(가) 방어 태세를 갖췄습니다.")
         else:
-            npc_dmg = max(10, self.npc_atk - (self.u_def * 2 if self.u_guard else self.u_def) + random.randint(-10, 10))
+            cur_npc_atk = self.npc_atk
+            enrage = self.npc_info.get("enrage")
+            if enrage and self.npc_hp < self.npc_max_hp * 0.5:
+                cur_npc_atk = int(self.npc_atk * enrage)
+                if not getattr(self, "_enraged", False):
+                    self._enraged = True
+                    self.logs.append(f"- 🔥 {self.npc_info['name']}이(가) 격노했습니다! 공격력 +{int((enrage - 1) * 100)}%")
+            npc_dmg = max(10, cur_npc_atk - (self.u_def * 2 if self.u_guard else self.u_def) + random.randint(-10, 10))
             if self.u_guard:
                 npc_dmg = int(npc_dmg * 0.5)
                 self.logs.append(f"- 방어 성공! 대미지를 절반으로 감소시켰습니다.")
@@ -1040,18 +1085,27 @@ class NPCBattleView(discord.ui.View):
             new_money = current_money + earned_money
             new_honor = current_honor + earned_honor
 
+            update_payload = {"money": new_money, "honor": new_honor}
+            drop_msg = ""
+            drop_item = self.npc_info.get("drop")
+            if drop_item:
+                inv = user_data.get("inventory") or {}
+                if drop_item not in inv:
+                    inv[drop_item] = 1
+                    update_payload["inventory"] = inv
+                    drop_msg = f"\n🏆 **고유 전리품 획득:** {drop_item}"
+                else:
+                    drop_msg = "\n🏆 이미 전리품을 보유 중입니다."
+
             try:
                 _require_db()
-                supabase.table("user_data").update({
-                    "money": new_money,
-                    "honor": new_honor
-                }).eq("user_id", str(self.user.id)).execute()
+                supabase.table("user_data").update(update_payload).eq("user_id", str(self.user.id)).execute()
             except Exception as e:
                 print(f"DB Error (NPC Battle Win): {e}")
 
             # 🎲 [신규] 전투 승리 시 20% 확률로 히든 보스 출현 조건 체크 (히든 보스 자체가 아닌 일반 NPC 승리 시)
             boss_spawn_msg = ""
-            if self.npc_info["name"] != "🔥 [히든보스] 어둠의 지배자":
+            if self.npc_info["name"] != "🔥 [히든보스] 어둠의 지배자" and not self.npc_info.get("named"):
                 # 출현 확률은 BOSS_SPAWN_CHANCE 상수로 조절
                 if random.random() < BOSS_SPAWN_CHANCE:
                     guild_id = interaction.guild_id if interaction.guild else None
@@ -1070,7 +1124,7 @@ class NPCBattleView(discord.ui.View):
                             f"🏆 **획득 명예:** `+{earned_honor} pt`\n\n"
                             f"🏦 **현재 보유 자금:** `${new_money:,}`\n"
                             f"🏅 **현재 명예:** `{new_honor} pt`"
-                            f"{boss_spawn_msg}",  # 보스 등장 메시지 포함
+                            f"{drop_msg}{boss_spawn_msg}",  # 전리품 + 보스 등장 메시지 포함
                 color=discord.Color.green()
             )
         else:
@@ -1211,6 +1265,50 @@ async def fight_boss(interaction: discord.Interaction):
         active_boss_guilds[guild_id] = True
         npc_cooldowns.pop(user.id, None)
         await interaction.followup.send("🚨 보스전을 시작하는 중 오류가 발생했습니다. 보스는 그대로 남아 있으니 다시 시도해주세요.", ephemeral=True)
+
+# === 🐺 [조직원 전용] `/네임드` 명령어 ===
+named_cooldowns = {}
+
+@bot.tree.command(name="네임드", description="[조직원 전용] 강화된 네임드 몬스터에 도전합니다. (명예 조건 / 고유 전리품)")
+@app_commands.describe(monster="도전할 네임드 몬스터")
+@app_commands.choices(monster=[
+    app_commands.Choice(name=f"{m['name']} (명예 {m['min_honor']:,}+)", value=k) for k, m in NAMED_MONSTERS.items()
+])
+async def fight_named(interaction: discord.Interaction, monster: app_commands.Choice[str]):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+    target = NAMED_MONSTERS.get(monster.value)
+    if not target:
+        await interaction.response.send_message("❌ 존재하지 않는 네임드 몬스터입니다.", ephemeral=True)
+        return
+
+    user_stats = get_user_data(user.id)
+    honor = user_stats.get("honor", 0)
+    if honor < target["min_honor"]:
+        await interaction.response.send_message(
+            f"❌ **{target['name']}** 은(는) 명예 **{target['min_honor']:,}pt** 이상이어야 도전할 수 있습니다. (현재 {honor:,}pt)",
+            ephemeral=True
+        )
+        return
+
+    now = datetime.now()
+    if user.id in named_cooldowns:
+        remaining = int((named_cooldowns[user.id] - now).total_seconds())
+        if remaining > 0:
+            await interaction.response.send_message(f"⏳ 네임드 사냥 후 숨을 고르는 중입니다. **{remaining}초** 뒤에 다시 도전할 수 있습니다.", ephemeral=True)
+            return
+    named_cooldowns[user.id] = now + timedelta(seconds=NAMED_COOLDOWN_SEC)
+
+    await interaction.response.defer()
+
+    stats = compute_combat_stats(honor, user_stats.get("inventory", {}))
+    view = NPCBattleView(user=user, user_stats_dict=stats, npc_info=target, max_turns=target["max_turns"])
+    embed = view.get_embed()
+    embed.title = f"🐺 [네임드 전투] {target['name']} - 턴 {view.turn_count} / {view.max_turns}"
+    view.message = await interaction.followup.send(embed=embed, view=view)
 
 # === 시민 전용 아르바이트 쿨타임 사전 ===
 parttime_cooldowns = {}
@@ -2733,6 +2831,7 @@ async def kick_member(interaction: discord.Interaction, member: discord.Member, 
     app_commands.Choice(name="🎰 카지노 & 도박 (/도박)", value="도박"),
     app_commands.Choice(name="🏷️ 칭호 시스템 (/칭호)", value="칭호"),
     app_commands.Choice(name="⚙️ 통합 설정 (/설정)", value="설정"),
+    app_commands.Choice(name="🐺 네임드 몬스터 (/네임드)", value="네임드"),
     app_commands.Choice(name="🌍 Utopia Of Eden (세계관)", value="유토피아 오브 에덴")
 ])
 async def info_command(interaction: discord.Interaction, keyword: str):
@@ -2742,6 +2841,14 @@ async def info_command(interaction: discord.Interaction, keyword: str):
 
     # 1. 시스템 및 명령어 정보 사전
     command_infos = {
+        "네임드": {
+            "title": "🐺 시스템: /네임드 [몬스터]",
+            "desc": "일반 NPC보다 훨씬 강한 강화 몬스터에 도전합니다.\n"
+                    "• **입장 조건:** 마르코 500pt / 비앙카 1,500pt / 보로닌 2,500pt / 처형자 4,000pt (명예)\n"
+                    "• **특징:** 12턴 제한, 체력이 절반 아래가 되면 **격노**하여 공격력이 크게 오릅니다.\n"
+                    "• **보상:** 많은 자금 + 소량의 명예, 최초 처치 시 고유 전리품 🏆 (칭호 해금)\n"
+                    "• **쿨타임:** 4분",
+        },
         "전투": {
             "title": "⚔️ 시스템: /전투 [npc이름]",
             "desc": "지정한 NPC와 1:1 턴제 결투를 벌입니다.\n"
