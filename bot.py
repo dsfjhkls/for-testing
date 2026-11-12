@@ -174,43 +174,101 @@ LOCATIONS = {
     }
 }
 
+# === ⚖️ 밸런스 상수 (목표: 꾸준히 플레이했을 때 약 3시간 만에 👑 대부 = 명예 10,000pt) ===
+MISSION_COOLDOWN_SEC = 25        # 임무 기본 쿨타임
+MISSION_COOLDOWN_FAST_SEC = 19   # 크로노그래프 시계 / 특수 바이크 보유 시
+NPC_COOLDOWN_SEC = 30            # /전투 쿨타임
+BOSS_COOLDOWN_SEC = 30           # /보스 쿨타임
+NPC_LOSS_PENALTY = 500           # NPC전 패배 시 치료비
+DUEL_MAX_BET = 30                # 결투 1회 최대 명예 베팅 (부계정 명예 몰아주기 방지)
+
 # === 🛒 지역별 암시장 아이템 목록 ===
+# 실제 효과는 MISSION_BUFFS(임무) / compute_combat_stats(전투) / MissionSelect(쿨타임·소모품)에서 적용됩니다.
 BLACK_MARKET_ITEMS = {
     "레벤하임": [
-        {"id": "gov_pass", "name": "치안국 위조 신분증", "price": 1200, "desc": "실패 시 수배 방어", "emoji": "🪪"},
-        {"id": "fail_guard", "name": "임무 실패 방지권", "price": 800, "desc": "임무 실패 시 패널티 자동 방어", "emoji": "🎟️"},
-        {"id": "chrono_watch", "name": "고급 크로노그래프 시계", "price": 2000, "desc": "임무 쿨타임 50% 단축 (5초)", "emoji": "⏱️"}
+        {"id": "gov_pass", "name": "치안국 위조 신분증", "price": 5000, "desc": "실패 시 지명수배 방어 & 방어력 +15", "emoji": "🪪"},
+        {"id": "fail_guard", "name": "임무 실패 방지권", "price": 3000, "desc": "임무 실패 시 수배·벌금 1회 방어(소모) & 방어력 +20", "emoji": "🎟️"},
+        {"id": "chrono_watch", "name": "고급 크로노그래프 시계", "price": 16000, "desc": "임무 쿨타임 25초 → 19초", "emoji": "⏱️"}
     ],
     "던베르크": [
-        {"id": "heavy_glove", "name": "강화 작업용 장갑", "price": 800, "desc": "임무 보상금 +15%", "emoji": "🥊"},
-        {"id": "boost_drink", "name": "고농축 자양강장제", "price": 400, "desc": "쿨타임 즉시 초기화", "emoji": "🧪"},
-        {"id": "quick_bike", "name": "통신용 특수 바이크", "price": 2200, "desc": "기동력 상승으로 쿨타임 50% 단축 (5초)", "emoji": "🛵"}
+        {"id": "heavy_glove", "name": "강화 작업용 장갑", "price": 3000, "desc": "임무 보상금 +15%", "emoji": "🥊"},
+        {"id": "boost_drink", "name": "고농축 자양강장제", "price": 1500, "desc": "임무 쿨타임 1회 즉시 초기화(소모)", "emoji": "🧪"},
+        {"id": "quick_bike", "name": "통신용 특수 바이크", "price": 16000, "desc": "임무 쿨타임 25초 → 19초", "emoji": "🛵"}
     ],
     "블랙워드": [
-        {"id": "lockpick", "name": "녹슨 락픽 세트", "price": 300, "desc": "임무 성공률 +10%", "emoji": "🔑"},
-        {"id": "black_hood", "name": "익명의 덮개", "price": 600, "desc": "임무 성공률 +10%", "emoji": "🥷"},
-        {"id": "night_goggles", "name": "대형 밀수 전용 가방", "price": 2000, "desc": "임무 성공 시 추가 자금 +20%", "emoji": "💼"}
+        {"id": "lockpick", "name": "녹슨 락픽 세트", "price": 1000, "desc": "임무 성공률 +3%", "emoji": "🔑"},
+        {"id": "black_hood", "name": "익명의 덮개", "price": 2400, "desc": "임무 성공률 +3%", "emoji": "🥷"},
+        {"id": "night_goggles", "name": "대형 밀수 전용 가방", "price": 8000, "desc": "임무 성공 시 추가 자금 +20%", "emoji": "💼"}
     ],
     "에르느코항": [
-        {"id": "smuggled_rum", "name": "밀수된 고급 양주", "price": 1500, "desc": "임무 명예 보상 2배", "emoji": "🍾"},
-        {"id": "stealth_sonar", "name": "해상 무전 도청기", "price": 2000, "desc": "성공률 +15% & 자금 +10%", "emoji": "📻"},
-        {"id": "pirate_map", "name": "해적 비밀 항해 지도", "price": 2500, "desc": "임무 성공률 +20%", "emoji": "🗺️"}
+        {"id": "smuggled_rum", "name": "밀수된 고급 양주", "price": 20000, "desc": "임무 명예 보상 +10%", "emoji": "🍾"},
+        {"id": "stealth_sonar", "name": "해상 무전 도청기", "price": 10000, "desc": "성공률 +5% & 자금 +10%", "emoji": "📻"},
+        {"id": "pirate_map", "name": "해적 비밀 항해 지도", "price": 18000, "desc": "임무 성공률 +5%", "emoji": "🗺️"}
     ],
     "로젠펠트": [
-        {"id": "luxury_vodka", "name": "아우라 증폭기", "price": 30000, "desc": "임무 성공 시 명예 x2배", "emoji": "🥃"},
-        {"id": "gold_ring", "name": "금 반지", "price": 3000, "desc": "임무 성공 시 추가 자금 +10%", "emoji": "💍"},
-        {"id": "diamond_necklace", "name": "다이아몬드 목걸이", "price": 5000, "desc": "임무 성공 시 추가 자금 +20%", "emoji": "💎"}
+        {"id": "luxury_vodka", "name": "아우라 증폭기", "price": 80000, "desc": "임무 명예 보상 +20%", "emoji": "🥃"},
+        {"id": "gold_ring", "name": "금 반지", "price": 12000, "desc": "임무 성공 시 추가 자금 +10%", "emoji": "💍"},
+        {"id": "diamond_necklace", "name": "다이아몬드 목걸이", "price": 24000, "desc": "임무 성공 시 추가 자금 +20%", "emoji": "💎"}
     ]
+}
+
+# (인벤토리 이름, 성공률 +%p, 자금 +비율, 명예 +비율, 표시 문구) — 임무 성공 시 합산 적용
+MISSION_BUFFS = [
+    ("🔑 녹슨 락픽 세트",      3, 0.00, 0.00, "🔑 락픽 (+3%)"),
+    ("🥷 익명의 덮개",          3, 0.00, 0.00, "🥷 덮개 (+3%)"),
+    ("🗺️ 해적 비밀 항해 지도",  5, 0.00, 0.00, "🗺️ 항해 지도 (+5%)"),
+    ("📻 해상 무전 도청기",     5, 0.10, 0.00, "📻 도청기 (+5% 성공률 & +10% 자금)"),
+    ("🥊 강화 작업용 장갑",     0, 0.15, 0.00, "🥊 장갑 (+15% 자금)"),
+    ("💼 대형 밀수 전용 가방",  0, 0.20, 0.00, "💼 밀수 가방 (+20% 자금)"),
+    ("💍 금 반지",              0, 0.10, 0.00, "💍 금 반지 (+10% 자금)"),
+    ("💎 다이아몬드 목걸이",    0, 0.20, 0.00, "💎 다이아 목걸이 (+20% 자금)"),
+    ("🍾 밀수된 고급 양주",     0, 0.00, 0.10, "🍾 양주 (명예 +10%)"),
+    ("🥃 아우라 증폭기",        0, 0.00, 0.20, "🥃 아우라 증폭기 (명예 +20%)"),
+]
+CHRONO_ITEMS = ("⏱️ 고급 크로노그래프 시계", "🛵 통신용 특수 바이크")
+DRINK_ITEM = "🧪 고농축 자양강장제"
+
+# === 🎯 임무 목록 (드롭다운 표시와 실제 판정이 같은 표를 쓰도록 통합) ===
+# success_rate(%) / reward(최소, 최대 $) / honor(pt) / fine(실패 시 벌금 $)
+MISSIONS = {
+    "mission_1": {"title": "🕶️ 타 조직 구역 비밀 조사",   "label": "타 조직 구역 비밀 조사",   "emoji": "🕶️", "diff": "하",   "success_rate": 85, "reward": (150, 350),   "honor": 8,  "fine": 80},
+    "mission_2": {"title": "💼 밀수품 비밀 운송 작업",     "label": "밀수품 비밀 운송 작업",     "emoji": "💼", "diff": "중",   "success_rate": 60, "reward": (350, 800),   "honor": 19, "fine": 200},
+    "mission_3": {"title": "🏛️ 라이벌 보스의 장부 탈취",   "label": "라이벌 보스의 장부 탈취",   "emoji": "🏛️", "diff": "상",   "success_rate": 40, "reward": (900, 1900),  "honor": 29, "fine": 500},
+    "mission_4": {"title": "📁 기밀 문서 야간 밀반출",     "label": "기밀 문서 야간 밀반출",     "emoji": "📁", "diff": "중상", "success_rate": 50, "reward": (650, 1400),  "honor": 23, "fine": 350},
+    "mission_5": {"title": "💰 중앙 은행 호송 차량 습격",  "label": "중앙 은행 호송 차량 습격",  "emoji": "💰", "diff": "최상", "success_rate": 20, "reward": (2500, 5000), "honor": 58, "fine": 1200},
 }
 
 # === 🔫 무기 상점 아이템 목록 ===
 WEAPON_SHOP_ITEMS = [
-    {"id": "dagger", "name": "🗡️ 단검", "price": 500, "desc": "평범한 단검이다 (결투 승률 +5%)", "bonus": 5},
-    {"id": "pistol", "name": "🔫 권총", "price": 1500, "desc": "평범한 권총이다 (결투 승률 +10%)", "bonus": 10},
-    {"id": "club", "name": "🏏 몽둥이", "price": 3000, "desc": "평범한 몽둥이이다 (결투 승률 +15%)", "bonus": 15},
-    {"id": "syringe", "name": "💉 수상한 주사기", "price": 5500, "desc": "뭔가 수상한 주사기이다 (결투 승률 +20%)", "bonus": 20},
-    {"id": "fist", "name": "👊🏻 슈퍼 울트라 주먹", "price": 10000, "desc": "슈퍼 울트라 주먹. (결투 승률 +30%)", "bonus": 30},
+    {"id": "dagger", "name": "🗡️ 단검", "price": 2000, "desc": "평범한 단검이다 (공격력 +80)", "bonus": 5},
+    {"id": "pistol", "name": "🔫 권총", "price": 6000, "desc": "평범한 권총이다 (공격력 +150)", "bonus": 10},
+    {"id": "club", "name": "🏏 몽둥이", "price": 14000, "desc": "평범한 몽둥이이다 (공격력 +200)", "bonus": 15},
+    {"id": "syringe", "name": "💉 수상한 주사기", "price": 28000, "desc": "뭔가 수상한 주사기이다 (공격력 +300 / 체력 +1,000)", "bonus": 20},
+    {"id": "fist", "name": "👊🏻 슈퍼 울트라 주먹", "price": 60000, "desc": "슈퍼 울트라 주먹. (공격력 +500 / 체력 +2,000)", "bonus": 30},
 ]
+
+# 전투 스탯 계산용 (인벤토리 이름, 공격력, 체력) — 위에서부터 먼저 보유한 하나만 적용
+WEAPON_TIERS = [
+    ("👊🏻 슈퍼 울트라 주먹", 500, 2000),
+    ("💉 수상한 주사기", 300, 1000),
+    ("🏏 몽둥이", 200, 0),
+    ("🔫 권총", 150, 0),
+    ("🗡️ 단검", 80, 0),
+]
+
+def compute_combat_stats(honor: int, inventory: dict) -> dict:
+    """/전투, /보스, /결투 가 모두 같은 공식을 쓰도록 한 곳으로 통합"""
+    hp = 1000 + honor * 5
+    atk = 100 + int(honor * 0.5)
+    def_val = 10
+    for name, a, h in WEAPON_TIERS:
+        if name in inventory:
+            atk += a
+            hp += h
+            break
+    if "🎟️ 임무 실패 방지권" in inventory: def_val += 20
+    if "🪪 치안국 위조 신분증" in inventory: def_val += 15
+    return {"hp": hp, "atk": atk, "def": def_val}
 
 # === 🗄️ Supabase DB 연동 함수들 ===
 def get_user_data(user_id: int) -> dict:
@@ -707,54 +765,64 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
     await interaction.followup.send(embed=embed)
 
 # === 👾 NPC 전투 대상 목록 ===
+# 권장 진입선: 깡패(처음부터) → 배신자(단검·명예 300) → 거상(몽둥이·명예 1,000) → 수배자(주사기·명예 3,000) → 암살자(명예 5,000)
 NPC_DATA = {
     "골목길 깡패": {
         "name": "골목길 깡패",
-        "hp": 800,
-        "atk": 80,
+        "hp": 700,
+        "atk": 70,
         "def": 5,
-        "reward_money": (200, 500),
-        "reward_honor": 5,
+        "reward_money": (100, 250),
+        "reward_honor": 1,
         "desc": "칼렌데 뒷골목에서 서성이는 초보 깡패입니다."
     },
     "조직의 배신자": {
         "name": "조직의 배신자",
-        "hp": 2000,
-        "atk": 180,
-        "def": 25,
-        "reward_money": (800, 1500),
-        "reward_honor": 15,
+        "hp": 2500,
+        "atk": 170,
+        "def": 30,
+        "reward_money": (400, 800),
+        "reward_honor": 3,
         "desc": "패밀리의 기밀을 팔아넘기고 도망친 위험한 배신자입니다."
     },
     "암시장 악덕 거상": {
         "name": "암시장 악덕 거상",
-        "hp": 3500,
-        "atk": 280,
-        "def": 40,
-        "reward_money": (2000, 4000),
-        "reward_honor": 30,
+        "hp": 5500,
+        "atk": 300,
+        "def": 70,
+        "reward_money": (1000, 2200),
+        "reward_honor": 6,
         "desc": "고용한 보디가드들을 대동하고 다니는 악명 높은 거상입니다."
     },
     "지명수배자 보스": {
         "name": "지명수배자 보스",
-        "hp": 6000,
-        "atk": 450,
-        "def": 60,
-        "reward_money": (5000, 10000),
-        "reward_honor": 60,
+        "hp": 11000,
+        "atk": 520,
+        "def": 130,
+        "reward_money": (3000, 6000),
+        "reward_honor": 12,
         "desc": "치안국에서도 손대지 못하는 강력한 수배범 보스입니다."
+    },
+    "칼렌데 암살자": {
+        "name": "칼렌데 암살자",
+        "hp": 18000,
+        "atk": 800,
+        "def": 220,
+        "reward_money": (6000, 11000),
+        "reward_honor": 20,
+        "desc": "그림자처럼 움직이며 거물만 노리는 전설적인 청부 암살자입니다."
     }
-
 }
 
 # === 🔥 히든 보스 데이터 (NPC_DATA 와 분리: /전투 로 출현 조건 없이 소환되는 것을 막기 위함) ===
+# 권장: 명예 약 5,000pt + 슈퍼 울트라 주먹/수상한 주사기 (대부 직전의 최종 시험)
 HIDDEN_BOSS = {
     "name": "🔥 [히든보스] 어둠의 지배자",   # ⚠️ 보스 승리 시 보스가 연속 출현하지 않도록 비교하는 이름이므로 함부로 바꾸지 마세요
-    "hp": 50000,
-    "atk": 2000,
-    "def": 1000,
-    "reward_money": (30000, 50000),
-    "reward_honor": 150,
+    "hp": 28000,
+    "atk": 1800,
+    "def": 600,
+    "reward_money": (15000, 30000),
+    "reward_honor": 100,
     "desc": "전투의 살기에 이끌려 모습을 드러낸 칼렌데 지하 세계의 지배자입니다. 15턴 안에 쓰러뜨리지 못하면 제압당합니다."
 }
 
@@ -1007,7 +1075,7 @@ class NPCBattleView(discord.ui.View):
             )
         else:
             # 턴 초과 패배("turn_limit") 또는 사망 패배("loss")
-            penalty = min(current_money, 300)
+            penalty = min(current_money, NPC_LOSS_PENALTY)
             new_money = max(0, current_money - penalty)
 
             try:
@@ -1056,7 +1124,7 @@ async def fight_npc(interaction: discord.Interaction, npc_name: str):
             await interaction.response.send_message(f"⏳ 부상에서 회복 중입니다. **{remaining}초** 뒤에 다시 전투할 수 있습니다.", ephemeral=True)
             return
 
-    npc_cooldowns[user.id] = now + timedelta(seconds=20)
+    npc_cooldowns[user.id] = now + timedelta(seconds=NPC_COOLDOWN_SEC)
 
     # 텍스트 입력값과 NPC 목록 매칭 확인
     target_npc = NPC_DATA.get(npc_name.strip())
@@ -1077,20 +1145,7 @@ async def fight_npc(interaction: discord.Interaction, npc_name: str):
     inventory = user_stats.get("inventory", {})
     base_honor = user_stats.get("honor", 0)
 
-    u_hp = 1000 + (base_honor * 5)
-    u_atk = 100 + int(base_honor * 0.5)
-    u_def = 10
-
-    if "👊🏻 슈퍼 울트라 주먹" in inventory: u_atk += 500; u_hp += 2000
-    elif "💉 수상한 주사기" in inventory: u_atk += 300; u_hp += 1000
-    elif "🏏 몽둥이" in inventory: u_atk += 200
-    elif "🔫 권총" in inventory: u_atk += 150
-    elif "🗡️ 단검" in inventory: u_atk += 80
-
-    if "🎟️ 임무 실패 방지권" in inventory: u_def += 20
-    if "🪪 치안국 위조 신분증" in inventory: u_def += 15
-
-    user_combat_stats = {"hp": u_hp, "atk": u_atk, "def": u_def}
+    user_combat_stats = compute_combat_stats(base_honor, inventory)
 
     view = NPCBattleView(user=user, user_stats_dict=user_combat_stats, npc_info=target_npc)
     embed = view.get_embed()
@@ -1131,7 +1186,7 @@ async def fight_boss(interaction: discord.Interaction):
 
     # 3. 보스 선점: 위의 확인과 이 선점 사이에 await 가 없어서, 여러 명이 동시에 입력해도 한 명만 입장함
     active_boss_guilds[guild_id] = False
-    npc_cooldowns[user.id] = now + timedelta(seconds=30)
+    npc_cooldowns[user.id] = now + timedelta(seconds=BOSS_COOLDOWN_SEC)
 
     # 4. 모두에게 보이도록 '공개' 응답을 예약 (defer(ephemeral=True) 로 하면 이후 전투 화면까지 나만 보이게 됨)
     await interaction.response.defer()
@@ -1142,20 +1197,7 @@ async def fight_boss(interaction: discord.Interaction):
         inventory = user_stats.get("inventory", {})
 
         # 유저 전투 스탯 계산 (명예 + 보유 장비)
-        u_hp = 1200 + (honor * 6)
-        u_atk = 120 + int(honor * 0.6)
-        u_def = 15
-
-        if "👊🏻 슈퍼 울트라 주먹" in inventory: u_atk += 500; u_hp += 2000
-        elif "💉 수상한 주사기" in inventory: u_atk += 300; u_hp += 1000
-        elif "🏏 몽둥이" in inventory: u_atk += 200
-        elif "🔫 권총" in inventory: u_atk += 150
-        elif "🗡️ 단검" in inventory: u_atk += 80
-
-        if "🎟️ 임무 실패 방지권" in inventory: u_def += 20
-        if "🪪 치안국 위조 신분증" in inventory: u_def += 15
-
-        user_combat_stats = {"hp": u_hp, "atk": u_atk, "def": u_def}
+        user_combat_stats = compute_combat_stats(honor, inventory)
 
         # 보스전 시작 (턴 제한 15턴)
         view = NPCBattleView(user=user, user_stats_dict=user_combat_stats, npc_info=HIDDEN_BOSS, max_turns=15)
@@ -1854,8 +1896,8 @@ duel_cooldowns = {}
 npc_cooldowns = {}
 
 @bot.tree.command(name="결투", description="[조직원 전용] 버튼을 눌러 턴제로 진행하는 1:1 결투를 신청합니다.")
-@app_commands.describe(member="결투를 신청할 상대 조직원", 베팅명예="걸고 싸울 명예 포인트 (기본 10pt)")
-async def duel_member(interaction: discord.Interaction, member: discord.Member, 베팅명예: int = 10):
+@app_commands.describe(member="결투를 신청할 상대 조직원", 베팅명예=f"걸고 싸울 명예 포인트 (1~{DUEL_MAX_BET}pt, 기본 10pt)")
+async def duel_member(interaction: discord.Interaction, member: discord.Member, 베팅명예: app_commands.Range[int, 1, DUEL_MAX_BET] = 10):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
@@ -1876,7 +1918,7 @@ async def duel_member(interaction: discord.Interaction, member: discord.Member, 
             await interaction.response.send_message(f"⏳ 결투 여파로 지쳐 있습니다. **{remaining}초** 뒤에 다시 도전할 수 있습니다.", ephemeral=True)
             return
 
-    duel_cooldowns[user.id] = now + timedelta(seconds=30)
+    duel_cooldowns[user.id] = now + timedelta(seconds=120)
 
     mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
     if not mafia_role or mafia_role not in member.roles:
@@ -1901,20 +1943,7 @@ async def duel_member(interaction: discord.Interaction, member: discord.Member, 
 
     # 장비 스탯 계산 함수
     def get_combat_stats(inventory: dict, base_honor: int):
-        hp = 1000 + (base_honor * 5)
-        atk = 100 + int(base_honor * 0.5)
-        def_val = 10
-        
-        if "👊🏻 슈퍼 울트라 주먹" in inventory: atk += 500; hp += 2000
-        elif "💉 수상한 주사기" in inventory: atk += 300; hp += 1000
-        elif "🏏 몽둥이" in inventory: atk += 200
-        elif "🔫 권총" in inventory: atk += 150
-        elif "🗡️ 단검" in inventory: atk += 80
-
-        if "🎟️ 임무 실패 방지권" in inventory: def_val += 20
-        if "🪪 치안국 위조 신분증" in inventory: def_val += 15
-        
-        return {"hp": hp, "atk": atk, "def": def_val}
+        return compute_combat_stats(base_honor, inventory)
 
     c_stats = get_combat_stats(user_stats.get("inventory", {}), user_stats["honor"])
     t_stats = get_combat_stats(target_stats.get("inventory", {}), target_stats["honor"])
@@ -2126,11 +2155,12 @@ class MissionSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
         self.owner = owner
         options = [
-            discord.SelectOption(label="타 조직 구역 비밀 조사", description="난이도: 하 | 보상: $300~$700 / 명예 +10pt", emoji="🕶️", value="mission_1"),
-            discord.SelectOption(label="밀수품 비밀 운송 작업", description="난이도: 중 | 보상: $600~$1,500 / 명예 +25pt", emoji="💼", value="mission_2"),
-            discord.SelectOption(label="라이벌 보스의 장부 탈취", description="난이도: 상 | 보상: $1,500~$3,500 / 명예 +50pt", emoji="🏛️", value="mission_3"),
-            discord.SelectOption(label="기밀 문서 야간 밀반출", description="난이도: 중상 | 보상: $1,200~$2,500 / 명예 +35pt", emoji="📁", value="mission_4"),
-            discord.SelectOption(label="중앙 은행 호송 차량 습격", description="난이도: 최상 | 보상: $3,000~$6,000 / 명예 +80pt", emoji="💰", value="mission_5"),
+            discord.SelectOption(
+                label=m["label"],
+                description=f"난이도: {m['diff']} | 성공률 {m['success_rate']}% | ${m['reward'][0]:,}~${m['reward'][1]:,} / 명예 +{m['honor']}pt / 실패 -${m['fine']:,}",
+                emoji=m["emoji"],
+                value=key
+            ) for key, m in MISSIONS.items()
         ]
         super().__init__(placeholder="🎯 수행할 비밀 임무를 선택하세요...", min_values=1, max_values=1, options=options)
 
@@ -2147,29 +2177,29 @@ class MissionSelect(discord.ui.Select):
         inventory = user_stats.get("inventory", {})
 
         now = datetime.now()
+        drink_used = False
         if user.id in mission_cooldowns:
             next_available = mission_cooldowns[user.id]
             if now < next_available:
-                remaining = int((next_available - now).total_seconds())
-                await interaction.edit_original_response(view=MissionView(owner=self.owner))
-                await interaction.followup.send(f"⏳ 체력을 회복 중입니다. **{remaining}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
-                return
+                if inventory.get(DRINK_ITEM, 0) > 0:
+                    # 🧪 자양강장제: 쿨타임 중이면 1개 소모하고 즉시 진행
+                    inventory[DRINK_ITEM] -= 1
+                    if inventory[DRINK_ITEM] <= 0:
+                        del inventory[DRINK_ITEM]
+                    drink_used = True
+                else:
+                    remaining = int((next_available - now).total_seconds())
+                    await interaction.edit_original_response(view=MissionView(owner=self.owner))
+                    await interaction.followup.send(f"⏳ 체력을 회복 중입니다. **{remaining}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
+                    return
 
-        cooldown_seconds = 10
-        if "⏱️ 고급 크로노그래프 시계" in inventory or "🛵 통신용 특수 바이크" in inventory:
-            cooldown_seconds = 5
+        cooldown_seconds = MISSION_COOLDOWN_SEC
+        if any(item in inventory for item in CHRONO_ITEMS):
+            cooldown_seconds = MISSION_COOLDOWN_FAST_SEC
 
         mission_cooldowns[user.id] = now + timedelta(seconds=cooldown_seconds)
 
-        mission_data = {
-            "mission_1": {"title": "🕶️ 타 조직 구역 비밀 조사", "success_rate": 70, "reward": (300, 700), "honor": 10},
-            "mission_2": {"title": "💼 밀수품 비밀 운송 작업", "success_rate": 50, "reward": (600, 1500), "honor": 25},
-            "mission_3": {"title": "🏛️ 라이벌 보스의 장부 탈취", "success_rate": 30, "reward": (1500, 3500), "honor": 50},
-            "mission_4": {"title": "📁 기밀 문서 야간 밀반출", "success_rate": 40, "reward": (1200, 2500), "honor": 35},
-            "mission_5": {"title": "💰 중앙 은행 호송 차량 습격", "success_rate": 10, "reward": (3000, 6000), "honor": 80},
-        }
-
-        selected = mission_data[self.values[0]]
+        selected = MISSIONS[self.values[0]]
         current_loc = user_stats.get("location", "레벤하임")
 
         success_bonus = 0
@@ -2177,28 +2207,14 @@ class MissionSelect(discord.ui.Select):
         honor_mult = 1.0
         active_buffs = []
 
-        if "🔑 녹슨 락픽 세트" in inventory:
-            success_bonus += 10
-            active_buffs.append("🔑 락픽 (+10%)")
-        if "🥷 익명의 덮개" in inventory:
-            success_bonus += 10
-            active_buffs.append("🥷 덮개 (+10%)")
-        if "🗡️ 암시장 야시경" in inventory:
-            success_bonus += 15
-            active_buffs.append("🗡️ 야시경 (+15%)")
-        if "🗺️ 해적 비밀 항해 지도" in inventory:
-            success_bonus += 20
-            active_buffs.append("🗺️ 항해 지도 (+20%)")
-        if "📻 해상 무전 도청기" in inventory:
-            success_bonus += 15
-            money_mult += 0.10
-            active_buffs.append("📻 도청기 (+15% 성공률 & +10% 자금)")
-        if "🥊 강화 작업용 장갑" in inventory:
-            money_mult += 0.15
-            active_buffs.append("🥊 장갑 (+15% 자금)")
-        if "🍾 밀수된 고급 양주" in inventory:
-            honor_mult += 1.0
-            active_buffs.append("🍾 양주 (명예 2배)")
+        for item_key, s_bonus, m_bonus, h_bonus, label in MISSION_BUFFS:
+            if item_key in inventory:
+                success_bonus += s_bonus
+                money_mult += m_bonus
+                honor_mult += h_bonus
+                active_buffs.append(label)
+        if drink_used:
+            active_buffs.append("🧪 자양강장제 (쿨타임 초기화·1회 소모)")
 
         final_success_rate = min(98, selected["success_rate"] + success_bonus)
         is_success = random.randint(1, 100) <= final_success_rate
@@ -2257,14 +2273,16 @@ class MissionSelect(discord.ui.Select):
                 guard_used = True
 
             if guard_used:
-                fail_msg = "🛡️ **[실패 방지권 발동]** 임무에 실패했으나, 가방에 있던 **🎟️ 임무 실패 방지권**이 소모되어 수배 및 패널티가 면제되었습니다!"
+                fail_msg = "🛡️ **[실패 방지권 발동]** 임무에 실패했으나, 가방에 있던 **🎟️ 임무 실패 방지권**이 소모되어 수배 및 벌금이 면제되었습니다!"
             else:
+                fine = min(current_money, selected["fine"])
+                current_money -= fine
                 wanted_list[user.id] = datetime.now() + timedelta(seconds=60)
                 if "🪪 치안국 위조 신분증" in inventory:
-                    fail_msg = "⚠️ 임무에 실패했으나 **🪪 치안국 위조 신분증** 덕분에 지명수배를 면했습니다!"
+                    fail_msg = f"⚠️ 임무에 실패했으나 **🪪 치안국 위조 신분증** 덕분에 지명수배를 면했습니다! (💸 벌금 `-${fine:,}`)"
                     wanted_list.pop(user.id, None)
                 else:
-                    fail_msg = "🚨 **작전 실패!** 현장에 흔적이 남아 **1분간 경찰 지명수배 상태**가 됩니다!"
+                    fail_msg = f"🚨 **작전 실패!** 현장에 흔적이 남아 **1분간 경찰 지명수배 상태**가 됩니다! (💸 벌금 `-${fine:,}`)"
 
             s["fail"] += 1
             s["streak"] = 0
@@ -2734,7 +2752,8 @@ async def info_command(interaction: discord.Interaction, keyword: str):
             "title": "🔥 시스템: /보스 (히든 보스 토벌)",
             "desc": "전투 후 살기가 감지되었을 때 출현하는 최종 히든 보스전입니다.\n"
                     "• **출현 조건:** 일반 `/전투` 승리 시 10% 확률로 소환 경보가 발생해야 입장 가능합니다.\n"
-                    "• **보상:** 격퇴 성공 시 최대 **$50,000**의 막대한 자금과 **+150 pt** 명예 획득!",
+                    "• **보상:** 격퇴 성공 시 **$15,000~$30,000**의 막대한 자금과 **+100 pt** 명예 획득!\n"
+                    "• **권장:** 명예 약 5,000pt + 💉 수상한 주사기 / 👊🏻 슈퍼 울트라 주먹",
         },
         "도박": {
             "title": "🎰 시스템: /도박 [슬롯/동전/블랙잭/규칙]",
