@@ -78,6 +78,10 @@ MAINTENANCE_MODE = False
 # {user_id: datetime (수배 만료 시간)}
 wanted_list = {}
 
+# === 🐉 서버별 보스 출현 상태 관리 ===
+# {guild_id: True/False}
+active_boss_guilds = {}
+
 # {user_id: datetime (석방 예정 시간)}
 jail_list = {}
 
@@ -737,6 +741,7 @@ NPC_DATA = {
         "reward_honor": 60,
         "desc": "치안국에서도 손대지 못하는 강력한 수배범 보스입니다."
     }
+
 }
 
 # === 💖 후원 링크 뷰 클래스 ===
@@ -962,13 +967,28 @@ class NPCBattleView(discord.ui.View):
             except Exception as e:
                 print(f"DB Error (NPC Battle Win): {e}")
 
+            # 🎲 [신규] 전투 승리 시 20% 확률로 히든 보스 출현 조건 체크 (히든 보스 자체가 아닌 일반 NPC 승리 시)
+            boss_spawn_msg = ""
+            if self.npc_info["name"] != "🔥 [히든보스] 어둠의 지배자":
+                # 20% 확률 (0.20)
+                if random.random() < 0.10:
+                    guild_id = interaction.guild_id if interaction.guild else None
+                    if guild_id:
+                        active_boss_guilds[guild_id] = True
+                    boss_spawn_msg = (
+                        "\n\n🚨 **[긴급 상황 경보]** 🚨\n"
+                        "전투의 여파로 부근에서 엄청난 살기가 감지되었습니다!\n"
+                        "**🔥 어둠의 지배자**가 이 지역에 출현했습니다! (`/보스` 명령어로 소환 가능)"
+                    )
+
             embed = discord.Embed(
                 title=f"🎉 [전투 승리] {self.npc_info['name']} 격퇴!",
                 description=f"**{self.user.mention}** 님이 **{self.npc_info['name']}**(을)를 완벽하게 쓰러뜨렸습니다!\n\n"
                             f"💰 **획득 보상금:** `${earned_money:,}`\n"
                             f"🏆 **획득 명예:** `+{earned_honor} pt`\n\n"
                             f"🏦 **현재 보유 자금:** `${new_money:,}`\n"
-                            f"🏅 **현재 명예:** `{new_honor} pt`",
+                            f"🏅 **현재 명예:** `{new_honor} pt`"
+                            f"{boss_spawn_msg}",  # 보스 등장 메시지 포함
                 color=discord.Color.green()
             )
         else:
@@ -1060,7 +1080,69 @@ async def fight_npc(interaction: discord.Interaction, npc_name: str):
 
     msg = await interaction.followup.send(embed=embed, view=view)
     view.message = msg
-    
+
+    # === 🐉 [조직원 전용] `/보스` 명령어 ===
+@bot.tree.command(name="보스", description="[조직원 전용] 전투 후 등장한 어둠의 지배자와 목숨을 건 보스전을 시작합니다.")
+async def fight_boss(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    guild_id = interaction.guild_id if interaction.guild else None
+
+    # 1. 서버 내 보스 등장 여부 확인
+    if not guild_id or not active_boss_guilds.get(guild_id, False):
+        await interaction.response.send_message(
+            "❌ 현재 이 서버에 보스가 등장하지 않았습니다.",
+            ephemeral=True
+        )
+        return
+
+    user = interaction.user
+    user_stats = get_user_data(user.id)
+    honor = user_stats.get("honor", 0)
+
+    # 2. 쿨타임 체크 (30초)
+    now = datetime.now()
+    if user.id in npc_cooldowns:
+        remaining = int((npc_cooldowns[user.id] - now).total_seconds())
+        if remaining > 0:
+            await interaction.response.send_message(f"⏳ 이전 전투의 부상이 심합니다. **{remaining}초** 뒤에 도전할 수 있습니다.", ephemeral=True)
+            return
+
+    npc_cooldowns[user.id] = now + timedelta(seconds=30)
+    target_npc = NPC_DATA["어둠의 지배자"]
+
+    # 3. 보스 소환 완료 처리 (보스전이 시작되면 해당 서버의 출현 상태를 해제)
+    active_boss_guilds[guild_id] = False
+
+    await interaction.response.defer()
+
+    # 유저 전투 스탯 계산 (명예 + 보유 장비)
+    inventory = user_stats.get("inventory", {})
+    u_hp = 1200 + (honor * 6)
+    u_atk = 120 + int(honor * 0.6)
+    u_def = 15
+
+    # 장비 버프 적용
+    if "👊🏻 슈퍼 울트라 주먹" in inventory: u_atk += 500; u_hp += 2000
+    elif "💉 수상한 주사기" in inventory: u_atk += 300; u_hp += 1000
+    elif "🏏 몽둥이" in inventory: u_atk += 200
+    elif "🔫 권총" in inventory: u_atk += 150
+    elif "🗡️ 단검" in inventory: u_atk += 80
+
+    if "🎟️ 임무 실패 방지권" in inventory: u_def += 20
+    if "🪪 치안국 위조 신분증" in inventory: u_def += 15
+
+    user_combat_stats = {"hp": u_hp, "atk": u_atk, "def": u_def}
+
+    # 보스전 시작 (턴 제한 15턴)
+    view = NPCBattleView(user=user, user_stats_dict=user_combat_stats, npc_info=target_npc, max_turns=15)
+    embed = view.get_embed()
+    embed.title = "🔥 [강림] 어둠의 지배자 토벌전"
+
+    msg = await interaction.followup.send(embed=embed, view=view)
+    view.message = msg
 
 # === 시민 전용 아르바이트 쿨타임 사전 ===
 parttime_cooldowns = {}
@@ -2598,15 +2680,15 @@ async def kick_member(interaction: discord.Interaction, member: discord.Member, 
     )
     await interaction.response.send_message(embed=embed)
 
-# === 📖 [공용] 통합 `/정보` 명령어 ===
-@bot.tree.command(name="정보", description="[공용] 특정 명령어, 아이템 또는 세계관 설정을 검색합니다.")
-@app_commands.describe(keyword="알고 싶은 항목 (예: 전투, 송금, 유토피아 오브 에덴)")
+# === 📖 [공용] 통합 `/정보` 명령어 (확장판) ===
+@bot.tree.command(name="정보", description="[공용] 특정 명령어, 아이템 또는 세계관 설정을 상세하게 검색합니다.")
+@app_commands.describe(keyword="알고 싶은 항목 (예: 전투, 보스, 슬롯, 칭호, 유토피아 오브 에덴)")
 @app_commands.choices(keyword=[
-    app_commands.Choice(name="⚔️ 전투 명령어", value="전투"),
-    app_commands.Choice(name="💸 송금 명령어", value="송금"),
-    app_commands.Choice(name="🚨 검거 명령어", value="검거"),
-    app_commands.Choice(name="🛒 무기상점 명령어", value="무기상점"),
-    app_commands.Choice(name="👤 프로필 명령어", value="프로필"),
+    app_commands.Choice(name="⚔️ 전투 & 보스 시스템", value="전투"),
+    app_commands.Choice(name="🔥 히든 보스 (/보스)", value="보스"),
+    app_commands.Choice(name="🎰 카지노 & 도박 (/도박)", value="도박"),
+    app_commands.Choice(name="🏷️ 칭호 시스템 (/칭호)", value="칭호"),
+    app_commands.Choice(name="⚙️ 통합 설정 (/설정)", value="설정"),
     app_commands.Choice(name="🌍 Utopia Of Eden (세계관)", value="유토피아 오브 에덴")
 ])
 async def info_command(interaction: discord.Interaction, keyword: str):
@@ -2614,27 +2696,60 @@ async def info_command(interaction: discord.Interaction, keyword: str):
 
     kw = keyword.strip()
 
-    # 1. 명령어 정보 사전
+    # 1. 시스템 및 명령어 정보 사전
     command_infos = {
         "전투": {
-            "title": "⚔️ 명령어: /전투 [npc이름]",
-            "desc": "지정한 NPC와 1:1 턴제 결투를 벌입니다.\n• **특징:** 공격(ATK)과 방어(DEF)를 선택하며 제한 턴(10턴) 내에 처치해야 합니다.\n• **보상:** 승리 시 대량의 자금과 명예 획득",
+            "title": "⚔️ 시스템: /전투 [npc이름]",
+            "desc": "지정한 NPC와 1:1 턴제 결투를 벌입니다.\n"
+                    "• **특징:** 제한 턴(10턴) 내에 처치해야 승리하며, 패배 시 치료비 패널티가 발생합니다.\n"
+                    "• **히든 이벤트:** 전투 승리 시 10% 확률로 **[어둠의 지배자]** 보스가 서버에 출현합니다!",
+        },
+        "보스": {
+            "title": "🔥 시스템: /보스 (히든 보스 토벌)",
+            "desc": "전투 후 살기가 감지되었을 때 출현하는 최종 히든 보스전입니다.\n"
+                    "• **출현 조건:** 일반 `/전투` 승리 시 10% 확률로 소환 경보가 발생해야 입장 가능합니다.\n"
+                    "• **보상:** 격퇴 성공 시 최대 **$50,000**의 막대한 자금과 **+150 pt** 명예 획득!",
+        },
+        "도박": {
+            "title": "🎰 시스템: /도박 [슬롯/동전/블랙잭/규칙]",
+            "desc": "보유 자금을 걸고 한판 승부를 벌입니다.\n"
+                    "• **슬롯:** 3개 일치 시 고배당, 잭팟(7️⃣7️⃣7️⃣) 시 100배 지급\n"
+                    "• **동전:** 48% 확률로 베팅금의 2배 획득\n"
+                    "• **블랙잭:** 딜러와 21에 가까운 수로 겨루는 카드 게임 (블랙잭 2.5배)",
+        },
+        "칭호": {
+            "title": "🏷️ 시스템: /칭호",
+            "desc": "조건을 달성하여 업적 칭호를 획득하고 프로필에 장착합니다.\n"
+                    "• **효과:** `/프로필` 명령어 실행 시 내 아날로그 증명서에 장착된 칭호가 예쁘게 각인됩니다.",
+        },
+        "설정": {
+            "title": "⚙️ 시스템: /설정",
+            "desc": "임무 실패 방지권 자동 사용 여부, 이벤트 긴급 알림 등 내 플레이 환경을 직접 커스텀할 수 있는 설정 창입니다.",
+        },
+        "이동": {
+            "title": "🗺️ 시스템: /이동 [지역명]",
+            "desc": "레벤하임(수도), 던베르크(공업), 블랙워드(빈민가), 에르느코항(항구), 로젠펠트(유흥가) 등 5대 거점으로 이동합니다.\n"
+                    "• 거점마다 암시장에서 판매하는 아이템 종류가 달라집니다.",
+        },
+        "아르바이트": {
+            "title": "🛠️ 시스템: /아르바이트",
+            "desc": "시민/공용 전용 안전 자금 수급처입니다. 위험 부담 없이 정직한 노동으로 소량의 돈을 획득합니다.",
         },
         "송금": {
             "title": "💸 명령어: /송금 [대상] [금액]",
-            "desc": "보유 중인 자금을 다른 조직원에게 안전하게 양도합니다.\n• **주의:** 자기 자신에게는 보낼 수 없으며, 잔액이 부족하면 송금할 수 없습니다.",
+            "desc": "보유 자금을 다른 조직원에게 안전하게 이체합니다. (자기 자신 송금 불가)",
         },
         "검거": {
             "title": "🚨 명령어: /검거 [대상] (경찰 전용)",
-            "desc": "치안국 경찰관이 임무 실패 등으로 지명수배된 마피아를 체포합니다.\n• **효과:** 대상은 감옥에 수감되며, 경찰은 포상금과 실적을 획득합니다.",
+            "desc": "지명수배 중인 마피아를 현장에서 체포하여 감옥에 3분간 수감하고 포상금을 획득합니다.",
         },
         "무기상점": {
             "title": "🛒 명령어: /무기상점",
-            "desc": "전투력을 올려주는 강력한 무기와 장비를 구매하고 인벤토리에 등록합니다.",
+            "desc": "전투력을 대폭 높여주는 특수 무기(슈퍼 울트라 주먹, 주사기 등)를 구매합니다.",
         },
         "프로필": {
-            "title": "👤 명령어: /프로필",
-            "desc": "자신의 현재 직급, 자금, 명예 점수, 장착된 장비 및 거점 상태를 확인합니다.",
+            "title": "👤 명령어: /프로필 [유저]",
+            "desc": "본인 또는 타 유저의 직급, 명예, 자금, 거점 상태가 담긴 아날로그 종이 증명서 이미지를 생성합니다.",
         }
     }
 
@@ -2642,38 +2757,26 @@ async def info_command(interaction: discord.Interaction, keyword: str):
     item_infos = {
         "슈퍼 울트라 주먹": {
             "title": "👊🏻 아이템: 슈퍼 울트라 주먹",
-            "desc": "• **분류:** 무기 (최상급)\n• **효과:** 공격력 대폭 상승 (+500), 최대 체력 증가 (+2,000)\n• **설명:** 패밀리 최고의 파괴력을 자랑하는 전설의 주먹입니다.",
+            "desc": "• **분류:** 무기 (최상급)\n• **효과:** 공격력 +500, 최대 체력 +2,000\n• **설명:** 패밀리 최고의 파괴력을 자랑하는 전설의 주먹입니다.",
         },
         "수상한 주사기": {
             "title": "💉 아이템: 수상한 주사기",
-            "desc": "• **분류:** 무기 (특수)\n• **효과:** 공격력 상승 (+300), 체력 증가 (+1,000)\n• **설명:** 신체 능력을 극단적으로 끌어올리는 위험한 약물입니다.",
-        },
-        "몽둥이": {
-            "title": "🏏 아이템: 몽둥이",
-            "desc": "• **분류:** 무기 (초급)\n• **효과:** 공격력 상승 (+200)\n• **설명:** 뒷골목 싸움에서 가장 흔하게 쓰이는 든든한 무기입니다.",
-        },
-        "권총": {
-            "title": "🔫 아이템: 권총",
-            "desc": "• **분류:** 무기 (중급)\n• **효과:** 공격력 상승 (+150)\n• **설명:** 원거리에서 적을 위협할 수 있는 표준 화기입니다.",
-        },
-        "단검": {
-            "title": "🗡️ 아이템: 단검",
-            "desc": "• **분류:** 무기 (초급)\n• **효과:** 공격력 상승 (+80)\n• **설명:** 은밀하고 빠르게 적을 제압할 수 있는 날카로운 단검입니다.",
+            "desc": "• **분류:** 무기 (특수)\n• **효과:** 공격력 +300, 체력 +1,000\n• **설명:** 신체 능력을 극단적으로 끌어올리는 위험한 약물입니다.",
         },
         "임무 실패 방지권": {
             "title": "🎟️ 아이템: 임무 실패 방지권",
-            "desc": "• **분류:** 유틸리티 / 방어구\n• **효과:** 방어력 상승 (+20)\n• **설명:** 위기 상황에서 감옥행을 모면하게 해주는 티켓입니다.",
+            "desc": "• **분류:** 방어구/유틸리티\n• **효과:** 방어력 +20, 임무 실패 시 수배 자동 방어\n• **설명:** 위기 상황에서 감옥행을 모면하게 해주는 티켓입니다.",
         },
         "치안국 위조 신분증": {
             "title": "🪪 아이템: 치안국 위조 신분증",
-            "desc": "• **분류:** 유틸리티 / 방어구\n• **효과:** 방어력 상승 (+15)\n• **설명:** 경찰의 눈을 잠시 속일 수 있는 정교한 위조 신분증입니다.",
+            "desc": "• **분류:** 방어구/유틸리티\n• **효과:** 방어력 +15, 지명수배 방지\n• **설명:** 경찰의 눈을 잠시 속일 수 있는 정교한 위조 신분증입니다.",
         }
     }
 
-    # 3. 세계관 설정 사전 (Utopia Of Eden)
+    # 3. 세계관 정보 사전
     world_infos = {
         "유토피아 오브 에덴": {
-            "title": "🌍 세계관 조직: Utopia Of Eden (유토피아 오브 에덴)",
+            "title": "🌍 세계관: Utopia Of Eden (유토피아 오브 에덴)",
             "desc": (
                 "**“모두가 평등한 세상. 그곳에 불평등한 자는 존재할 수 없다.”**\n\n"
                 "📌 **기본 정보**\n"
@@ -2681,20 +2784,13 @@ async def info_command(interaction: discord.Interaction, keyword: str):
                 "• **창립자:** 에칼 데 페스토 | **주요 사상:** 공산주의\n"
                 "• **주요 활동:** 선전물 제작 및 배포, 극단적 테러 활동\n"
                 "• **대립 관계:** 칼렌데 중앙치안국 및 기타 세력\n\n"
-                "🏛️ **창립 배경 및 이념**\n"
-                "세상의 불공평함과 극심한 계급 격차에 회의를 느낀 에칼 데 페스토가 창설했습니다. "
-                "모든 사람이 동등한 위치에 놓이는 이상 사회를 지향하나, 일부 조직원이 이를 극단적으로 해석해 테러를 일으키며 칼렌데 공화국의 중대한 안보 위협이 되었습니다.\n\n"
                 "🚢 **주요 사건: 예노호 테러 사건**\n"
-                "• **개요:** 조직원들이 여객선 예노호에 잠입해 인질극을 벌이고 침몰시킨 참사.\n"
-                "• **실행 인물:** 데이브 니스코프 (사건 후 실종, 생사 불명)\n"
-                "• **피해 현황:** 총 탑승 129명 중 사망 120명, 생존 8명, 실종 1명\n\n"
-                "⚖️ **사회적 평가**\n"
-                "조직은 자신들을 혁명 세력이라 칭하지만, 시민들에게는 무고한 사람들을 희생시킨 악명 높은 테러조직으로 인식되고 있습니다."
+                "데이브 니스코프가 여객선 예노호를 통제 불능으로 만들고 침몰시킨 참사 (사망 120명, 실종 1명)."
             )
         }
     }
 
-    # 4. 검색 매칭 로직 (명령어, 아이템, 세계관 통합 검색)
+    # 4. 통합 검색 매칭
     target_info = None
     combined_dict = {**command_infos, **item_infos, **world_infos}
 
@@ -2712,12 +2808,12 @@ async def info_command(interaction: discord.Interaction, keyword: str):
         
         await interaction.response.send_message(
             f"❌ **[{kw}]**에 대한 정보를 찾을 수 없습니다.\n\n"
-            f"💡 **검색 가능한 항목 목록:**\n{keys_str}",
+            f"💡 **검색 가능한 전체 목록:**\n{keys_str}",
             ephemeral=True
         )
         return
 
-    # 5. 임베드 생성 및 출력
+    # 5. 임베드 생성 및 전송
     embed = discord.Embed(
         title=target_info["title"],
         description=target_info["desc"],
@@ -2729,5 +2825,5 @@ async def info_command(interaction: discord.Interaction, keyword: str):
         embed.set_thumbnail(url=interaction.user.avatar.url)
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
-    
+
 bot.run(os.getenv("DISCORD_TOKEN"))
