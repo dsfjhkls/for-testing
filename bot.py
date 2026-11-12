@@ -82,6 +82,9 @@ wanted_list = {}
 # {guild_id: True/False}
 active_boss_guilds = {}
 
+# 일반 /전투 승리 시 히든 보스가 출현할 확률 (0.10 = 10%, 테스트할 때는 1.0 으로 바꾸면 항상 출현)
+BOSS_SPAWN_CHANCE = 0.10
+
 # {user_id: datetime (석방 예정 시간)}
 jail_list = {}
 
@@ -744,6 +747,17 @@ NPC_DATA = {
 
 }
 
+# === 🔥 히든 보스 데이터 (NPC_DATA 와 분리: /전투 로 출현 조건 없이 소환되는 것을 막기 위함) ===
+HIDDEN_BOSS = {
+    "name": "🔥 [히든보스] 어둠의 지배자",   # ⚠️ 보스 승리 시 보스가 연속 출현하지 않도록 비교하는 이름이므로 함부로 바꾸지 마세요
+    "hp": 50000,
+    "atk": 2000,
+    "def": 1000,
+    "reward_money": (30000, 50000),
+    "reward_honor": 150,
+    "desc": "전투의 살기에 이끌려 모습을 드러낸 칼렌데 지하 세계의 지배자입니다. 15턴 안에 쓰러뜨리지 못하면 제압당합니다."
+}
+
 # === 💖 후원 링크 뷰 클래스 ===
 class DonationView(discord.ui.View):
     def __init__(self):
@@ -970,8 +984,8 @@ class NPCBattleView(discord.ui.View):
             # 🎲 [신규] 전투 승리 시 20% 확률로 히든 보스 출현 조건 체크 (히든 보스 자체가 아닌 일반 NPC 승리 시)
             boss_spawn_msg = ""
             if self.npc_info["name"] != "🔥 [히든보스] 어둠의 지배자":
-                # 20% 확률 (0.20)
-                if random.random() < 0.10:
+                # 출현 확률은 BOSS_SPAWN_CHANCE 상수로 조절
+                if random.random() < BOSS_SPAWN_CHANCE:
                     guild_id = interaction.guild_id if interaction.guild else None
                     if guild_id:
                         active_boss_guilds[guild_id] = True
@@ -1092,67 +1106,69 @@ async def fight_boss(interaction: discord.Interaction):
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
 
-    # ⏱️ [핵심] 가장 먼저 무조건 응답 대기 상태(defer) 선언 (생각 중임 방지)
-    await interaction.response.defer(ephemeral=True)
-
+    user = interaction.user
     guild_id = interaction.guild_id if interaction.guild else None
 
-    # 1. 서버 내 보스 등장 여부 확인
+    # 1. 서버 내 보스 등장 여부 확인 (안내 메시지는 나에게만 보이도록 일반 응답으로 전송)
     if not guild_id or not active_boss_guilds.get(guild_id, False):
-        await interaction.followup.send(
-            "❌ 현재 이 서버에 보스가 등장하지 않았습니다.",
+        await interaction.response.send_message(
+            "❌ 현재 이 서버에 보스가 등장하지 않았습니다.\n"
+            "💡 일반 `/전투`에서 승리하면 일정 확률로 어둠의 지배자가 출현합니다.",
             ephemeral=True
         )
         return
-
-    user = interaction.user
-    user_stats = get_user_data(user.id)
-    honor = user_stats.get("honor", 0)
 
     # 2. 쿨타임 체크 (30초)
     now = datetime.now()
     if user.id in npc_cooldowns:
         remaining = int((npc_cooldowns[user.id] - now).total_seconds())
         if remaining > 0:
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 f"⏳ 이전 전투의 부상이 심합니다. **{remaining}초** 뒤에 도전할 수 있습니다.",
                 ephemeral=True
             )
             return
 
-    npc_cooldowns[user.id] = now + timedelta(seconds=30)
-    target_npc = NPC_DATA["어둠의 지배자"]
-
-    # 3. 보스 소환 완료 처리 (보스전이 시작되면 해당 서버의 출현 상태를 해제)
+    # 3. 보스 선점: 위의 확인과 이 선점 사이에 await 가 없어서, 여러 명이 동시에 입력해도 한 명만 입장함
     active_boss_guilds[guild_id] = False
+    npc_cooldowns[user.id] = now + timedelta(seconds=30)
 
-    # 유저 전투 스탯 계산 (명예 + 보유 장비)
-    inventory = user_stats.get("inventory", {})
-    u_hp = 1200 + (honor * 6)
-    u_atk = 120 + int(honor * 0.6)
-    u_def = 15
+    # 4. 모두에게 보이도록 '공개' 응답을 예약 (defer(ephemeral=True) 로 하면 이후 전투 화면까지 나만 보이게 됨)
+    await interaction.response.defer()
 
-    # 장비 버프 적용
-    if "👊🏻 슈퍼 울트라 주먹" in inventory: u_atk += 500; u_hp += 2000
-    elif "💉 수상한 주사기" in inventory: u_atk += 300; u_hp += 1000
-    elif "🏏 몽둥이" in inventory: u_atk += 200
-    elif "🔫 권총" in inventory: u_atk += 150
-    elif "🗡️ 단검" in inventory: u_atk += 80
+    try:
+        user_stats = get_user_data(user.id)
+        honor = user_stats.get("honor", 0)
+        inventory = user_stats.get("inventory", {})
 
-    if "🎟️ 임무 실패 방지권" in inventory: u_def += 20
-    if "🪪 치안국 위조 신분증" in inventory: u_def += 15
+        # 유저 전투 스탯 계산 (명예 + 보유 장비)
+        u_hp = 1200 + (honor * 6)
+        u_atk = 120 + int(honor * 0.6)
+        u_def = 15
 
-    user_combat_stats = {"hp": u_hp, "atk": u_atk, "def": u_def}
+        if "👊🏻 슈퍼 울트라 주먹" in inventory: u_atk += 500; u_hp += 2000
+        elif "💉 수상한 주사기" in inventory: u_atk += 300; u_hp += 1000
+        elif "🏏 몽둥이" in inventory: u_atk += 200
+        elif "🔫 권총" in inventory: u_atk += 150
+        elif "🗡️ 단검" in inventory: u_atk += 80
 
-    # 보스전 시작 (턴 제한 15턴)
-    view = NPCBattleView(user=user, user_stats_dict=user_combat_stats, npc_info=target_npc, max_turns=15)
-    embed = view.get_embed()
-    embed.title = "🔥 [강림] 어둠의 지배자 토벌전"
+        if "🎟️ 임무 실패 방지권" in inventory: u_def += 20
+        if "🪪 치안국 위조 신분증" in inventory: u_def += 15
 
-    # 💡 이미 ephemeral=True로 defer를 했기 때문에 일반 채널에 보이게 하려면 ephemeral를 풀고 followup 전송
-    # 만약 보스전 화면을 나만 보게 하고 싶다면 ephemeral=True를 유지해도 됩니다.
-    msg = await interaction.followup.send(embed=embed, view=view, ephemeral=False)
-    view.message = msg
+        user_combat_stats = {"hp": u_hp, "atk": u_atk, "def": u_def}
+
+        # 보스전 시작 (턴 제한 15턴)
+        view = NPCBattleView(user=user, user_stats_dict=user_combat_stats, npc_info=HIDDEN_BOSS, max_turns=15)
+        embed = view.get_embed()
+        embed.title = "🔥 [강림] 어둠의 지배자 토벌전"
+
+        view.message = await interaction.followup.send(embed=embed, view=view)
+    except Exception as e:
+        # 전투를 시작하지 못했다면 보스를 다시 돌려놓아 다른 사람이 도전할 수 있게 함
+        print(f"Boss summon error: {e}")
+        active_boss_guilds[guild_id] = True
+        npc_cooldowns.pop(user.id, None)
+        await interaction.followup.send("🚨 보스전을 시작하는 중 오류가 발생했습니다. 보스는 그대로 남아 있으니 다시 시도해주세요.", ephemeral=True)
 
 # === 시민 전용 아르바이트 쿨타임 사전 ===
 parttime_cooldowns = {}
