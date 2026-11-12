@@ -31,13 +31,114 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from supabase import create_client, Client
+import time
+import contextvars
+
+# ==========================================
+# 🔒 [명령어 동시 실행 방지]
+#   한 유저가 슬래시 명령어를 입력하면, 그 명령어가 끝나기 전까지
+#   같은 유저의 다른 슬래시 명령어는 실행되지 않고 안내 메시지만 표시됩니다.
+#
+#   • '끝난다'의 기준
+#       - 일반 명령어: 명령어 처리가 끝나는 순간
+#       - 전투·블랙잭·결투처럼 버튼으로 이어지는 진행형 명령어:
+#         해당 화면(View)이 종료(승패 결정/시간 초과)되는 순간
+#         (View 클래스에 holds_command_lock = True 를 지정한 것만 해당)
+#   • 오류로 잠금이 영원히 남지 않도록 COMMAND_LOCK_MAX_SEC 가 지나면 자동 해제됩니다.
+# ==========================================
+COMMAND_LOCK_MAX_SEC = 600
+
+class CommandLock:
+    __slots__ = ("user_id", "name", "interaction_id", "started", "callback_done", "views")
+
+    def __init__(self, user_id: int, name: str, interaction_id: int):
+        self.user_id = user_id
+        self.name = name
+        self.interaction_id = interaction_id
+        self.started = time.monotonic()
+        self.callback_done = False
+        self.views = []
+
+    def is_active(self) -> bool:
+        if time.monotonic() - self.started > COMMAND_LOCK_MAX_SEC:
+            return False
+        if not self.callback_done:
+            return True
+        return any(not v.is_finished() for v in self.views)
+
+active_commands = {}   # {user_id: CommandLock}
+_current_command_lock = contextvars.ContextVar("current_command_lock", default=None)
+
+def _command_label(interaction: discord.Interaction) -> str:
+    """'/도박 슬롯' 처럼 그룹 하위 명령어까지 포함한 이름"""
+    data = interaction.data or {}
+    parts = [str(data.get("name", "?"))]
+    opts = data.get("options") or []
+    while opts and opts[0].get("type") in (1, 2):   # 1: 하위 명령어, 2: 하위 그룹
+        parts.append(str(opts[0].get("name", "")))
+        opts = opts[0].get("options") or []
+    return " ".join(p for p in parts if p)
+
+def _finish_command(interaction: discord.Interaction):
+    lock = active_commands.get(interaction.user.id)
+    if lock is None or lock.interaction_id != interaction.id:
+        return   # 이 명령어가 잡은 잠금이 아니면 건드리지 않음
+    lock.callback_done = True
+    if not lock.is_active():
+        active_commands.pop(lock.user_id, None)
+
+class GuardedTree(app_commands.CommandTree):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # 자동완성 등은 대상이 아님 (슬래시 명령어 실행만 잠금)
+        if interaction.type is not discord.InteractionType.application_command:
+            return True
+
+        uid = interaction.user.id
+        cur = active_commands.get(uid)
+        if cur is not None and not cur.is_active():
+            active_commands.pop(uid, None)   # 끝났거나 오래된 잠금은 정리
+            cur = None
+
+        if cur is not None:
+            try:
+                await interaction.response.send_message(
+                    f"⏳ **/{cur.name}** 명령어가 아직 진행 중입니다. 끝난 뒤에 다시 입력해 주세요.",
+                    ephemeral=True
+                )
+            except discord.HTTPException:
+                pass
+            return False
+
+        # 확인과 등록 사이에 await 가 없으므로, 동시에 입력해도 한 명령어만 통과함
+        lock = CommandLock(uid, _command_label(interaction), interaction.id)
+        active_commands[uid] = lock
+        _current_command_lock.set(lock)
+        return True
+
+    async def on_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+        _finish_command(interaction)   # 오류로 끝난 명령어도 잠금 해제
+        await super().on_error(interaction, error)
+
+class GuardedView(discord.ui.View):
+    """holds_command_lock = True 인 View 는 화면이 끝날 때까지 명령어 잠금을 유지합니다."""
+    holds_command_lock = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        lock = _current_command_lock.get()
+        if lock is not None and self.holds_command_lock and self.timeout is not None:
+            lock.views.append(self)
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
 intents.members = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix='!', intents=intents, tree_cls=GuardedTree)
+
+@bot.listen("on_app_command_completion")
+async def _release_command_lock(interaction: discord.Interaction, command):
+    _finish_command(interaction)
 
 # ==========================================
 # 🌐 [Supabase DB 클라이언트 연결]
@@ -352,8 +453,20 @@ def delete_user_data(user_id: int):
     res = supabase.table("user_data").delete().eq("user_id", str_id).execute()
     _check_updated(res, "delete_user_data")
 
+# === 📜 일일 의뢰(/일퀘) 설정 ===
+# 4개를 모두 완료하면 출석 1스택 적립 → DAILY_COOLDOWN_SEC(1일) 동안 새 의뢰 없음
+DAILY_QUESTS = [
+    {"key": "mission",  "emoji": "🎯", "name": "비밀 임무 성공",  "target": 3, "hint": "/임무"},
+    {"key": "fight",    "emoji": "⚔️", "name": "NPC 전투 승리",   "target": 2, "hint": "/전투"},
+    {"key": "gamble",   "emoji": "🎰", "name": "카지노 도박",      "target": 3, "hint": "/도박"},
+    {"key": "parttime", "emoji": "🛠️", "name": "아르바이트",       "target": 2, "hint": "/아르바이트"},
+]
+DAILY_COOLDOWN_SEC = 24 * 60 * 60     # 1일 쿨타임 (완료 시각 기준)
+ATTENDANCE_TITLE_STACKS = 30          # 출석 스택이 이 값에 도달하면 칭호 획득 (한 달 = 30일)
+
 # === 🏷️ 칭호 시스템 ===
 TITLES = {
+    "attendance_month": {"name": "📅 성실한 출석왕", "desc": f"일일 의뢰 출석 {ATTENDANCE_TITLE_STACKS}스택 달성 (한 달)", "check": lambda s, i: s["attendance"] >= ATTENDANCE_TITLE_STACKS},
     "first_step":   {"name": "🌱 첫 발걸음",       "desc": "임무 1회 성공",                        "check": lambda s, i: s["success"] >= 1},
     "veteran":      {"name": "🗡️ 노련한 청부꾼",   "desc": "임무 10회 성공",                       "check": lambda s, i: s["success"] >= 10},
     "legend":       {"name": "💀 전설의 그림자",   "desc": "임무 50회 성공",                       "check": lambda s, i: s["success"] >= 50},
@@ -378,7 +491,8 @@ def get_title_blob(user_info: dict) -> dict:
     blob = dict(raw) if isinstance(raw, dict) else {}
     stats = blob.get("stats") if isinstance(blob.get("stats"), dict) else {}
     for key in ("success", "fail", "streak", "best_streak", "hard_success",
-                "gamble_played", "gamble_won", "gamble_wagered", "gamble_net", "jackpot", "broke"):
+                "gamble_played", "gamble_won", "gamble_wagered", "gamble_net", "jackpot", "broke",
+                "attendance"):
         stats[key] = int(stats.get(key, 0) or 0)
     blob["stats"] = stats
     blob["titles"] = list(blob.get("titles") or [])
@@ -409,6 +523,105 @@ def format_new_titles(new_ids: list) -> str:
         return ""
     names = ", ".join(TITLES[t]["name"] for t in new_ids)
     return f"\n\n🏷️ **[새 칭호 획득]** {names}\n`/칭호` 명령어로 장착할 수 있습니다."
+
+# ==========================================
+# 📜 일일 의뢰 시스템 (데이터는 user_data.data JSON 안의 "daily" / stats.attendance 에 저장)
+#   daily = {"progress": {퀘스트키: 횟수}, "cooldown_until": 완료+1일의 epoch 초}
+# ==========================================
+def _empty_daily_progress() -> dict:
+    return {q["key"]: 0 for q in DAILY_QUESTS}
+
+def get_daily_state(blob: dict, now: float = None) -> dict:
+    """blob["daily"] 를 읽어 정리해서 돌려줍니다. 쿨타임이 끝났으면 새 의뢰(진행도 0)로 초기화."""
+    now = time.time() if now is None else now
+    raw = blob.get("daily")
+    d = dict(raw) if isinstance(raw, dict) else {}
+    prog = d.get("progress") if isinstance(d.get("progress"), dict) else {}
+    d["progress"] = {q["key"]: max(0, min(int(prog.get(q["key"], 0) or 0), q["target"])) for q in DAILY_QUESTS}
+    d["cooldown_until"] = float(d.get("cooldown_until", 0) or 0)
+    if d["cooldown_until"] and now >= d["cooldown_until"]:
+        d["cooldown_until"] = 0.0
+        d["progress"] = _empty_daily_progress()
+    blob["daily"] = d
+    return d
+
+def daily_record(blob: dict, key: str, info: dict, now: float = None) -> str:
+    """일일 의뢰 진행도를 1 올립니다. (blob 만 수정하므로 호출한 쪽에서 DB에 저장해야 합니다)
+    의뢰 1개 완료 / 4개 전부 완료 시 안내 문구를, 아니면 빈 문자열을 돌려줍니다."""
+    now = time.time() if now is None else now
+    d = get_daily_state(blob, now)
+    if d["cooldown_until"] > now:
+        return ""                       # 쿨타임 중에는 집계하지 않음
+    quest = next((q for q in DAILY_QUESTS if q["key"] == key), None)
+    if quest is None or d["progress"][key] >= quest["target"]:
+        return ""
+
+    d["progress"][key] += 1
+    if d["progress"][key] < quest["target"]:
+        return ""                       # 아직 이 의뢰는 진행 중 (조용히 집계)
+
+    done = sum(1 for q in DAILY_QUESTS if d["progress"][q["key"]] >= q["target"])
+    if done < len(DAILY_QUESTS):
+        return f"\n\n📜 **[일일 의뢰]** {quest['emoji']} {quest['name']} 완료! ({done}/{len(DAILY_QUESTS)})"
+
+    # 4개 전부 완료 → 출석 1스택 + 1일 쿨타임
+    s = blob["stats"]
+    s["attendance"] += 1
+    d["cooldown_until"] = now + DAILY_COOLDOWN_SEC
+    new_ids = evaluate_new_titles(blob, info)
+    return (f"\n\n📅 **[일일 의뢰 전부 완료]** 출석 **{s['attendance']}스택** 적립! "
+            f"(다음 의뢰: <t:{int(d['cooldown_until'])}:R>)" + format_new_titles(new_ids))
+
+# 도박처럼 결과 화면을 여러 곳에서 만드는 경우, 일일 의뢰 안내 문구를 잠시 보관했다가 꺼내 씁니다.
+_daily_notices = {}
+
+def take_daily_notice(user_id: int) -> str:
+    return _daily_notices.pop(user_id, "")
+
+def build_daily_embed(user: discord.abc.User, blob: dict) -> discord.Embed:
+    now = time.time()
+    d = get_daily_state(blob, now)
+    stacks = blob["stats"]["attendance"]
+    cooling = d["cooldown_until"] > now
+
+    lines = []
+    for q in DAILY_QUESTS:
+        cur = d["progress"][q["key"]]
+        mark = "✅" if cur >= q["target"] else "⬜"
+        lines.append(f"{mark} {q['emoji']} **{q['name']}** — `{cur}/{q['target']}`  ({q['hint']})")
+
+    if cooling:
+        status = (f"🎉 오늘의 의뢰를 모두 완료했습니다!\n"
+                  f"⏳ 다음 의뢰: <t:{int(d['cooldown_until'])}:R> (<t:{int(d['cooldown_until'])}:f>)")
+        color = discord.Color.green()
+    else:
+        done = sum(1 for q in DAILY_QUESTS if d["progress"][q["key"]] >= q["target"])
+        status = f"4개를 모두 완료하면 **출석 1스택**을 얻습니다. ({done}/{len(DAILY_QUESTS)} 완료)"
+        color = discord.Color.blurple()
+
+    embed = discord.Embed(title=f"📜 [{user.name} 님의 일일 의뢰]", description=status, color=color)
+    embed.add_field(name="📋 오늘의 의뢰", value="\n".join(lines), inline=False)
+
+    title_owned = "attendance_month" in blob["titles"]
+    if title_owned:
+        goal = f"🏷️ {TITLES['attendance_month']['name']} 칭호 획득 완료!"
+    else:
+        goal = f"🏷️ {ATTENDANCE_TITLE_STACKS}스택 달성 시 {TITLES['attendance_month']['name']} 칭호 (남은 스택 {max(0, ATTENDANCE_TITLE_STACKS - stacks)})"
+    embed.add_field(name="📅 출석 스택", value=f"**{stacks}** 스택\n{goal}", inline=False)
+    embed.set_footer(text="의뢰를 완료한 시각부터 24시간 뒤에 새 의뢰가 열립니다.")
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    return embed
+
+@bot.tree.command(name="일퀘", description="[마피아 GM] 일일 의뢰 4개를 모두 완료하면 출석 1스택! (한 달 달성 시 칭호)")
+async def daily_quest_command(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+    blob = get_title_blob(get_user_data(user.id))
+    await interaction.response.send_message(embed=build_daily_embed(user, blob), ephemeral=True)
 
 def build_title_embed(user: discord.abc.User, blob: dict, new_ids: list = None) -> discord.Embed:
     equipped = blob.get("equipped")
@@ -949,7 +1162,9 @@ async def transfer_money(interaction: discord.Interaction, member: discord.Membe
     await interaction.followup.send(embed=embed)
 
 # === ⚔️ NPC 턴제 전투 View 클래스 (턴 제한 추가) ===
-class NPCBattleView(discord.ui.View):
+class NPCBattleView(GuardedView):
+    holds_command_lock = True   # 전투가 끝날 때까지 다른 명령어 실행 차단
+
     def __init__(self, user: discord.Member, user_stats_dict: dict, npc_info: dict, max_turns: int = 10):
         super().__init__(timeout=60)
         self.user = user
@@ -1097,6 +1312,14 @@ class NPCBattleView(discord.ui.View):
                 else:
                     drop_msg = "\n🏆 이미 전리품을 보유 중입니다."
 
+            # 📜 일일 의뢰 집계 (NPC 전투 승리)
+            daily_blob = get_title_blob(user_data)
+            daily_msg = daily_record(daily_blob, "fight", {
+                **user_data, "money": new_money, "honor": new_honor,
+                "inventory": update_payload.get("inventory", user_data.get("inventory"))
+            })
+            update_payload["data"] = daily_blob
+
             try:
                 _require_db()
                 supabase.table("user_data").update(update_payload).eq("user_id", str(self.user.id)).execute()
@@ -1105,7 +1328,7 @@ class NPCBattleView(discord.ui.View):
 
             # 🎲 [신규] 전투 승리 시 20% 확률로 히든 보스 출현 조건 체크 (히든 보스 자체가 아닌 일반 NPC 승리 시)
             boss_spawn_msg = ""
-            if self.npc_info["name"] != "🔥 [히든보스] 어둠의 지배자" and not self.npc_info.get("named"):
+            if self.npc_info["name"] != "🔥 [히든보스] 어둠의 지배자":
                 # 출현 확률은 BOSS_SPAWN_CHANCE 상수로 조절
                 if random.random() < BOSS_SPAWN_CHANCE:
                     guild_id = interaction.guild_id if interaction.guild else None
@@ -1124,7 +1347,7 @@ class NPCBattleView(discord.ui.View):
                             f"🏆 **획득 명예:** `+{earned_honor} pt`\n\n"
                             f"🏦 **현재 보유 자금:** `${new_money:,}`\n"
                             f"🏅 **현재 명예:** `{new_honor} pt`"
-                            f"{drop_msg}{boss_spawn_msg}",  # 전리품 + 보스 등장 메시지 포함
+                            f"{drop_msg}{daily_msg}{boss_spawn_msg}",  # 전리품 + 일일 의뢰 + 보스 등장 메시지 포함
                 color=discord.Color.green()
             )
         else:
@@ -1344,11 +1567,21 @@ async def part_time_job(interaction: discord.Interaction):
     update_user_stats(user.id, earned_money, 0)
     user_stats = get_user_data(user.id)
 
+    # 📜 일일 의뢰 집계 (아르바이트)
+    daily_msg = ""
+    try:
+        daily_blob = get_title_blob(user_stats)
+        daily_msg = daily_record(daily_blob, "parttime", user_stats)
+        save_title_blob(user.id, daily_blob)
+    except Exception as e:
+        print(f"DB Error (parttime daily quest): {e}")
+        daily_msg = ""
+
     embed = discord.Embed(
         title=f"🛠️ [{selected_job['title']}] 완료",
         description=f"**{user.mention}** 님이 정직한 노동으로 자금을 벌었습니다!\n\n"
                     f"💰 **획득 급여:** `${earned_money:,}`\n"
-                    f"🏦 **현재 보유 자금:** `${user_stats['money']:,}`",
+                    f"🏦 **현재 보유 자금:** `${user_stats['money']:,}`{daily_msg}",
         color=discord.Color.blue()
     )
     if user.avatar:
@@ -1414,10 +1647,13 @@ def settle_gamble(user_id: int, bet: int, payout: int, info: dict = None, prepai
         s["jackpot"] += 1
     if new_money <= 0:
         s["broke"] += 1
+    daily_msg = daily_record(blob, "gamble", {**info, "money": new_money})   # 📜 일일 의뢰 집계 (도박 1판)
     new_ids = evaluate_new_titles(blob, {**info, "money": new_money})
 
     res = supabase.table("user_data").update({"money": new_money, "data": blob}).eq("user_id", str(user_id)).execute()
     _check_updated(res, "settle_gamble")
+    if daily_msg:
+        _daily_notices[user_id] = daily_msg   # 저장에 성공했을 때만 안내 문구를 남김
     return new_money, new_ids
 
 def take_bet(user_id: int, bet: int) -> int:
@@ -1521,7 +1757,9 @@ def blackjack_outcome(player: list, dealer: list) -> str:
         return "push"
     return "lose"
 
-class BlackjackView(discord.ui.View):
+class BlackjackView(GuardedView):
+    holds_command_lock = True   # 블랙잭 테이블이 끝날 때까지 다른 명령어 실행 차단
+
     def __init__(self, owner: discord.Member, bet: int):
         super().__init__(timeout=60)
         self.owner = owner
@@ -1585,8 +1823,10 @@ class BlackjackView(discord.ui.View):
                 color=discord.Color.red()), view=None)
             return
 
-        await edit(embed=self.build_embed(reveal=True, outcome=outcome, payout=payout,
-                                          money=new_money, new_ids=new_ids, note=note), view=None)
+        final_embed = self.build_embed(reveal=True, outcome=outcome, payout=payout,
+                                       money=new_money, new_ids=new_ids, note=note)
+        final_embed.description = (final_embed.description or "") + take_daily_notice(self.owner.id)
+        await edit(embed=final_embed, view=None)
 
     async def dealer_turn(self, edit):
         while hand_value(self.dealer) < 17:
@@ -1694,7 +1934,7 @@ async def gamble_slots(interaction: discord.Interaction, 베팅금: app_commands
     embed = discord.Embed(
         title="🎰 [슬롯머신] 결과",
         description=(f"{slot_board(reels)}\n\n{msg}\n\n💵 베팅금: `${bet:,}`\n💰 지급액: `${payout:,}`\n"
-                     f"📈 손익: `{fmt_net(payout - bet)}`\n🏦 보유 자금: `${new_money:,}`{format_new_titles(new_ids)}"),
+                     f"📈 손익: `{fmt_net(payout - bet)}`\n🏦 보유 자금: `${new_money:,}`{format_new_titles(new_ids)}{take_daily_notice(user.id)}"),
         color=color
     )
     if user.avatar:
@@ -1752,7 +1992,7 @@ async def gamble_coin(interaction: discord.Interaction, 베팅금: app_commands.
         description=(f"결과: **{names[result_side]}**\n"
                      f"{'🎉 **적중!** 베팅금의 2배를 받았습니다.' if won else '💨 **빗나갔습니다.** 베팅금을 잃었습니다.'}\n\n"
                      f"💵 베팅금: `${bet:,}`\n💰 지급액: `${payout:,}`\n"
-                     f"📈 손익: `{fmt_net(payout - bet)}`\n🏦 보유 자금: `${new_money:,}`{format_new_titles(new_ids)}"),
+                     f"📈 손익: `{fmt_net(payout - bet)}`\n🏦 보유 자금: `${new_money:,}`{format_new_titles(new_ids)}{take_daily_notice(user.id)}"),
         color=discord.Color.green() if won else discord.Color.red()
     )
     if user.avatar:
@@ -1839,7 +2079,9 @@ duel_cooldowns = {}
 npc_cooldowns = {}
 
 # === ⚔️ 턴제 PVP 결투 시스템 (버튼 선택형) ===
-class DuelBattleView(discord.ui.View):
+class DuelBattleView(GuardedView):
+    holds_command_lock = True   # 결투가 끝날 때까지 (신청한 사람의) 다른 명령어 실행 차단
+
     def __init__(self, challenger: discord.Member, target: discord.Member, bet: int, c_stats: dict, t_stats: dict):
         super().__init__(timeout=30)
         self.challenger = challenger
@@ -2345,6 +2587,8 @@ class MissionSelect(discord.ui.Select):
             if old_rank != new_rank:
                 rank_up_msg = f"\n\n🎉 **[조직 승급 축하]** **{old_rank}** ➔ **{new_rank}**(으)로 승급하셨습니다!"
 
+            rank_up_msg += daily_record(blob, "mission", {**user_stats, "money": current_money, "honor": current_honor})
+
             new_title_ids = evaluate_new_titles(blob, {**user_stats, "money": current_money, "honor": current_honor})
             rank_up_msg += format_new_titles(new_title_ids)
 
@@ -2830,6 +3074,7 @@ async def kick_member(interaction: discord.Interaction, member: discord.Member, 
     app_commands.Choice(name="🔥 히든 보스 (/보스)", value="보스"),
     app_commands.Choice(name="🎰 카지노 & 도박 (/도박)", value="도박"),
     app_commands.Choice(name="🏷️ 칭호 시스템 (/칭호)", value="칭호"),
+    app_commands.Choice(name="📜 일일 의뢰 (/일퀘)", value="일퀘"),
     app_commands.Choice(name="⚙️ 통합 설정 (/설정)", value="설정"),
     app_commands.Choice(name="🐺 네임드 몬스터 (/네임드)", value="네임드"),
     app_commands.Choice(name="🌍 Utopia Of Eden (세계관)", value="유토피아 오브 에덴")
@@ -2873,6 +3118,13 @@ async def info_command(interaction: discord.Interaction, keyword: str):
             "title": "🏷️ 시스템: /칭호",
             "desc": "조건을 달성하여 업적 칭호를 획득하고 프로필에 장착합니다.\n"
                     "• **효과:** `/프로필` 명령어 실행 시 내 아날로그 증명서에 장착된 칭호가 예쁘게 각인됩니다.",
+        },
+        "일퀘": {
+            "title": "📜 시스템: /일퀘",
+            "desc": "매일 주어지는 일일 의뢰 4개를 모두 완료하면 **출석 1스택**이 쌓입니다.\n"
+                    + "".join(f"• {q['emoji']} {q['name']} {q['target']}회 ({q['hint']})\n" for q in DAILY_QUESTS)
+                    + "• **쿨타임:** 4개를 모두 완료한 시각부터 24시간 뒤에 새 의뢰가 열립니다.\n"
+                    f"• **보상:** 출석 {ATTENDANCE_TITLE_STACKS}스택 달성 시 {TITLES['attendance_month']['name']} 칭호",
         },
         "설정": {
             "title": "⚙️ 시스템: /설정",
