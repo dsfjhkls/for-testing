@@ -1051,7 +1051,7 @@ async def fight_npc(interaction: discord.Interaction, npc_name: str):
         available_npcs = ", ".join([f"`{name}`" for name in NPC_DATA.keys()])
         await interaction.response.send_message(
             f"❌ **[{npc_name}]** 은(는) 존재하지 않는 NPC입니다.\n"
-            f"",
+            f"📋 사용 가능한 NPC 목록: {available_npcs}",
             ephemeral=True
         )
         return
@@ -1085,15 +1085,15 @@ async def fight_npc(interaction: discord.Interaction, npc_name: str):
     view.message = msg
 
 
- # === 🐉 [조직원 전용] `/보스` 명령어 ===
+# === 🐉 [조직원 전용] `/보스` 명령어 ===
 @bot.tree.command(name="보스", description="[조직원 전용] 전투 후 등장한 어둠의 지배자와 목숨을 건 보스전을 시작합니다.")
 async def fight_boss(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
 
-    # ⏱️ [핵심] 3초 타임아웃 방지를 위해 응답 대기 상태 먼저 선언!
-    await interaction.response.defer()
+    # ⏱️ [핵심] 가장 먼저 무조건 응답 대기 상태(defer) 선언 (생각 중임 방지)
+    await interaction.response.defer(ephemeral=True)
 
     guild_id = interaction.guild_id if interaction.guild else None
 
@@ -1114,7 +1114,10 @@ async def fight_boss(interaction: discord.Interaction):
     if user.id in npc_cooldowns:
         remaining = int((npc_cooldowns[user.id] - now).total_seconds())
         if remaining > 0:
-            await interaction.followup.send(f"⏳ 이전 전투의 부상이 심합니다. **{remaining}초** 뒤에 도전할 수 있습니다.", ephemeral=True)
+            await interaction.followup.send(
+                f"⏳ 이전 전투의 부상이 심합니다. **{remaining}초** 뒤에 도전할 수 있습니다.",
+                ephemeral=True
+            )
             return
 
     npc_cooldowns[user.id] = now + timedelta(seconds=30)
@@ -1146,8 +1149,9 @@ async def fight_boss(interaction: discord.Interaction):
     embed = view.get_embed()
     embed.title = "🔥 [강림] 어둠의 지배자 토벌전"
 
-    # 응답을 이미 defer 했으므로 followup.send 사용
-    msg = await interaction.followup.send(embed=embed, view=view)
+    # 💡 이미 ephemeral=True로 defer를 했기 때문에 일반 채널에 보이게 하려면 ephemeral를 풀고 followup 전송
+    # 만약 보스전 화면을 나만 보게 하고 싶다면 ephemeral=True를 유지해도 됩니다.
+    msg = await interaction.followup.send(embed=embed, view=view, ephemeral=False)
     view.message = msg
 
 # === 시민 전용 아르바이트 쿨타임 사전 ===
