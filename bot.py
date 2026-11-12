@@ -2599,8 +2599,16 @@ async def kick_member(interaction: discord.Interaction, member: discord.Member, 
     await interaction.response.send_message(embed=embed)
 
 # === 📖 [공용] 통합 `/정보` 명령어 ===
-@bot.tree.command(name="정보", description="[공용] 특정 명령어 또는 아이템의 상세 정보와 사용법을 검색합니다.")
-@app_commands.describe(keyword="알고 싶은 명령어 또는 아이템 이름 (예: 전투, 송금, 주먹)")
+@bot.tree.command(name="정보", description="[공용] 특정 명령어, 아이템 또는 세계관 설정을 검색합니다.")
+@app_commands.describe(keyword="알고 싶은 항목 (예: 전투, 송금, 유토피아 오브 에덴)")
+@app_commands.choices(keyword=[
+    app_commands.Choice(name="⚔️ 전투 명령어", value="전투"),
+    app_commands.Choice(name="💸 송금 명령어", value="송금"),
+    app_commands.Choice(name="🚨 검거 명령어", value="검거"),
+    app_commands.Choice(name="🛒 무기상점 명령어", value="무기상점"),
+    app_commands.Choice(name="👤 프로필 명령어", value="프로필"),
+    app_commands.Choice(name="🌍 Utopia Of Eden (세계관)", value="유토피아 오브 에덴")
+])
 async def info_command(interaction: discord.Interaction, keyword: str):
     if not await check_maintenance(interaction): return
 
@@ -2662,25 +2670,44 @@ async def info_command(interaction: discord.Interaction, keyword: str):
         }
     }
 
-    # 3. 검색 매칭 로직
-    target_info = None
+    # 3. 세계관 설정 사전 (Utopia Of Eden)
+    world_infos = {
+        "유토피아 오브 에덴": {
+            "title": "🌍 세계관 조직: Utopia Of Eden (유토피아 오브 에덴)",
+            "desc": (
+                "**“모두가 평등한 세상. 그곳에 불평등한 자는 존재할 수 없다.”**\n\n"
+                "📌 **기본 정보**\n"
+                "• **조직 분류:** 테러조직 | **활동 국가:** 칼렌데 공화국\n"
+                "• **창립자:** 에칼 데 페스토 | **주요 사상:** 공산주의\n"
+                "• **주요 활동:** 선전물 제작 및 배포, 극단적 테러 활동\n"
+                "• **대립 관계:** 칼렌데 중앙치안국 및 기타 세력\n\n"
+                "🏛️ **창립 배경 및 이념**\n"
+                "세상의 불공평함과 극심한 계급 격차에 회의를 느낀 에칼 데 페스토가 창설했습니다. "
+                "모든 사람이 동등한 위치에 놓이는 이상 사회를 지향하나, 일부 조직원이 이를 극단적으로 해석해 테러를 일으키며 칼렌데 공화국의 중대한 안보 위협이 되었습니다.\n\n"
+                "🚢 **주요 사건: 예노호 테러 사건**\n"
+                "• **개요:** 조직원들이 여객선 예노호에 잠입해 인질극을 벌이고 침몰시킨 참사.\n"
+                "• **실행 인물:** 데이브 니스코프 (사건 후 실종, 생사 불명)\n"
+                "• **피해 현황:** 총 탑승 129명 중 사망 120명, 생존 8명, 실종 1명\n\n"
+                "⚖️ **사회적 평가**\n"
+                "조직은 자신들을 혁명 세력이라 칭하지만, 시민들에게는 무고한 사람들을 희생시킨 악명 높은 테러조직으로 인식되고 있습니다."
+            )
+        }
+    }
 
-    # 명령어 우선 검색
-    if kw in command_infos:
-        target_info = command_infos[kw]
-    # 아이템 이름 검색
-    elif kw in item_infos:
-        target_info = item_infos[kw]
+    # 4. 검색 매칭 로직 (명령어, 아이템, 세계관 통합 검색)
+    target_info = None
+    combined_dict = {**command_infos, **item_infos, **world_infos}
+
+    if kw in combined_dict:
+        target_info = combined_dict[kw]
     else:
-        # 키워드가 포함된 항목이 있는지 부분 검색 시도
-        for name, data in {**command_infos, **item_infos}.items():
+        for name, data in combined_dict.items():
             if kw in name:
                 target_info = data
                 break
 
-    # 일치하는 정보가 없을 경우
     if not target_info:
-        available_keys = list(command_infos.keys()) + list(item_infos.keys())
+        available_keys = list(combined_dict.keys())
         keys_str = ", ".join([f"`{k}`" for k in available_keys])
         
         await interaction.response.send_message(
@@ -2690,7 +2717,7 @@ async def info_command(interaction: discord.Interaction, keyword: str):
         )
         return
 
-    # 4. 임베드 생성 및 출력
+    # 5. 임베드 생성 및 출력
     embed = discord.Embed(
         title=target_info["title"],
         description=target_info["desc"],
@@ -2702,5 +2729,5 @@ async def info_command(interaction: discord.Interaction, keyword: str):
         embed.set_thumbnail(url=interaction.user.avatar.url)
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
+    
 bot.run(os.getenv("DISCORD_TOKEN"))
