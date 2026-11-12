@@ -1081,18 +1081,22 @@ async def fight_npc(interaction: discord.Interaction, npc_name: str):
     msg = await interaction.followup.send(embed=embed, view=view)
     view.message = msg
 
-    # === 🐉 [조직원 전용] `/보스` 명령어 ===
+
+ # === 🐉 [조직원 전용] `/보스` 명령어 ===
 @bot.tree.command(name="보스", description="[조직원 전용] 전투 후 등장한 어둠의 지배자와 목숨을 건 보스전을 시작합니다.")
 async def fight_boss(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
 
+    # ⏱️ [핵심] 3초 타임아웃 방지를 위해 응답 대기 상태 먼저 선언!
+    await interaction.response.defer()
+
     guild_id = interaction.guild_id if interaction.guild else None
 
     # 1. 서버 내 보스 등장 여부 확인
     if not guild_id or not active_boss_guilds.get(guild_id, False):
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "❌ 현재 이 서버에 보스가 등장하지 않았습니다.",
             ephemeral=True
         )
@@ -1107,7 +1111,7 @@ async def fight_boss(interaction: discord.Interaction):
     if user.id in npc_cooldowns:
         remaining = int((npc_cooldowns[user.id] - now).total_seconds())
         if remaining > 0:
-            await interaction.response.send_message(f"⏳ 이전 전투의 부상이 심합니다. **{remaining}초** 뒤에 도전할 수 있습니다.", ephemeral=True)
+            await interaction.followup.send(f"⏳ 이전 전투의 부상이 심합니다. **{remaining}초** 뒤에 도전할 수 있습니다.", ephemeral=True)
             return
 
     npc_cooldowns[user.id] = now + timedelta(seconds=30)
@@ -1115,8 +1119,6 @@ async def fight_boss(interaction: discord.Interaction):
 
     # 3. 보스 소환 완료 처리 (보스전이 시작되면 해당 서버의 출현 상태를 해제)
     active_boss_guilds[guild_id] = False
-
-    await interaction.response.defer()
 
     # 유저 전투 스탯 계산 (명예 + 보유 장비)
     inventory = user_stats.get("inventory", {})
@@ -1141,6 +1143,7 @@ async def fight_boss(interaction: discord.Interaction):
     embed = view.get_embed()
     embed.title = "🔥 [강림] 어둠의 지배자 토벌전"
 
+    # 응답을 이미 defer 했으므로 followup.send 사용
     msg = await interaction.followup.send(embed=embed, view=view)
     view.message = msg
 
