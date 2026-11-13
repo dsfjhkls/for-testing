@@ -1609,7 +1609,7 @@ class NPCBattleView(GuardedView):
                 supabase.table("user_data").update(update_payload).eq("user_id", str(self.user.id)).execute()
             except Exception as e:
                 print(f"DB Error (NPC Battle Win): {e}")
-                # 🎲 [수정] 이미 서버에 보스가 없을 때만 2% 확률로 최강 보스 출현
+            # 🎲 이미 서버에 보스가 없을 때만 2% 확률로 최강 보스 출현
             boss_spawn_msg = ""
             guild_id = interaction.guild_id if interaction.guild else None
             
@@ -1622,7 +1622,6 @@ class NPCBattleView(GuardedView):
                             "차원의 균열이 갈라지며 역대급 재앙의 기운이 감지되었습니다!\n"
                             "**🔥 [최강보스] 태초의 파괴자**가 강림했습니다! (`/보스` 명령어로 토벌 가능)"
                         )
-
             # 🎲 [신규] 전투 승리 시 20% 확률로 히든 보스 출현 조건 체크 (히든 보스 자체가 아닌 일반 NPC 승리 시)
             boss_spawn_msg = ""
             if self.npc_info["name"] != "🔥 [히든보스] 어둠의 지배자":
@@ -3068,15 +3067,6 @@ async def execute_mission(interaction: discord.Interaction):
     user = interaction.user
     user_stats = get_user_data(user.id)
     current_loc = user_stats.get("location", "레벤하임")
-
-    now = datetime.now()
-    cooldown_notice = ""
-    
-    if user.id in mission_cooldowns:
-        next_available = mission_cooldowns[user.id]
-        if now < next_available:
-            remaining = int((next_available - now).total_seconds()) + 1
-            cooldown_notice = f"⏳ **현재 체력을 회복 중입니다. (남은 쿨타임: {remaining}초)**\n\n"
 
     embed = discord.Embed(
         title=f"📂 [{current_loc}] 비밀 임무 작전 하달",
