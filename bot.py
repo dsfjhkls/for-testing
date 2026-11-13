@@ -498,7 +498,7 @@ TITLES = {
     "ledger_thief": {"name": "장부 도둑",       "desc": "'라이벌 보스의 장부 탈취' 5회 성공",   "check": lambda s, i: s["hard_success"] >= 5},
     "unlucky":      {"name": "불운한 쥐새끼",   "desc": "임무 5회 실패",                        "check": lambda s, i: s["fail"] >= 5},
     "rich":         {"name": "검은 돈의 주인",  "desc": "보유 자금 $100,000 이상",               "check": lambda s, i: (i.get("money") or 0) >= 100000},
-    "respected":    {"name": "존경받는 자",     "desc": "조직 명예 300pt 이상 (솔다토 이상)",   "check": lambda s, i: (i.get("honor") or 0) >= 300},
+    "respected":    {"name": "존경받는 자",     "desc": "조직 명예 1000pt 이상 (솔다토 이상)",   "check": lambda s, i: (i.get("honor") or 0) >= 300},
     "collector":    {"name": "장비 수집가",     "desc": "암시장 장비 10개 이상 보유",            "check": lambda s, i: len([k for k in (i.get("inventory") or {}) if not k.startswith("[전리품]")]) >= 10},
     "named_hunter": {"name": "네임드 사냥꾼",   "desc": "네임드 몬스터 1종 처치",                "check": lambda s, i: any(k.startswith("[전리품]") for k in (i.get("inventory") or {}))},
     "named_slayer": {"name": "네임드 학살자",   "desc": "네임드 몬스터 4종 모두 처치",          "check": lambda s, i: sum(1 for k in (i.get("inventory") or {}) if k.startswith("[전리품]")) >= 4},
@@ -3687,19 +3687,19 @@ RAID_TIERS = {
     "rat": {
         "name": "하수구의 쥐왕", "min_players": 2, "min_honor": 0, "cost": 1000,
         "hits": 38, "def_ratio": 0.25, "aoe": 0.07, "aoe_enrage": 0.10,
-        "money": 3000, "honor": 25, "points": 10,
+        "money": 20000, "honor": 250, "points": 10,
         "desc": "하수도를 지배하는 거대한 쥐떼의 왕. 입문자용 레이드입니다.",
     },
     "bull": {
         "name": "부두 항만의 폭군", "min_players": 3, "min_honor": 1500, "cost": 3000,
         "hits": 46, "def_ratio": 0.30, "aoe": 0.09, "aoe_enrage": 0.13,
-        "money": 7000, "honor": 45, "points": 25,
+        "money": 40000, "honor": 500, "points": 25,
         "desc": "에르느코항 부두를 장악한 괴력의 폭군. 응급처치 담당이 꼭 필요합니다.",
     },
     "king": {
         "name": "칼렌데 지하 황제", "min_players": 4, "min_honor": 4000, "cost": 8000,
         "hits": 54, "def_ratio": 0.35, "aoe": 0.09, "aoe_enrage": 0.13,
-        "money": 14000, "honor": 80, "points": 60,
+        "money": 60000, "honor": 1000, "points": 60,
         "desc": "칼렌데 지하 세계의 진짜 주인. 정상급 조직만이 도전할 수 있습니다.",
     },
 }
