@@ -1314,6 +1314,17 @@ HIDDEN_BOSS = {
     "desc": "전투의 살기에 이끌려 모습을 드러낸 칼렌데 지하 세계의 지배자입니다. 15턴 안에 쓰러뜨리지 못하면 제압당합니다."
 }
 
+# === 🔥 [신규 2% 확률] 최강 히든 보스 데이터 ===
+ULTIMATE_BOSS = {
+    "name": "🔥 [최강보스] 태초의 파괴자",
+    "hp": 130000,
+    "atk": 5500,
+    "def": 900,
+    "reward_money": (50000, 100000),
+    "reward_honor": 1000,
+    "desc": "칼렌데 지하 세계의 근원이자 재앙 그 자체인 존재입니다. 15턴 안에 쓰러뜨리지 못하면 세계가 붕괴합니다."
+}
+
 # === 🐺 네임드(강화) 몬스터 ===
 # 일반 NPC보다 훨씬 강하고, 체력이 절반 아래로 떨어지면 격노(enrage)해서 공격력이 오릅니다.
 # 처음 처치하면 고유 전리품(🏆)을 얻고, 명예는 조금만 주므로 대부 달성 속도에는 거의 영향이 없습니다.
@@ -1598,6 +1609,19 @@ class NPCBattleView(GuardedView):
                 supabase.table("user_data").update(update_payload).eq("user_id", str(self.user.id)).execute()
             except Exception as e:
                 print(f"DB Error (NPC Battle Win): {e}")
+                # 🎲 [수정] 이미 서버에 보스가 없을 때만 2% 확률로 최강 보스 출현
+            boss_spawn_msg = ""
+            guild_id = interaction.guild_id if interaction.guild else None
+            
+            if self.npc_info["name"] not in ["🔥 [히든보스] 어둠의 지배자", "🔥 [최강보스] 태초의 파괴자"]:
+                if guild_id and not active_boss_guilds.get(guild_id, False):
+                    if random.random() < BOSS_SPAWN_CHANCE:
+                        active_boss_guilds[guild_id] = True
+                        boss_spawn_msg = (
+                            "\n\n🚨 **[세계멸망 경보]** 🚨\n"
+                            "차원의 균열이 갈라지며 역대급 재앙의 기운이 감지되었습니다!\n"
+                            "**🔥 [최강보스] 태초의 파괴자**가 강림했습니다! (`/보스` 명령어로 토벌 가능)"
+                        )
 
             # 🎲 [신규] 전투 승리 시 20% 확률로 히든 보스 출현 조건 체크 (히든 보스 자체가 아닌 일반 NPC 승리 시)
             boss_spawn_msg = ""
@@ -1705,7 +1729,7 @@ async def fight_npc(interaction: discord.Interaction, npc_name: str):
 
 
 # === 🐉 [조직원 전용] `/보스` 명령어 ===
-@bot.tree.command(name="보스", description="[조직원 전용] 전투 후 등장한 어둠의 지배자와 목숨을 건 보스전을 시작합니다.")
+@bot.tree.command(name="보스", description="[조직원 전용] 전투 후 등장한 최강의 보스와 목숨을 건 결전을 시작합니다.")
 async def fight_boss(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
@@ -1714,16 +1738,14 @@ async def fight_boss(interaction: discord.Interaction):
     user = interaction.user
     guild_id = interaction.guild_id if interaction.guild else None
 
-    # 1. 서버 내 보스 등장 여부 확인 (안내 메시지는 나에게만 보이도록 일반 응답으로 전송)
     if not guild_id or not active_boss_guilds.get(guild_id, False):
         await interaction.response.send_message(
             "❌ 현재 이 서버에 보스가 등장하지 않았습니다.\n"
-            "💡 일반 `/전투`에서 승리하면 일정 확률로 어둠의 지배자가 출현합니다.",
+            "💡 일반 `/전투` 승리 시 아주 낮은 확률(2%)로 출현합니다.",
             ephemeral=True
         )
         return
 
-    # 2. 쿨타임 체크 (30초)
     now = datetime.now()
     if user.id in npc_cooldowns:
         remaining = int((npc_cooldowns[user.id] - now).total_seconds())
@@ -1734,11 +1756,9 @@ async def fight_boss(interaction: discord.Interaction):
             )
             return
 
-    # 3. 보스 선점: 위의 확인과 이 선점 사이에 await 가 없어서, 여러 명이 동시에 입력해도 한 명만 입장함
     active_boss_guilds[guild_id] = False
     npc_cooldowns[user.id] = now + timedelta(seconds=BOSS_COOLDOWN_SEC)
 
-    # 4. 모두에게 보이도록 '공개' 응답을 예약 (defer(ephemeral=True) 로 하면 이후 전투 화면까지 나만 보이게 됨)
     await interaction.response.defer()
 
     try:
@@ -1746,17 +1766,15 @@ async def fight_boss(interaction: discord.Interaction):
         honor = user_stats.get("honor", 0)
         inventory = user_stats.get("inventory", {})
 
-        # 유저 전투 스탯 계산 (명예 + 보유 장비)
         user_combat_stats = compute_combat_stats(honor, inventory)
 
-        # 보스전 시작 (턴 제한 15턴)
-        view = NPCBattleView(user=user, user_stats_dict=user_combat_stats, npc_info=HIDDEN_BOSS, max_turns=15)
+        # 2% 확률로 등장하는 [태초의 파괴자] 보스전 시작 (15턴 제한)
+        view = NPCBattleView(user=user, user_stats_dict=user_combat_stats, npc_info=ULTIMATE_BOSS, max_turns=15)
         embed = view.get_embed()
-        embed.title = "🔥 [강림] 어둠의 지배자 토벌전"
+        embed.title = "🔥 [멸망의 전조] 태초의 파괴자 토벌전"
 
         view.message = await interaction.followup.send(embed=embed, view=view)
     except Exception as e:
-        # 전투를 시작하지 못했다면 보스를 다시 돌려놓아 다른 사람이 도전할 수 있게 함
         print(f"Boss summon error: {e}")
         active_boss_guilds[guild_id] = True
         npc_cooldowns.pop(user.id, None)
