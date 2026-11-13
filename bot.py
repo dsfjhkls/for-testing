@@ -2753,6 +2753,12 @@ async def execute_mission(interaction: discord.Interaction):
     if await check_jail(interaction): return
     await interaction.response.defer()
 
+    # 🚨 [추가] 경찰은 조직원 임무를 수행할 수 없음
+    police_role = discord.utils.get(interaction.guild.roles, name="경찰")
+    if police_role and police_role in interaction.user.roles:
+        await interaction.response.send_message("❌ 치안국 경찰은 범죄 조직의 비밀 임무를 수행할 수 없습니다!", ephemeral=True)
+        return
+
     user = interaction.user
     user_stats = get_user_data(user.id)
     current_loc = user_stats.get("location", "레벤하임")
@@ -2981,6 +2987,117 @@ async def open_weapon_shop(interaction: discord.Interaction):
 
     await interaction.followup.send(embed=embed, view=WeaponShopView(owner=user))
 
+    # === 🛒 경찰 전용 상점 아이템 목록 ===
+POLICE_SHOP_ITEMS = [
+    {"id": "police_shield", "name": "🛡️ 치안국 강화 방탄복", "price": 4000, "desc": "경찰의 방어력을 대폭 강화합니다 (방어력 +35)", "def_bonus": 35},
+    {"id": "police_radio", "name": "📻 기동타격대 무전기", "price": 8000, "desc": "검거 포상금 +20% 증가 효과", "bonus_type": "radio"},
+    {"id": "police_badge", "name": "⭐ 특급 수사관 황금 배지", "price": 20000, "desc": "치안국의 명예와 권위를 상징합니다 (방어력 +50 / 명예 보너스)", "def_bonus": 50},
+]
+
+class PoliceShopSelect(discord.ui.Select):
+    def __init__(self, owner: discord.Member):
+        self.owner = owner
+        options = [
+            discord.SelectOption(
+                label=item["name"],
+                description=f"가격: ${item['price']:,} | {item['desc']}",
+                value=item["id"]
+            ) for item in POLICE_SHOP_ITEMS
+        ]
+        super().__init__(placeholder="🛡️ 치안국 보급품을 선택하세요...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        if interaction.user != self.owner:
+            await interaction.followup.send("❌ 본인의 상점 창만 조작할 수 있습니다.", ephemeral=True)
+            return
+
+        user = interaction.user
+        user_stats = get_user_data(user.id)
+        current_money = user_stats.get("money", 0)
+        inventory = user_stats.get("inventory", {})
+
+        target_item = next((item for item in POLICE_SHOP_ITEMS if item["id"] == self.values[0]), None)
+        if not target_item:
+            await interaction.followup.send("❌ 존재하지 않는 보급품입니다.", ephemeral=True)
+            return
+
+        item_name = target_item["name"]
+        item_price = target_item["price"]
+
+        if current_money < item_price:
+            await interaction.followup.send(f"❌ 자금이 부족합니다! (필요: `${item_price:,}`, 보유: `${current_money:,}`)", ephemeral=True)
+            return
+
+        if inventory.get(item_name, 0) >= 1:
+            await interaction.followup.send("⚠️ 이미 지급받은 보급품입니다.", ephemeral=True)
+            return
+
+        current_money -= item_price
+        inventory[item_name] = inventory.get(item_name, 0) + 1
+
+        try:
+            _require_db()
+            supabase.type = "user_data" # 혹은 기존 update 구문 사용
+            supabase.table("user_data").update({
+                "money": current_money,
+                "inventory": inventory
+            }).eq("user_id", str(user.id)).execute()
+        except Exception as e:
+            print(f"DB Error (police shop buy): {e}")
+            await interaction.followup.send("🚨 보급품 신청 중 DB 오류가 발생했습니다.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🛡️ [치안국 보급고] 지급 완료",
+            description=f"**{user.mention}** 님이 **{item_name}**을(를) 보급받았습니다!\n\n"
+                        f"💳 **차감 비용:** `${item_price:,}`\n"
+                        f"🏦 **잔여 자금:** `${current_money:,}`\n"
+                        f"🎒 **효과:** `{target_item['desc']}`",
+            color=discord.Color.blue()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+class PoliceShopView(discord.ui.View):
+    def __init__(self, owner: discord.Member):
+        super().__init__(timeout=60)
+        self.add_item(PoliceShopSelect(owner))
+
+@bot.tree.command(name="경찰상점", description="[경찰 전용] 치안국 전용 장비와 보급품을 구매합니다.")
+async def open_police_shop(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if await check_jail(interaction): return
+
+    # 경찰 역할 검증
+    police_role = discord.utils.get(interaction.guild.roles, name="경찰")
+    if not police_role or police_role not in interaction.user.roles:
+        await interaction.response.send_message("❌ 치안국 소속 경찰만 이용할 수 있는 전용 상점입니다!", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    user = interaction.user
+    user_stats = get_user_data(user.id)
+    current_money = user_stats.get("money", 0)
+
+    items_desc = "\n".join([
+        f"• **{item['name']}** - `${item['price']:,}`\n  └ *{item['desc']}*"
+        for item in POLICE_SHOP_ITEMS
+    ])
+
+    embed = discord.Embed(
+        title="🏛️ [치안국 보급고] 공식 카탈로그",
+        description=f"**{user.mention}** 경관님, 환영합니다. 치안 활동을 위한 공식 보급품을 구매할 수 있습니다.\n\n"
+                    f"{items_desc}\n\n"
+                    f"🏦 **현재 보유 자금:** `${current_money:,}`",
+        color=discord.Color.dark_blue()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+
+    await interaction.followup.send(embed=embed, view=PoliceShopView(owner=user), ephemeral=True)
+
 @bot.tree.command(name="이동", description="[마피아 GM] 다른 지역으로 이동합니다.")
 @app_commands.choices(지역=[
     app_commands.Choice(name="🏛️ 레벤하임 (수도)", value="레벤하임"),
@@ -3016,6 +3133,12 @@ async def open_market(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
+
+    # 🚨 [추가] 경찰은 암시장 이용 불가
+    police_role = discord.utils.get(interaction.guild.roles, name="경찰")
+    if police_role and police_role in interaction.user.roles:
+        await interaction.response.send_message("❌ 치안국 경찰은 음지의 암시장을 이용할 수 없습니다! 대신 `/경찰상점`을 이용해 주세요.", ephemeral=True)
+        return
 
     user = interaction.user
     user_stats = get_user_data(user.id)
