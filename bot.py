@@ -180,11 +180,15 @@ MAINTENANCE_MODE = False
 wanted_list = {}
 
 # === 🐉 서버별 보스 출현 상태 관리 ===
-# {guild_id: True/False}
+# {guild_id: "dark" | "ultimate" | None}  ← 서버에 지금 어떤 보스가 떠 있는지 (None/없음 = 보스 없음)
+#   "dark"     = 🔥 [히든보스] 어둠의 지배자  (HIDDEN_BOSS)
+#   "ultimate" = 🔥 [최강보스] 태초의 파괴자  (ULTIMATE_BOSS)
 active_boss_guilds = {}
 
-# 일반 /전투 승리 시 히든 보스가 출현할 확률 (0.10 = 10%, 테스트할 때는 1.0 으로 바꾸면 항상 출현)
-BOSS_SPAWN_CHANCE = 0.10
+# 일반 /전투 승리 시 보스가 출현할 확률 (테스트할 때는 1.0 으로 바꾸면 항상 출현)
+# 판정 순서: 최강보스(태초의 파괴자) 먼저 → 실패하면 어둠의 지배자 → 둘 다 실패하면 출현 없음
+ULTIMATE_BOSS_SPAWN_CHANCE = 0.02   # 2%
+BOSS_SPAWN_CHANCE = 0.10            # 10% (어둠의 지배자)
 
 # {user_id: datetime (석방 예정 시간)}
 jail_list = {}
@@ -1611,31 +1615,25 @@ class NPCBattleView(GuardedView):
                 supabase.table("user_data").update(update_payload).eq("user_id", str(self.user.id)).execute()
             except Exception as e:
                 print(f"DB Error (NPC Battle Win): {e}")
-            # 🎲 이미 서버에 보스가 없을 때만 2% 확률로 최강 보스 출현
+            # 🎲 보스 출현 판정 (서버에 보스가 없을 때만 / 보스·네임드 처치로는 출현하지 않음)
             boss_spawn_msg = ""
             guild_id = interaction.guild_id if interaction.guild else None
-            
-            if self.npc_info["name"] not in ["🔥 [히든보스] 어둠의 지배자", "🔥 [최강보스] 태초의 파괴자"]:
-                if guild_id and not active_boss_guilds.get(guild_id, False):
-                    if random.random() < BOSS_SPAWN_CHANCE:
-                        active_boss_guilds[guild_id] = True
-                        boss_spawn_msg = (
-                            "\n\n🚨 **[세계멸망 경보]** 🚨\n"
-                            "차원의 균열이 갈라지며 역대급 재앙의 기운이 감지되었습니다!\n"
-                            "**🔥 [최강보스] 태초의 파괴자**가 강림했습니다! (`/보스` 명령어로 토벌 가능)"
-                        )
-            # 🎲 [신규] 전투 승리 시 20% 확률로 히든 보스 출현 조건 체크 (히든 보스 자체가 아닌 일반 NPC 승리 시)
-            boss_spawn_msg = ""
-            if self.npc_info["name"] != "🔥 [히든보스] 어둠의 지배자":
-                # 출현 확률은 BOSS_SPAWN_CHANCE 상수로 조절
-                if random.random() < BOSS_SPAWN_CHANCE:
-                    guild_id = interaction.guild_id if interaction.guild else None
-                    if guild_id:
-                        active_boss_guilds[guild_id] = True
+            is_boss_fight = self.npc_info["name"] in (HIDDEN_BOSS["name"], ULTIMATE_BOSS["name"])
+            if guild_id and not is_boss_fight and not self.npc_info.get("named") and not active_boss_guilds.get(guild_id):
+                roll = random.random()
+                if roll < ULTIMATE_BOSS_SPAWN_CHANCE:
+                    active_boss_guilds[guild_id] = "ultimate"
+                    boss_spawn_msg = (
+                        "\n\n🚨 **[세계멸망 경보]** 🚨\n"
+                        "차원의 균열이 갈라지며 역대급 재앙의 기운이 감지되었습니다!\n"
+                        "**🔥 [최강보스] 태초의 파괴자**가 강림했습니다! (`/보스` 명령어로 토벌 가능)"
+                    )
+                elif roll < ULTIMATE_BOSS_SPAWN_CHANCE + BOSS_SPAWN_CHANCE:
+                    active_boss_guilds[guild_id] = "dark"
                     boss_spawn_msg = (
                         "\n\n🚨 **[긴급 상황 경보]** 🚨\n"
                         "전투의 여파로 부근에서 엄청난 살기가 감지되었습니다!\n"
-                        "**🔥 어둠의 지배자**가 이 지역에 출현했습니다! (`/보스` 명령어로 소환 가능)"
+                        "**🔥 어둠의 지배자**가 이 지역에 출현했습니다! (`/보스` 명령어로 토벌 가능)"
                     )
 
             embed = discord.Embed(
@@ -1743,7 +1741,7 @@ async def fight_boss(interaction: discord.Interaction):
     if not guild_id or not active_boss_guilds.get(guild_id, False):
         await interaction.response.send_message(
             "❌ 현재 이 서버에 보스가 등장하지 않았습니다.\n"
-            "💡 일반 `/전투` 승리 시 아주 낮은 확률(2%)로 출현합니다.",
+            f"💡 일반 `/전투` 승리 시 낮은 확률로 출현합니다. (어둠의 지배자 {int(BOSS_SPAWN_CHANCE * 100)}% / 태초의 파괴자 {int(ULTIMATE_BOSS_SPAWN_CHANCE * 100)}%)",
             ephemeral=True
         )
         return
@@ -1758,7 +1756,8 @@ async def fight_boss(interaction: discord.Interaction):
             )
             return
 
-    active_boss_guilds[guild_id] = False
+    boss_kind = active_boss_guilds.get(guild_id)   # "dark" 또는 "ultimate"
+    active_boss_guilds[guild_id] = None
     npc_cooldowns[user.id] = now + timedelta(seconds=BOSS_COOLDOWN_SEC)
 
     await interaction.response.defer()
@@ -1770,15 +1769,19 @@ async def fight_boss(interaction: discord.Interaction):
 
         user_combat_stats = compute_combat_stats(honor, inventory)
 
-        # 2% 확률로 등장하는 [태초의 파괴자] 보스전 시작 (15턴 제한)
-        view = NPCBattleView(user=user, user_stats_dict=user_combat_stats, npc_info=ULTIMATE_BOSS, max_turns=15)
+        # 서버에 떠 있는 보스 종류에 맞는 보스와 전투 (둘 다 15턴 제한)
+        if boss_kind == "ultimate":
+            boss_info, boss_title = ULTIMATE_BOSS, "🔥 [멸망의 전조] 태초의 파괴자 토벌전"
+        else:
+            boss_info, boss_title = HIDDEN_BOSS, "🔥 [히든보스] 어둠의 지배자 토벌전"
+        view = NPCBattleView(user=user, user_stats_dict=user_combat_stats, npc_info=boss_info, max_turns=15)
         embed = view.get_embed()
-        embed.title = "🔥 [멸망의 전조] 태초의 파괴자 토벌전"
+        embed.title = boss_title
 
         view.message = await interaction.followup.send(embed=embed, view=view)
     except Exception as e:
         print(f"Boss summon error: {e}")
-        active_boss_guilds[guild_id] = True
+        active_boss_guilds[guild_id] = boss_kind   # 오류 시 보스를 원래 종류 그대로 복구
         npc_cooldowns.pop(user.id, None)
         await interaction.followup.send("🚨 보스전을 시작하는 중 오류가 발생했습니다. 보스는 그대로 남아 있으니 다시 시도해주세요.", ephemeral=True)
 
@@ -3531,7 +3534,7 @@ async def info_command(interaction: discord.Interaction, keyword: str):
             "title": "⚔️ 시스템: /전투 [npc이름]",
             "desc": "지정한 NPC와 1:1 턴제 결투를 벌입니다.\n"
                     "• **특징:** 제한 턴(10턴) 내에 처치해야 승리하며, 패배 시 치료비 패널티가 발생합니다.\n"
-                    "• **히든 이벤트:** 전투 승리 시 10% 확률로 **[어둠의 지배자]** 보스가 서버에 출현합니다!",
+                    "• **히든 이벤트:** 전투 승리 시 10% 확률로 **[어둠의 지배자]**, 2% 확률로 **[태초의 파괴자]** 가 서버에 출현합니다! (한 번에 한 마리)",
         },
         "보스": {
             "title": "🔥 시스템: /보스 (히든 보스 토벌)",
