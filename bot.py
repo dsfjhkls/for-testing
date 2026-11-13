@@ -2812,28 +2812,7 @@ class MissionSelect(discord.ui.Select):
         old_rank = get_user_rank(user_stats.get("honor", 0))
         inventory = user_stats.get("inventory", {})
 
-        now = datetime.now()
         drink_used = False
-        if user.id in mission_cooldowns:
-            next_available = mission_cooldowns[user.id]
-            if now < next_available:
-                if inventory.get(DRINK_ITEM, 0) > 0:
-                    # 자양강장제: 쿨타임 중이면 1개 소모하고 즉시 진행
-                    inventory[DRINK_ITEM] -= 1
-                    if inventory[DRINK_ITEM] <= 0:
-                        del inventory[DRINK_ITEM]
-                    drink_used = True
-                else:
-                    remaining = int((next_available - now).total_seconds())
-                    await interaction.edit_original_response(view=MissionView(owner=self.owner))
-                    await interaction.followup.send(f"체력을 회복 중입니다. **{remaining}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
-                    return
-
-        cooldown_seconds = MISSION_COOLDOWN_SEC
-        if any(item in inventory for item in CHRONO_ITEMS):
-            cooldown_seconds = MISSION_COOLDOWN_FAST_SEC
-
-        mission_cooldowns[user.id] = now + timedelta(seconds=cooldown_seconds)
 
         selected = MISSIONS[self.values[0]]
         current_loc = user_stats.get("location", "레벤하임")
@@ -3068,18 +3047,10 @@ async def execute_mission(interaction: discord.Interaction):
     user_stats = get_user_data(user.id)
     current_loc = user_stats.get("location", "레벤하임")
 
-    now = datetime.now()
-    cooldown_notice = ""
-    
-    if user.id in mission_cooldowns:
-        next_available = mission_cooldowns[user.id]
-        if now < next_available:
-            remaining = int((next_available - now).total_seconds()) + 1
-            cooldown_notice = f"**현재 체력을 회복 중입니다. (남은 쿨타임: {remaining}초)**\n\n"
 
     embed = discord.Embed(
         title=f"[{current_loc}] 비밀 임무 작전 하달",
-        description=cooldown_notice + f"**{user.mention}** 님, 수행할 작전을 선택해 주십시오.",
+        description=f"**{user.mention}** 님, 수행할 작전을 선택해 주십시오.",
         color=discord.Color.dark_purple()
     )
     if user.avatar:
