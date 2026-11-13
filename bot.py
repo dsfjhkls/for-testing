@@ -1678,8 +1678,7 @@ class NPCBattleView(GuardedView):
         await interaction.edit_original_response(embed=embed, view=self)
         npc_cooldowns = {}
 
-        if outcome == "win":
-            npc_cooldowns.pop(self.user.id, None)
+        npc_cooldowns.pop(self.user.id, None)
 
 @bot.tree.command(name="전투", description="[조직원 전용] NPC 이름을 직접 입력하여 1:1 턴제 전투를 시작합니다.")
 @app_commands.describe(npc_name="전투를 벌일 NPC 이름 (예: 골목길 깡패, 조직의 배신자)")
