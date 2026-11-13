@@ -1678,7 +1678,7 @@ class NPCBattleView(GuardedView):
             del npc_cooldowns[self.user.id]
 
 @bot.tree.command(name="전투", description="[조직원 전용] NPC 이름을 직접 입력하여 1:1 턴제 전투를 시작합니다.")
-@app_commands.describe(npc_name="전투를 벌일 NPC 이름 (예: 골목길 깡패, 조직의 배신자)")
+@app_commands.describe(npc_name="전투를 벌일 NPC 이름 (골목길 깡패, 조직의 배신자, 암시장 악덕 거상, 지명수배자 보스)")
 async def fight_npc(interaction: discord.Interaction, npc_name: str):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
