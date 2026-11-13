@@ -189,6 +189,10 @@ BOSS_SPAWN_CHANCE = 0.10
 # {user_id: datetime (석방 예정 시간)}
 jail_list = {}
 
+# === 🚔 지역별 순찰 상태 관리 ===
+# {guild_id: {location_name: expiry_timestamp}}
+active_patrols = {}
+ss
 # === [공통 체크 함수] 감옥 수감 여부 확인 ===
 async def check_jail(interaction: discord.Interaction) -> bool:
     user_id = interaction.user.id
@@ -977,6 +981,79 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
         embed.set_thumbnail(url=member.avatar.url)
 
     # 서버 전체(채널)에 공개적으로 메시지 전송
+    await interaction.followup.send(embed=embed)
+
+    # === 🚔 [경찰 전용] `/순찰` 명령어 ===
+patrol_cooldowns = {}
+
+@bot.tree.command(name="순찰", description="[경찰 전용] 지정한 거점을 순찰하여 마피아들의 임무 성공률을 낮추고 수당을 받습니다.")
+@app_commands.choices(지역=[
+    app_commands.Choice(name="🏛️ 레벤하임 (수도)", value="레벤하임"),
+    app_commands.Choice(name="⚙️ 던베르크 (공업지대)", value="던베르크"),
+    app_commands.Choice(name="🏚️ 블랙워드 (빈민가)", value="블랙워드"),
+    app_commands.Choice(name="⚓ 에르느코항 (항구도시)", value="에르느코항"),
+    app_commands.Choice(name="🍸 로젠펠트 (유흥업소)", value="로젠펠트")
+])
+async def patrol_location(interaction: discord.Interaction, 지역: app_commands.Choice[str]):
+    if not await check_maintenance(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+    guild_id = interaction.guild_id
+
+    # 1. 경찰 역할 검증
+    police_role = discord.utils.get(interaction.guild.roles, name="경찰")
+    if not police_role or police_role not in user.roles:
+        await interaction.response.send_message("❌ 치안국 소속 경찰만 순찰 임무를 수행할 수 있습니다!", ephemeral=True)
+        return
+
+    # 2. 쿨타임 체크 (3분)
+    now = datetime.now()
+    if user.id in patrol_cooldowns:
+        remaining = int((patrol_cooldowns[user.id] - now).total_seconds())
+        if remaining > 0:
+            await interaction.response.send_message(f"⏳ 순찰 피로가 아직 안 풀렸습니다. **{remaining}초** 뒤에 다시 순찰할 수 있습니다.", ephemeral=True)
+            return
+
+    patrol_cooldowns[user.id] = now + timedelta(seconds=180)
+    await interaction.response.defer()
+
+    selected_loc = 지역.value
+    loc_info = LOCATIONS[selected_loc]
+
+    # 3. 해당 지역에 5분(300초) 동안 순찰 효과 부여
+    if guild_id not in active_patrols:
+        active_patrols[guild_id] = {}
+    
+    patrol_duration = 300  # 5분
+    active_patrols[guild_id][selected_loc] = time.time() + patrol_duration
+
+    # 4. 경찰 보상 지급 (예: 자금 $400~800, 명예 +10pt)
+    earned_money = random.randint(400, 800)
+    earned_honor = 10
+
+    try:
+        update_user_stats(user.id, earned_money, earned_honor)
+    except Exception as e:
+        print(f"Patrol reward error: {e}")
+
+    police_info = get_user_data(user.id)
+    police_rank = get_user_rank(police_info["honor"], is_police=True)
+
+    embed = discord.Embed(
+        title=f"🚔 [{selected_loc}] 치안 순찰 완료",
+        description=(
+            f"**{user.mention}** 경관이 **{selected_loc}** 구역의 순찰을 철저히 마쳤습니다!\n\n"
+            f"🚨 **효과:** 향후 **5분간** 해당 지역에서 활동하는 마피아들의 임무 성공률이 **15% 감소**합니다.\n\n"
+            f"💰 **순찰 수당:** `${earned_money:,}`\n"
+            f"🏆 **경찰 실적:** `+{earned_honor} pt` (현재 직급: `{police_rank}`)\n"
+            f"⏳ **다음 순찰 가능:** 3분 후"
+        ),
+        color=discord.Color.blue()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+
     await interaction.followup.send(embed=embed)
 
 # === 👾 NPC 전투 대상 목록 ===
@@ -2555,6 +2632,15 @@ class MissionSelect(discord.ui.Select):
                 active_buffs.append(label)
         if drink_used:
             active_buffs.append("🧪 자양강장제 (쿨타임 초기화·1회 소모)")
+
+        # 🚔 [추가] 해당 지역에 경찰의 순찰이 진행 중인 경우 성공률 감소 (-15%)
+        patrol_penalty = 0
+        guild_id = interaction.guild_id if interaction.guild else None
+        if guild_id and guild_id in active_patrols:
+            patrol_expiry = active_patrols[guild_id].get(current_loc, 0)
+            if time.time() < patrol_expiry:
+                patrol_penalty = 15  # 순찰 지역이면 성공률 15% 하락
+                active_buffs.append("🚨 경찰 순찰망 가동 (-15% 성공률)")    
 
         final_success_rate = min(98, selected["success_rate"] + success_bonus)
         is_success = random.randint(1, 100) <= final_success_rate
