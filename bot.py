@@ -192,7 +192,7 @@ jail_list = {}
 # === 🚔 지역별 순찰 상태 관리 ===
 # {guild_id: {location_name: expiry_timestamp}}
 active_patrols = {}
-ss
+
 # === [공통 체크 함수] 감옥 수감 여부 확인 ===
 async def check_jail(interaction: discord.Interaction) -> bool:
     user_id = interaction.user.id
