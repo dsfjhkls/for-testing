@@ -237,7 +237,9 @@ def get_user_rank(honor: int, is_police: bool = False) -> str:
         else:
             return "🌱 신입 경찰"
     else:
-        if honor >= 10000:
+        if honor >= 20000:
+            return "🎌 슈퍼 초 울트라 메가 하이퍼 개쩌는 대충 뭐 그런 직급"
+        elif honor >= 10000:
             return "👑 대부"
         elif honor >= 5000:
             return "⚔️ 언더보스"
@@ -3067,6 +3069,15 @@ async def execute_mission(interaction: discord.Interaction):
     user = interaction.user
     user_stats = get_user_data(user.id)
     current_loc = user_stats.get("location", "레벤하임")
+
+    now = datetime.now()
+    cooldown_notice = ""
+    
+    if user.id in mission_cooldowns:
+        next_available = mission_cooldowns[user.id]
+        if now < next_available:
+            remaining = int((next_available - now).total_seconds()) + 1
+            cooldown_notice = f"⏳ **현재 체력을 회복 중입니다. (남은 쿨타임: {remaining}초)**\n\n"
 
     embed = discord.Embed(
         title=f"📂 [{current_loc}] 비밀 임무 작전 하달",
