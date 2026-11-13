@@ -1675,10 +1675,12 @@ class NPCBattleView(GuardedView):
         if self.user.avatar:
             embed.set_thumbnail(url=self.user.avatar.url)
 
+        # 전투 종료 메시지 업데이트
         await interaction.edit_original_response(embed=embed, view=self)
-        npc_cooldowns = {}
 
-        npc_cooldowns.pop(self.user.id, None)
+        # 🔄 승패와 상관없이, 그리고 전투가 어떤 결과로 끝났든 무조건 쿨타임 즉시 초기화
+        if self.user.id in npc_cooldowns:
+            del npc_cooldowns[self.user.id]
 
 @bot.tree.command(name="전투", description="[조직원 전용] NPC 이름을 직접 입력하여 1:1 턴제 전투를 시작합니다.")
 @app_commands.describe(npc_name="전투를 벌일 NPC 이름 (예: 골목길 깡패, 조직의 배신자)")
