@@ -926,6 +926,18 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
     now = datetime.now()
     target_id = member.id
 
+    # 🤫 [밀수 거래] 이 경찰이 뇌물을 받은 마피아는 면제 시간 동안 검거할 수 없음
+    immune_until = smuggle_immunity.get((interaction.user.id, target_id))
+    if immune_until:
+        if now < immune_until:
+            remain_min = max(1, int((immune_until - now).total_seconds() // 60) + 1)
+            await interaction.followup.send(
+                f"🤝 **{member.display_name}** 님과는 밀수 거래가 성사된 상태라 **약 {remain_min}분간** 검거할 수 없습니다.",
+                ephemeral=True
+            )
+            return
+        smuggle_immunity.pop((interaction.user.id, target_id), None)
+
     # 수배 상태 검증
     is_wanted = False
     matched_key = None
@@ -982,6 +994,186 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
 
     # 서버 전체(채널)에 공개적으로 메시지 전송
     await interaction.followup.send(embed=embed)
+
+# === 🤫 [조직원 전용] `/밀수` 명령어 (경찰 매수) ===
+SMUGGLE_MIN_BRIBE = 500            # 최소 뇌물
+SMUGGLE_MAX_BRIBE = 50000          # 최대 뇌물
+SMUGGLE_COOLDOWN_SEC = 300         # 마피아의 밀수 제안 쿨타임 (5분)
+SMUGGLE_TIMEOUT_SEC = 60           # 경찰이 응답할 수 있는 시간
+SMUGGLE_IMMUNITY_SEC = 600         # 수락 시 그 경찰이 해당 마피아를 검거할 수 없는 시간 (10분)
+SMUGGLE_REJECT_WANTED_SEC = 90     # 거절당했을 때 마피아에게 붙는 지명수배 시간
+SMUGGLE_REJECT_FINE = 300          # 거절당했을 때 마피아 벌금
+SMUGGLE_REJECT_HONOR_LOSS = 20     # 거절당했을 때 마피아 명예 감소
+SMUGGLE_REJECT_POLICE_HONOR = 10   # 제안을 거절한 청렴한 경찰의 명예 포상
+
+smuggle_cooldowns = {}   # {mafia_id: datetime}
+smuggle_pending = set()  # 응답 대기 중인 마피아 id (동시에 한 건만)
+smuggle_immunity = {}    # {(police_id, mafia_id): datetime (면제 만료)}
+
+class SmuggleView(discord.ui.View):
+    def __init__(self, mafia: discord.Member, police: discord.Member, amount: int):
+        super().__init__(timeout=SMUGGLE_TIMEOUT_SEC)
+        self.mafia = mafia
+        self.police = police
+        self.amount = amount
+        self.resolved = False
+        self.message = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.police.id:
+            await interaction.response.send_message("❌ 이 제안은 대상 경찰만 응답할 수 있습니다.", ephemeral=True)
+            return False
+        return True
+
+    def _close(self):
+        self.resolved = True
+        smuggle_pending.discard(self.mafia.id)
+        for child in self.children:
+            child.disabled = True
+        self.stop()
+
+    @discord.ui.button(label="수락 (뒷돈 받기)", style=discord.ButtonStyle.success, emoji="💰")
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.resolved:
+            await interaction.response.send_message("⚠️ 이미 처리된 제안입니다.", ephemeral=True)
+            return
+        self._close()
+        await interaction.response.defer()
+
+        now = datetime.now()
+        mafia_data = get_user_data(self.mafia.id)
+
+        if self.mafia.id in jail_list and now < jail_list[self.mafia.id]:
+            embed = discord.Embed(title="❌ 거래 불발", description=f"{self.mafia.mention} 님이 감옥에 수감되어 거래가 무산되었습니다.", color=discord.Color.dark_grey())
+            await interaction.edit_original_response(embed=embed, view=None)
+            return
+        if mafia_data["money"] < self.amount:
+            embed = discord.Embed(title="❌ 거래 불발", description=f"{self.mafia.mention} 님의 자금이 부족해 거래가 무산되었습니다. (제안 `${self.amount:,}`)", color=discord.Color.dark_grey())
+            await interaction.edit_original_response(embed=embed, view=None)
+            return
+
+        try:
+            update_user_stats(self.mafia.id, -self.amount, 0)
+            update_user_stats(self.police.id, self.amount, 0)
+        except Exception as e:
+            print(f"Smuggle accept DB error: {e}")
+            await interaction.edit_original_response(
+                embed=discord.Embed(title="🚨 처리 오류", description="DB 오류로 거래가 취소되었습니다.", color=discord.Color.red()), view=None)
+            return
+
+        smuggle_immunity[(self.police.id, self.mafia.id)] = now + timedelta(seconds=SMUGGLE_IMMUNITY_SEC)
+
+        embed = discord.Embed(
+            title="🤝 [밀수 거래 성사]",
+            description=(
+                f"**{self.police.mention}** 경관이 **{self.mafia.mention}** 님의 제안을 받아들였습니다.\n\n"
+                f"💰 **오간 뒷돈:** `${self.amount:,}`\n"
+                f"🕶️ **효과:** 앞으로 **{SMUGGLE_IMMUNITY_SEC // 60}분간** 이 경찰은 해당 마피아를 `/검거`할 수 없습니다.\n"
+                f"⚠️ 다른 경찰에게는 효과가 없습니다."
+            ),
+            color=discord.Color.dark_gold()
+        )
+        await interaction.edit_original_response(embed=embed, view=None)
+
+    @discord.ui.button(label="거절 (청렴)", style=discord.ButtonStyle.danger, emoji="🚫")
+    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.resolved:
+            await interaction.response.send_message("⚠️ 이미 처리된 제안입니다.", ephemeral=True)
+            return
+        self._close()
+        await interaction.response.defer()
+
+        mafia_data = get_user_data(self.mafia.id)
+        fine = min(mafia_data["money"], SMUGGLE_REJECT_FINE)
+        honor_loss = min(mafia_data["honor"], SMUGGLE_REJECT_HONOR_LOSS)
+
+        try:
+            update_user_stats(self.mafia.id, -fine, -honor_loss)
+            update_user_stats(self.police.id, 0, SMUGGLE_REJECT_POLICE_HONOR)
+        except Exception as e:
+            print(f"Smuggle reject DB error: {e}")
+
+        wanted_list[self.mafia.id] = datetime.now() + timedelta(seconds=SMUGGLE_REJECT_WANTED_SEC)
+
+        embed = discord.Embed(
+            title="🚫 [밀수 시도 적발]",
+            description=(
+                f"**{self.police.mention}** 경관이 **{self.mafia.mention}** 님의 뇌물 제안을 단호히 거절했습니다!\n\n"
+                f"🚨 **마피아 패널티:** **{SMUGGLE_REJECT_WANTED_SEC}초간 지명수배** / 벌금 `-${fine:,}` / 명예 `-{honor_loss} pt`\n"
+                f"🏅 **경찰 포상:** 청렴 포상 `+{SMUGGLE_REJECT_POLICE_HONOR} pt`"
+            ),
+            color=discord.Color.red()
+        )
+        await interaction.edit_original_response(embed=embed, view=None)
+
+    async def on_timeout(self):
+        if self.resolved:
+            return
+        self._close()
+        if self.message:
+            try:
+                embed = discord.Embed(
+                    title="⌛ [밀수 제안 만료]",
+                    description=f"{self.police.mention} 경관이 응답하지 않아 제안이 사라졌습니다. (패널티 없음)",
+                    color=discord.Color.dark_grey()
+                )
+                await self.message.edit(embed=embed, view=None)
+            except Exception:
+                pass
+
+
+@bot.tree.command(name="밀수", description="[조직원 전용] 경찰에게 뇌물을 건네 밀수를 눈감아 달라고 제안합니다. (수락/거절은 경찰 마음)")
+@app_commands.describe(경찰="뇌물을 건넬 경찰", 뇌물=f"건넬 자금 (${SMUGGLE_MIN_BRIBE:,}~${SMUGGLE_MAX_BRIBE:,})")
+async def smuggle_command(interaction: discord.Interaction, 경찰: discord.Member, 뇌물: app_commands.Range[int, SMUGGLE_MIN_BRIBE, SMUGGLE_MAX_BRIBE]):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+    mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
+    police_role = discord.utils.get(interaction.guild.roles, name="경찰")
+
+    if not mafia_role or mafia_role not in user.roles:
+        await interaction.response.send_message("❌ 밀수는 마피아 조직원만 시도할 수 있습니다!", ephemeral=True)
+        return
+    if 경찰.id == user.id or 경찰.bot or not police_role or police_role not in 경찰.roles:
+        await interaction.response.send_message("❌ 뇌물을 건넬 대상은 **경찰** 역할을 가진 유저여야 합니다.", ephemeral=True)
+        return
+
+    now = datetime.now()
+    if user.id in smuggle_pending:
+        await interaction.response.send_message("⏳ 이미 응답을 기다리는 밀수 제안이 있습니다.", ephemeral=True)
+        return
+    if user.id in smuggle_cooldowns:
+        remaining = int((smuggle_cooldowns[user.id] - now).total_seconds())
+        if remaining > 0:
+            await interaction.response.send_message(f"⏳ 눈치가 보여 당분간 밀수를 못 합니다. **{remaining}초** 뒤에 다시 시도하세요.", ephemeral=True)
+            return
+    existing = smuggle_immunity.get((경찰.id, user.id))
+    if existing and now < existing:
+        await interaction.response.send_message(f"🤝 이미 **{경찰.display_name}** 경관과 거래가 성사된 상태입니다.", ephemeral=True)
+        return
+    if get_user_data(user.id)["money"] < 뇌물:
+        await interaction.response.send_message("❌ 건넬 자금이 부족합니다!", ephemeral=True)
+        return
+
+    smuggle_cooldowns[user.id] = now + timedelta(seconds=SMUGGLE_COOLDOWN_SEC)
+    smuggle_pending.add(user.id)
+
+    embed = discord.Embed(
+        title="🤫 [은밀한 밀수 제안]",
+        description=(
+            f"**{user.mention}** 님이 **{경찰.mention}** 경관에게 접근해 봉투를 내밉니다...\n\n"
+            f"💰 **제안 금액:** `${뇌물:,}`\n"
+            f"📝 **조건:** 수락하면 **{SMUGGLE_IMMUNITY_SEC // 60}분간** 경관은 이 마피아를 검거할 수 없습니다.\n"
+            f"🚫 거절하면 마피아는 지명수배·벌금·명예 하락의 패널티를 받습니다.\n\n"
+            f"⏳ **{SMUGGLE_TIMEOUT_SEC}초** 안에 응답하세요."
+        ),
+        color=discord.Color.dark_purple()
+    )
+    view = SmuggleView(mafia=user, police=경찰, amount=뇌물)
+    await interaction.response.send_message(content=경찰.mention, embed=embed, view=view)
+    view.message = await interaction.original_response()
 
     # === 🚔 [경찰 전용] `/순찰` 명령어 ===
 patrol_cooldowns = {}
@@ -3286,6 +3478,7 @@ async def kick_member(interaction: discord.Interaction, member: discord.Member, 
     app_commands.Choice(name="📜 일일 의뢰 (/일퀘)", value="일퀘"),
     app_commands.Choice(name="⚙️ 통합 설정 (/설정)", value="설정"),
     app_commands.Choice(name="🐺 네임드 몬스터 (/네임드)", value="네임드"),
+    app_commands.Choice(name="🤫 밀수 거래 (/밀수)", value="밀수"),
     app_commands.Choice(name="🌍 Utopia Of Eden (세계관)", value="유토피아 오브 에덴")
 ])
 async def info_command(interaction: discord.Interaction, keyword: str):
@@ -3355,6 +3548,11 @@ async def info_command(interaction: discord.Interaction, keyword: str):
         "검거": {
             "title": "🚨 명령어: /검거 [대상] (경찰 전용)",
             "desc": "지명수배 중인 마피아를 현장에서 체포하여 감옥에 3분간 수감하고 포상금을 획득합니다.",
+        },
+        "밀수": {
+            "title": "🤫 명령어: /밀수 [경찰] [뇌물] (조직원 전용)",
+            "desc": f"경찰에게 뇌물(${SMUGGLE_MIN_BRIBE:,}~${SMUGGLE_MAX_BRIBE:,})을 제안합니다. 경찰이 **수락**하면 뇌물이 경찰에게 넘어가고 {SMUGGLE_IMMUNITY_SEC // 60}분간 그 경찰은 나를 `/검거`할 수 없습니다. "
+                    f"**거절**하면 {SMUGGLE_REJECT_WANTED_SEC}초 지명수배 + 벌금 ${SMUGGLE_REJECT_FINE:,} + 명예 -{SMUGGLE_REJECT_HONOR_LOSS}pt 패널티를 받습니다. 쿨타임 {SMUGGLE_COOLDOWN_SEC // 60}분.",
         },
         "무기상점": {
             "title": "🛒 명령어: /무기상점",
