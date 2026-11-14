@@ -1914,6 +1914,10 @@ class NPCBattleView(GuardedView):
         current_money = user_data.get("money", 0)
         current_honor = user_data.get("honor", 0)
 
+        boss_spawn_msg = ""
+        boss_spawn_kind = None
+        guild_id = None
+
         if outcome == "win":
             earned_money = random.randint(*self.npc_info["reward_money"])
             earned_honor = self.npc_info["reward_honor"]
@@ -1957,13 +1961,13 @@ class NPCBattleView(GuardedView):
             except Exception as e:
                 print(f"DB Error (NPC Battle Win): {e}")
             # 보스 출현 판정 (서버에 보스가 없을 때만 / 보스·네임드 처치로는 출현하지 않음)
-            boss_spawn_msg = ""
             guild_id = interaction.guild_id if interaction.guild else None
             is_boss_fight = self.npc_info["name"] in (HIDDEN_BOSS["name"], ULTIMATE_BOSS["name"])
             if guild_id and not is_boss_fight and not self.npc_info.get("named") and not active_boss_guilds.get(guild_id):
                 roll = random.random()
                 if roll < ULTIMATE_BOSS_SPAWN_CHANCE:
                     active_boss_guilds[guild_id] = "ultimate"
+                    boss_spawn_kind = "ultimate"
                     boss_spawn_msg = (
                         "\n\n**[세계멸망 경보]** \n"
                         "차원의 균열이 갈라지며 역대급 재앙의 기운이 감지되었습니다!\n"
@@ -1971,6 +1975,7 @@ class NPCBattleView(GuardedView):
                     )
                 elif roll < ULTIMATE_BOSS_SPAWN_CHANCE + BOSS_SPAWN_CHANCE:
                     active_boss_guilds[guild_id] = "dark"
+                    boss_spawn_kind = "dark"
                     boss_spawn_msg = (
                         "\n\n**[긴급 상황 경보]** \n"
                         "전투의 여파로 부근에서 엄청난 살기가 감지되었습니다!\n"
@@ -1984,7 +1989,7 @@ class NPCBattleView(GuardedView):
                             f"**획득 명예:** `+{earned_honor} pt`\n\n"
                             f"**현재 보유 자금:** `${new_money:,}`\n"
                             f"**현재 명예:** `{new_honor} pt`"
-                            f"{drop_msg}{daily_msg}{boss_spawn_msg}",  # 전리품 + 일일 의뢰 + 보스 등장 메시지 포함
+                            f"{drop_msg}{daily_msg}",  # 전리품 + 일일 의뢰 (보스 출현 안내는 아래에서 별도 메시지로 전송)
                 color=discord.Color.green()
             )
         else:
@@ -2015,8 +2020,30 @@ class NPCBattleView(GuardedView):
         if self.user.avatar:
             embed.set_thumbnail(url=self.user.avatar.url)
 
-        # 전투 종료 메시지 업데이트
-        await interaction.edit_original_response(embed=embed, view=self)
+        # 전투 종료 메시지 업데이트 (실패해도 보상·보스 처리는 이미 끝났으므로 로그를 남기고 새 메시지로 대신 알림)
+        try:
+            await interaction.edit_original_response(embed=embed, view=self)
+        except Exception as e:
+            print(f"[전투 결과 수정 실패] {type(e).__name__}: {e}")
+            try:
+                await interaction.followup.send(embed=embed)
+            except Exception as e2:
+                print(f"[전투 결과 전송 실패] {type(e2).__name__}: {e2}")
+
+        # 보스 출현 공지: 결과 임베드와 별개의 공개 메시지. 공지를 못 보냈다면 보스도 취소해서 '조용한 보스'가 생기지 않게 함
+        if boss_spawn_kind and guild_id:
+            print(f"[보스 출현] guild={guild_id} kind={boss_spawn_kind}")
+            try:
+                boss_embed = discord.Embed(
+                    title="[보스 출현]",
+                    description=boss_spawn_msg.strip(),
+                    color=discord.Color.dark_red() if boss_spawn_kind == "dark" else discord.Color.from_rgb(120, 0, 160)
+                )
+                await interaction.followup.send(embed=boss_embed)
+            except Exception as e:
+                print(f"[보스 공지 실패 → 출현 취소] {type(e).__name__}: {e}")
+                if active_boss_guilds.get(guild_id) == boss_spawn_kind:
+                    active_boss_guilds[guild_id] = None
 
         # 승패와 상관없이, 그리고 전투가 어떤 결과로 끝났든 무조건 쿨타임 즉시 초기화
         if self.user.id in npc_cooldowns:
