@@ -2205,6 +2205,7 @@ NPC_DATA = {
 # 권장: 명예 약 5,000pt + 슈퍼 울트라 주먹/수상한 주사기 (대부 직전의 최종 시험)
 HIDDEN_BOSS = {
     "image": "boss_dark.jpg",   # 보스 그림 (assets 폴더). 파일이 없으면 그림 없이 진행됩니다.
+    "image_crop": (0.07, 0.07, 0.90, 0.84),   # 얼굴만 보이도록 자를 영역 (왼쪽, 위, 오른쪽, 아래 / 그림 크기에 대한 비율 0~1)
     "name": "[히든보스] 어둠의 지배자",   # 보스 승리 시 보스가 연속 출현하지 않도록 비교하는 이름이므로 함부로 바꾸지 마세요
     "hp": 75000,
     "atk": 2750,
@@ -2217,6 +2218,7 @@ HIDDEN_BOSS = {
 # === 최강 히든 보스 데이터 (태초의 파괴자) ===
 ULTIMATE_BOSS = {
     "image": "boss_ultimate.jpg",
+    "image_crop": (0.30, 0.05, 0.80, 0.315),   # 모자부터 얼굴까지만 (비율). 그림을 바꾸면 이 값도 맞춰 주세요
     "name": "[최강보스] 태초의 파괴자",
     "hp": 120000,
     "atk": 5500,
@@ -2275,6 +2277,23 @@ def boss_image_file(boss_data: dict):
     if not name:
         return None
     for path in _asset_paths((name,)):
+        crop = boss_data.get("image_crop")
+        if crop:   # 전신 그림에서 얼굴 부분만 잘라서 보냄 (실패하면 원본을 그대로 보냄)
+            try:
+                img = Image.open(path).convert("RGB")
+                w, h = img.size
+                img = img.crop((int(crop[0] * w), int(crop[1] * h), int(crop[2] * w), int(crop[3] * h)))
+                if img.width < 640:   # 잘라낸 그림이 작으면 선명하게 확대
+                    img = img.resize((640, int(img.height * 640 / img.width)), Image.Resampling.LANCZOS)
+                buf = io.BytesIO()
+                if name.lower().endswith(".png"):
+                    img.save(buf, format="PNG")
+                else:
+                    img.save(buf, format="JPEG", quality=95)
+                buf.seek(0)
+                return discord.File(buf, filename=name)
+            except Exception as e:
+                print(f"[보스 그림 자르기 실패 → 원본 사용] {name}: {e}")
         return discord.File(path, filename=name)
     print(f"[보스 그림 없음] {name} 파일을 assets 폴더에서 찾지 못했습니다.")
     return None
