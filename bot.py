@@ -662,21 +662,32 @@ def get_title_blob(user_info: dict) -> dict:
     stats = blob.get("stats") if isinstance(blob.get("stats"), dict) else {}
     for key in ("success", "fail", "streak", "best_streak", "hard_success",
                 "gamble_played", "gamble_won", "gamble_wagered", "gamble_net", "jackpot", "broke",
-                "attendance"):
+                "attendance",
+                "fight_wins", "named_kills", "boss_kills"):          # ← 업적용 카운터
         stats[key] = int(stats.get(key, 0) or 0)
     blob["stats"] = stats
     blob["titles"] = list(blob.get("titles") or [])
+    ach = blob.get("achievements")                                    # {업적id: 달성 시각(epoch)}
+    blob["achievements"] = dict(ach) if isinstance(ach, dict) else {}
     blob["equipped"] = blob.get("equipped")
     return blob
 
+class _NewIds(list):
+    """새로 얻은 칭호 id 목록. .ach 에는 새로 달성한 업적 id 가 들어 있습니다.
+    (업적만 새로 달성했어도 True 로 취급 → 기존 'if new_ids: 저장' 코드가 그대로 동작)"""
+    ach = ()
+    def __bool__(self):
+        return len(self) > 0 or bool(self.ach)
+
 def evaluate_new_titles(blob: dict, user_info: dict) -> list:
-    new_ids = []
+    new_ids = _NewIds()
     for tid, t in TITLES.items():
         if tid not in blob["titles"] and t["check"](blob["stats"], user_info):
             blob["titles"].append(tid)
             new_ids.append(tid)
-    if new_ids and blob.get("equipped") not in TITLES:
+    if len(new_ids) and blob.get("equipped") not in TITLES:
         blob["equipped"] = new_ids[0]
+    new_ids.ach = evaluate_new_achievements(blob, user_info)   # 업적도 같은 타이밍에 함께 검사
     return new_ids
 
 def save_title_blob(user_id: int, blob: dict):
@@ -691,8 +702,98 @@ def get_equipped_title_name(user_info: dict) -> str:
 def format_new_titles(new_ids: list) -> str:
     if not new_ids:
         return ""
-    names = ", ".join(TITLES[t]["name"] for t in new_ids)
-    return f"\n\n**[새 칭호 획득]** {names}\n`/칭호` 명령어로 장착할 수 있습니다."
+    out = ""
+    if len(new_ids):
+        names = ", ".join(TITLES[t]["name"] for t in new_ids)
+        out += f"\n\n**[새 칭호 획득]** {names}\n`/칭호` 명령어로 장착할 수 있습니다."
+    ach = list(getattr(new_ids, "ach", ()) or ())
+    if ach:
+        shown = [f"[{ACH_BY_ID[a]['tier']}] {ACH_BY_ID[a]['name']}" for a in ach[:5]]
+        more = f" 외 {len(ach) - 5}개" if len(ach) > 5 else ""
+        out += f"\n\n**[업적 달성]** {', '.join(shown)}{more}\n`/업적` 명령어로 확인할 수 있습니다."
+    return out
+
+# ==========================================
+# [업적 시스템]  /업적
+#   • 등급: 기초 / 숙련 / 심화
+#       기초·숙련 : 이름과 달성 조건, 진행도가 모두 보입니다.
+#       심화      : hide="name" → 이름만 보이고 조건은 ???
+#                   hide="full" → 이름도 조건도 ???   (달성하면 둘 다 공개)
+#   • 달성 기록은 user_data.data["achievements"] 에 {업적id: 시각} 으로 저장됩니다. (DB 테이블 변경 없음)
+#   • 달성 판정은 칭호와 같은 시점(evaluate_new_titles)에 함께 이뤄집니다.
+#
+#   새 업적 추가 방법: ACHIEVEMENTS 리스트에 _ach(...) 한 줄만 추가하면 됩니다.
+#       cur  = lambda s, i: 현재 수치   (s: 통계 stats, i: 유저 데이터 — money / honor / inventory)
+#       goal = 목표 수치 (cur >= goal 이면 달성)
+# ==========================================
+_CRAFT_ALL_GOAL = 20   # /제작 레시피 총 개수 (아래에서 CRAFT_RECIPES 가 정의되면 자동으로 맞춰집니다)
+ACH_TIERS = ("기초", "숙련", "심화")
+ACH_TIER_COLORS = {"기초": 0x95A5A6, "숙련": 0x3498DB, "심화": 0x9B59B6}
+
+def _inv_count(i: dict, prefix: str) -> int:
+    return sum(1 for k in (i.get("inventory") or {}) if k.startswith(prefix))
+
+def _shop_weapon_count(i: dict) -> int:
+    inv = i.get("inventory") or {}
+    return sum(1 for name, _a, _h in WEAPON_TIERS if name in inv)
+
+def _ach(aid, tier, name, desc, cur, goal, hide=None):
+    return {"id": aid, "tier": tier, "name": name, "desc": desc, "cur": cur, "goal": goal, "hide": hide}
+
+ACHIEVEMENTS = [
+    # ── 기초 (조건 공개) ──
+    _ach("b_mission_1",  "기초", "첫 의뢰",             "비밀 임무 1회 성공",                lambda s, i: s["success"],              1),
+    _ach("b_mission_10", "기초", "손에 익은 일",         "비밀 임무 10회 성공",               lambda s, i: s["success"],              10),
+    _ach("b_fight_5",    "기초", "골목 싸움꾼",          "NPC 전투 5회 승리",                 lambda s, i: s["fight_wins"],           5),
+    _ach("b_gamble_5",   "기초", "호기심 많은 손님",     "도박 5판 플레이",                   lambda s, i: s["gamble_played"],        5),
+    _ach("b_weapon_1",   "기초", "무장",                "무기상점 무기 1개 보유",            lambda s, i: _shop_weapon_count(i),     1),
+    _ach("b_money_10k",  "기초", "두둑한 주머니",        "보유 자금 $10,000 이상",            lambda s, i: i.get("money") or 0,       10000),
+    _ach("b_honor_500",  "기초", "행동대원",            "명예 500pt 이상",                   lambda s, i: i.get("honor") or 0,       500),
+    _ach("b_attend_3",   "기초", "얼굴도장",            "일일 의뢰 출석 3스택",              lambda s, i: s["attendance"],           3),
+
+    # ── 숙련 (조건 공개) ──
+    _ach("s_mission_50", "숙련", "베테랑 조직원",        "비밀 임무 50회 성공",               lambda s, i: s["success"],              50),
+    _ach("s_streak_5",   "숙련", "흐름을 탄 자",         "비밀 임무 5연속 성공",              lambda s, i: s["best_streak"],          5),
+    _ach("s_hard_5",     "숙련", "장부 전문 도둑",       "'라이벌 보스의 장부 탈취' 5회 성공", lambda s, i: s["hard_success"],         5),
+    _ach("s_fight_50",   "숙련", "백전노장",            "NPC 전투 50회 승리",                lambda s, i: s["fight_wins"],           50),
+    _ach("s_named_2",    "숙련", "이름 있는 사냥감",     "네임드 고유 전리품 2종 획득",       lambda s, i: _inv_count(i, "[전리품]"), 2),
+    _ach("s_craft_3",    "숙련", "솜씨 좋은 대장장이",   "/제작 장비 3종 보유",               lambda s, i: _inv_count(i, "[제작]"),   3),
+    _ach("s_wager_100k", "숙련", "판돈이 큰 사람",       "도박 누적 베팅액 $100,000 이상",    lambda s, i: s["gamble_wagered"],       100000),
+    _ach("s_honor_3000", "숙련", "카포의 자리",          "명예 3,000pt 이상",                 lambda s, i: i.get("honor") or 0,       3000),
+    _ach("s_money_100k", "숙련", "검은 금고",            "보유 자금 $100,000 이상",           lambda s, i: i.get("money") or 0,       100000),
+
+    # ── 심화 (hide="name": 이름만 공개 / hide="full": 이름도 ???) ──
+    _ach("a_boss_1",     "심화", "재앙을 쓰러뜨린 자",   "보스 1회 처치 (/보스)",             lambda s, i: s["boss_kills"],           1,        hide="name"),
+    _ach("a_named_all",  "심화", "네임드 사냥 완결",     "네임드 몬스터 4종 모두 처치",       lambda s, i: _inv_count(i, "[전리품]"), 4,        hide="name"),
+    _ach("a_mission_300","심화", "그림자 속의 전설",     "비밀 임무 300회 성공",              lambda s, i: s["success"],              300,      hide="name"),
+    _ach("a_honor_10k",  "심화", "대부의 반열",          "명예 10,000pt 이상",                lambda s, i: i.get("honor") or 0,       10000,    hide="name"),
+    _ach("a_money_1m",   "심화", "도시를 살 수 있는 돈", "보유 자금 $1,000,000 이상",         lambda s, i: i.get("money") or 0,       1000000,  hide="name"),
+    _ach("a_attend_30",  "심화", "한 달의 약속",         "일일 의뢰 출석 30스택",             lambda s, i: s["attendance"],           30,       hide="name"),
+    _ach("a_jackpot",    "심화", "7이 세 번",            "슬롯머신 잭팟 당첨",                lambda s, i: s["jackpot"],              1,        hide="full"),
+    _ach("a_broke",      "심화", "바닥을 본 자",         "도박으로 보유 자금이 $0이 됨",      lambda s, i: s["broke"],                1,        hide="full"),
+    _ach("a_streak_10",  "심화", "신들린 손",            "비밀 임무 10연속 성공",             lambda s, i: s["best_streak"],          10,       hide="full"),
+    _ach("a_boss_5",     "심화", "종말의 사냥꾼",        "보스 5회 처치",                     lambda s, i: s["boss_kills"],           5,        hide="full"),
+    _ach("a_craft_all",  "심화", "완전한 장인",          "/제작 장비를 전부 제작",            lambda s, i: _inv_count(i, "[제작]"),   _CRAFT_ALL_GOAL, hide="full"),
+]
+ACH_BY_ID = {a["id"]: a for a in ACHIEVEMENTS}
+
+def evaluate_new_achievements(blob: dict, user_info: dict) -> list:
+    """새로 달성한 업적 id 목록을 돌려주고 blob['achievements'] 에 기록합니다. (저장은 호출한 쪽에서)"""
+    done = blob.setdefault("achievements", {})
+    now = int(time.time())
+    newly = []
+    for a in ACHIEVEMENTS:
+        if a["id"] in done:
+            continue
+        try:
+            reached = a["cur"](blob["stats"], user_info) >= a["goal"]
+        except Exception as e:
+            print(f"[업적 판정 오류] {a['id']}: {e}")
+            continue
+        if reached:
+            done[a["id"]] = now
+            newly.append(a["id"])
+    return newly
 
 # ==========================================
 # 일일 의뢰 시스템 (데이터는 user_data.data JSON 안의 "daily" / stats.attendance 에 저장)
@@ -879,6 +980,133 @@ async def titles_command(interaction: discord.Interaction):
         await interaction.response.send_message(embed=embed, view=TitleView(owner=user, blob=blob))
     else:
         await interaction.response.send_message(embed=embed)
+
+# ==========================================================================
+# [/업적]  기초 · 숙련 · 심화 업적 확인
+#   • 기초·숙련은 조건과 진행도가 보이고, 심화는 이름만 보이거나(???) 이름도 가려져 있다가 달성하면 공개됩니다.
+# ==========================================================================
+def _ach_fmt(n) -> str:
+    return f"{int(n):,}"
+
+def _ach_bar(cur, goal, width: int = 10) -> str:
+    ratio = 0 if goal <= 0 else max(0.0, min(1.0, cur / goal))
+    filled = int(ratio * width)
+    return "█" * filled + "░" * (width - filled)
+
+def _ach_line(a: dict, done: dict, s: dict, info: dict) -> str:
+    aid = a["id"]
+    if aid in done:                       # 달성: 등급과 상관없이 이름·조건 모두 공개
+        return f"**{a['name']}**  `달성`\n└ {a['desc']} · <t:{int(done[aid])}:d>"
+
+    hide = a.get("hide")
+    if hide == "full":                    # 이름도 조건도 비공개
+        return "**???**\n└ 조건: ???"
+    if hide == "name":                    # 이름만 공개
+        return f"**{a['name']}**\n└ 조건: ???"
+
+    try:                                  # 기초·숙련: 조건 + 진행도 공개
+        cur = min(int(a["cur"](s, info)), a["goal"])
+    except Exception:
+        cur = 0
+    return (f"**{a['name']}**\n└ {a['desc']}\n"
+            f"└ `{_ach_bar(cur, a['goal'])}` {_ach_fmt(cur)} / {_ach_fmt(a['goal'])}")
+
+def ach_overview_embed(user: discord.abc.User, blob: dict, info: dict, new_ids=None) -> discord.Embed:
+    done = blob["achievements"]
+    total_done = sum(1 for a in ACHIEVEMENTS if a["id"] in done)
+    lines = []
+    for tier in ACH_TIERS:
+        items = [a for a in ACHIEVEMENTS if a["tier"] == tier]
+        n = sum(1 for a in items if a["id"] in done)
+        lines.append(f"**{tier}**  `{_ach_bar(n, len(items))}` {n} / {len(items)}")
+
+    recent = sorted((a for a in ACHIEVEMENTS if a["id"] in done), key=lambda a: done[a["id"]], reverse=True)[:5]
+    recent_txt = "\n".join(f"• [{a['tier']}] {a['name']} · <t:{int(done[a['id']])}:R>" for a in recent) or "*아직 달성한 업적이 없습니다.*"
+
+    embed = discord.Embed(
+        title=f"[{user.display_name} 님의 업적]",
+        description=(f"달성 **{total_done} / {len(ACHIEVEMENTS)}**\n\n" + "\n".join(lines)
+                     + "\n\n아래 버튼으로 등급별 업적을 확인하세요.\n"
+                       "기초·숙련은 조건이 공개되고, **심화**는 달성해야 모든 내용이 드러납니다."
+                     + format_new_titles(new_ids or [])),
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="최근 달성", value=recent_txt, inline=False)
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    return embed
+
+def ach_tier_embed(user: discord.abc.User, tier: str, blob: dict, info: dict) -> discord.Embed:
+    done = blob["achievements"]
+    items = [a for a in ACHIEVEMENTS if a["tier"] == tier]
+    n = sum(1 for a in items if a["id"] in done)
+    text = "\n\n".join(_ach_line(a, done, blob["stats"], info) for a in items)
+    if len(text) > 4000:
+        text = text[:3990] + "…"
+    embed = discord.Embed(title=f"[{tier} 업적]  {n} / {len(items)}", description=text,
+                          color=discord.Color(ACH_TIER_COLORS[tier]))
+    if tier == "심화":
+        embed.set_footer(text="심화 업적은 달성하기 전까지 조건(또는 이름)이 ??? 로 표시됩니다.")
+    return embed
+
+class AchTierButton(discord.ui.Button):
+    def __init__(self, key: str, label: str, style=discord.ButtonStyle.secondary):
+        super().__init__(label=label, style=style)
+        self.key = key
+
+    async def callback(self, interaction: discord.Interaction):
+        view: "AchievementView" = self.view
+        if interaction.user.id != view.owner.id:
+            await interaction.response.send_message("타인의 업적 창은 조작할 수 없습니다.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        view.current = self.key
+        for child in view.children:
+            child.style = discord.ButtonStyle.primary if child.key == self.key else discord.ButtonStyle.secondary
+        await interaction.edit_original_response(embed=view.make_embed(), view=view)
+
+class AchievementView(discord.ui.View):
+    def __init__(self, owner: discord.abc.User, blob: dict, info: dict):
+        super().__init__(timeout=180)
+        self.owner, self.blob, self.info = owner, blob, info
+        self.current = "__all__"
+        self.interaction = None
+        self.add_item(AchTierButton("__all__", "전체", discord.ButtonStyle.primary))
+        for tier in ACH_TIERS:
+            self.add_item(AchTierButton(tier, tier))
+
+    def make_embed(self) -> discord.Embed:
+        if self.current == "__all__":
+            return ach_overview_embed(self.owner, self.blob, self.info)
+        return ach_tier_embed(self.owner, self.current, self.blob, self.info)
+
+    async def on_timeout(self):
+        if self.interaction is None:
+            return
+        try:
+            await self.interaction.edit_original_response(view=None)
+        except discord.HTTPException:
+            pass
+
+def _load_achievements_sync(user_id: int):
+    info = get_user_data(user_id)
+    blob = get_title_blob(info)
+    new_ids = evaluate_new_titles(blob, info)     # 칭호·업적을 함께 판정
+    if new_ids:
+        save_title_blob(user_id, blob)
+    return info, blob, new_ids
+
+@bot.tree.command(name="업적", description="[마피아 GM] 달성한 업적과 진행 상황을 확인합니다. (기초 · 숙련 · 심화)")
+async def achievements_command(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+
+    await interaction.response.defer()
+    user = interaction.user
+    info, blob, new_ids = await asyncio.to_thread(_load_achievements_sync, user.id)
+    view = AchievementView(user, blob, info)
+    view.interaction = interaction
+    await interaction.followup.send(embed=ach_overview_embed(user, blob, info, new_ids), view=view)
 
 @bot.event
 async def on_ready():
@@ -2165,10 +2393,18 @@ class NPCBattleView(GuardedView):
 
             # 일일 의뢰 집계 (NPC 전투 승리)
             daily_blob = get_title_blob(user_data)
-            daily_msg = daily_record(daily_blob, "fight", {
+            ach_stats = daily_blob["stats"]                      # 업적용 카운터
+            ach_stats["fight_wins"] += 1
+            if self.npc_info.get("named"):
+                ach_stats["named_kills"] += 1
+            if self.npc_info["name"] in BOSS_NAMES:
+                ach_stats["boss_kills"] += 1
+            after_info = {
                 **user_data, "money": new_money, "honor": new_honor,
                 "inventory": update_payload.get("inventory", user_data.get("inventory"))
-            })
+            }
+            daily_msg = daily_record(daily_blob, "fight", after_info)
+            daily_msg += format_new_titles(evaluate_new_titles(daily_blob, after_info))   # 새 칭호·업적 안내
             update_payload["data"] = daily_blob
 
             try:
@@ -6569,6 +6805,8 @@ CRAFT_RECIPES = [
     _recipe("a_eden",    "붉은 깃발 방탄 코트",  "armor",  22000, {M_EDEN: 2, M_ALLOY: 9},       df=410, hp=6500,    desc="에덴의 붉은 깃발로 안감을 댄 방탄 코트."),
     _recipe("a_origin",  "태초의 방벽",          "armor",  30000, {M_ORIGIN: 2, M_ALLOY: 10},    df=500, hp=8000,    desc="태초의 파편으로 빚어낸 절대 방벽."),
 ]
+_CRAFT_ALL_GOAL = len(CRAFT_RECIPES)
+ACH_BY_ID["a_craft_all"]["goal"] = _CRAFT_ALL_GOAL   # 업적 '완전한 장인' 목표를 실제 레시피 수에 맞춤
 CRAFT_BY_ID = {r["id"]: r for r in CRAFT_RECIPES}
 CRAFT_BY_ITEM = {CRAFT_PREFIX + r["name"]: r for r in CRAFT_RECIPES}
 CRAFT_SLOT_LABEL = {"weapon": "무기", "armor": "방어구"}
@@ -6920,7 +7158,7 @@ async def stats_command(interaction: discord.Interaction, member: discord.Member
 HELP_CATEGORIES = [
     # (키, 표시 이름, 분류 설명, [명령어 이름 — /조직 처럼 그룹 명령어는 첫 단어만])
     ("start",   "시작 · 정보",          "가입과 내 정보 확인, 설정, 랭킹 등 기본이 되는 명령어입니다.",
-     ["도움말", "가입", "탈퇴", "프로필", "정보", "설정", "일퀘", "칭호", "랭킹"]),
+     ["도움말", "가입", "탈퇴", "프로필", "정보", "설정", "일퀘", "칭호", "업적", "랭킹"]),
     ("economy", "이동 · 상점 · 경제",   "거점 이동, 장비 구매, 자금 이체, 제작 등 돈과 장비에 관한 명령어입니다.",
      ["이동", "암시장", "무기상점", "인벤토리", "송금", "아르바이트", "제작"]),
     ("mafia",   "마피아 활동",          "비밀 임무 수행, 경찰 매수, 탈옥 등 조직원의 범죄 활동입니다.",
