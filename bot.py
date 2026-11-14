@@ -663,12 +663,14 @@ def get_title_blob(user_info: dict) -> dict:
     for key in ("success", "fail", "streak", "best_streak", "hard_success",
                 "gamble_played", "gamble_won", "gamble_wagered", "gamble_net", "jackpot", "broke",
                 "attendance",
-                "fight_wins", "named_kills", "boss_kills"):          # ← 업적용 카운터
+                "fight_wins", "named_kills", "boss_kills",            # ← 업적용 카운터
+                "duel_wins", "raid_clears", "raid_king_clears", "war_wins", "war_conquests"):
         stats[key] = int(stats.get(key, 0) or 0)
     blob["stats"] = stats
     blob["titles"] = list(blob.get("titles") or [])
     ach = blob.get("achievements")                                    # {업적id: 달성 시각(epoch)}
     blob["achievements"] = dict(ach) if isinstance(ach, dict) else {}
+    blob["ach_claimed"] = list(blob.get("ach_claimed") or [])           # 보상을 이미 받은 업적 id
     blob["equipped"] = blob.get("equipped")
     return blob
 
@@ -679,7 +681,9 @@ class _NewIds(list):
     def __bool__(self):
         return len(self) > 0 or bool(self.ach)
 
-def evaluate_new_titles(blob: dict, user_info: dict) -> list:
+_pending_ach = {}   # {user_id(str): [업적id]}  레이드·구역전처럼 결과 화면에 바로 못 붙이는 곳에서 달성한 업적의 알림 대기열
+
+def evaluate_new_titles(blob: dict, user_info: dict, _pop_pending: bool = True) -> list:
     new_ids = _NewIds()
     for tid, t in TITLES.items():
         if tid not in blob["titles"] and t["check"](blob["stats"], user_info):
@@ -687,7 +691,11 @@ def evaluate_new_titles(blob: dict, user_info: dict) -> list:
             new_ids.append(tid)
     if len(new_ids) and blob.get("equipped") not in TITLES:
         blob["equipped"] = new_ids[0]
-    new_ids.ach = evaluate_new_achievements(blob, user_info)   # 업적도 같은 타이밍에 함께 검사
+    pend = []
+    uid = str(user_info.get("user_id") or "")
+    if _pop_pending and uid:
+        pend = _pending_ach.pop(uid, [])                       # 대기 중이던 달성 알림도 함께 표시
+    new_ids.ach = pend + evaluate_new_achievements(blob, user_info)   # 업적도 같은 타이밍에 함께 검사
     return new_ids
 
 def save_title_blob(user_id: int, blob: dict):
@@ -710,7 +718,7 @@ def format_new_titles(new_ids: list) -> str:
     if ach:
         shown = [f"[{ACH_BY_ID[a]['tier']}] {ACH_BY_ID[a]['name']}" for a in ach[:5]]
         more = f" 외 {len(ach) - 5}개" if len(ach) > 5 else ""
-        out += f"\n\n**[업적 달성]** {', '.join(shown)}{more}\n`/업적` 명령어로 확인할 수 있습니다."
+        out += f"\n\n**[업적 달성]** {', '.join(shown)}{more}\n`/업적` 에서 보상을 받고 증명서를 발급할 수 있습니다."
     return out
 
 # ==========================================
@@ -750,6 +758,8 @@ ACHIEVEMENTS = [
     _ach("b_money_10k",  "기초", "두둑한 주머니",        "보유 자금 $10,000 이상",            lambda s, i: i.get("money") or 0,       10000),
     _ach("b_honor_500",  "기초", "행동대원",            "명예 500pt 이상",                   lambda s, i: i.get("honor") or 0,       500),
     _ach("b_attend_3",   "기초", "얼굴도장",            "일일 의뢰 출석 3스택",              lambda s, i: s["attendance"],           3),
+    _ach("b_duel_1",     "기초", "첫 결투 승리",         "결투 1회 승리",                     lambda s, i: s["duel_wins"],            1),
+    _ach("b_raid_1",     "기초", "혼자가 아닌 싸움",     "레이드 1회 클리어",                 lambda s, i: s["raid_clears"],          1),
 
     # ── 숙련 (조건 공개) ──
     _ach("s_mission_50", "숙련", "베테랑 조직원",        "비밀 임무 50회 성공",               lambda s, i: s["success"],              50),
@@ -761,6 +771,9 @@ ACHIEVEMENTS = [
     _ach("s_wager_100k", "숙련", "판돈이 큰 사람",       "도박 누적 베팅액 $100,000 이상",    lambda s, i: s["gamble_wagered"],       100000),
     _ach("s_honor_3000", "숙련", "카포의 자리",          "명예 3,000pt 이상",                 lambda s, i: i.get("honor") or 0,       3000),
     _ach("s_money_100k", "숙련", "검은 금고",            "보유 자금 $100,000 이상",           lambda s, i: i.get("money") or 0,       100000),
+    _ach("s_duel_10",    "숙련", "결투장의 단골",        "결투 10회 승리",                    lambda s, i: s["duel_wins"],            10),
+    _ach("s_raid_10",    "숙련", "레이드 베테랑",        "레이드 10회 클리어",                lambda s, i: s["raid_clears"],          10),
+    _ach("s_war_3",      "숙련", "구역의 수호자",        "구역 점령전 3회 승리",              lambda s, i: s["war_wins"],             3),
 
     # ── 심화 (hide="name": 이름만 공개 / hide="full": 이름도 ???) ──
     _ach("a_boss_1",     "심화", "재앙을 쓰러뜨린 자",   "보스 1회 처치 (/보스)",             lambda s, i: s["boss_kills"],           1,        hide="name"),
@@ -774,8 +787,78 @@ ACHIEVEMENTS = [
     _ach("a_streak_10",  "심화", "신들린 손",            "비밀 임무 10연속 성공",             lambda s, i: s["best_streak"],          10,       hide="full"),
     _ach("a_boss_5",     "심화", "종말의 사냥꾼",        "보스 5회 처치",                     lambda s, i: s["boss_kills"],           5,        hide="full"),
     _ach("a_craft_all",  "심화", "완전한 장인",          "/제작 장비를 전부 제작",            lambda s, i: _inv_count(i, "[제작]"),   _CRAFT_ALL_GOAL, hide="full"),
+    _ach("a_raid_king",  "심화", "지하의 왕을 끌어내린 자", "'칼렌데 지하 황제' 레이드 클리어",   lambda s, i: s["raid_king_clears"],     1,        hide="name"),
+    _ach("a_duel_50",    "심화", "결투장의 지배자",      "결투 50회 승리",                    lambda s, i: s["duel_wins"],            50,       hide="full"),
+    _ach("a_war_conq_5", "심화", "도시의 새 주인",       "구역 점령전에서 구역을 5회 빼앗음", lambda s, i: s["war_conquests"],        5,        hide="full"),
 ]
 ACH_BY_ID = {a["id"]: a for a in ACHIEVEMENTS}
+
+# ── 업적 보상 (/업적 의 [보상 수령] 버튼으로 받습니다) ──
+#   등급별 기본 보상. 특정 업적만 다르게 주고 싶으면 ACH_REWARD_OVERRIDES 에 {"업적id": {"money": .., "honor": .., "title": True}} 추가
+#   "title": True 이면 그 업적 이름의 전용 칭호가 함께 지급됩니다. (/칭호 에서 장착)
+ACH_REWARDS = {
+    "기초": {"money": 1000,  "honor": 0},
+    "숙련": {"money": 5000,  "honor": 10},
+    "심화": {"money": 30000, "honor": 50, "title": True},
+}
+ACH_REWARD_OVERRIDES = {}
+
+def ach_reward(a: dict) -> dict:
+    return ACH_REWARD_OVERRIDES.get(a["id"]) or ACH_REWARDS[a["tier"]]
+
+def ach_title_id(a: dict):
+    """전용 칭호 id (없으면 None)"""
+    return "ach_" + a["id"] if ach_reward(a).get("title") else None
+
+for _a in ACHIEVEMENTS:             # 업적 전용 칭호를 칭호 목록에 등록 (check=False → 수령 때만 지급)
+    _tid = ach_title_id(_a)
+    if _tid:
+        TITLES[_tid] = {"name": _a["name"], "desc": f"{_a['tier']} 업적 달성 기념 칭호", "check": lambda s, i: False}
+
+import threading as _ach_threading
+_ach_lock = _ach_threading.RLock()   # 업적 카운터·보상 수령이 서로의 data 컬럼을 덮어쓰지 않도록
+
+def bump_user_stats_sync(user_id: int, incs: dict, pending: bool = False):
+    """통계 카운터를 올리고 새 업적을 판정·저장합니다. (동기 DB 작업 → to_thread 또는 정산 스레드에서 호출)
+    pending=True 이면 달성 알림을 대기열에 넣어 두었다가 그 유저의 다음 /업적·전투·도박 결과에 표시합니다."""
+    _require_db()
+    with _ach_lock:
+        info = get_user_data(user_id)
+        blob = get_title_blob(info)
+        for k, v in incs.items():
+            blob["stats"][k] = int(blob["stats"].get(k, 0)) + int(v)
+        new_ids = evaluate_new_titles(blob, info, _pop_pending=False)
+        save_title_blob(user_id, blob)
+    if pending and new_ids.ach:
+        _pending_ach.setdefault(str(user_id), []).extend(new_ids.ach)
+    return new_ids
+
+def claim_ach_rewards_sync(user_id: int):
+    """달성했지만 아직 받지 않은 업적 보상을 한 번에 지급. 받을 게 없으면 None."""
+    _require_db()
+    with _ach_lock:
+        info = get_user_data(user_id)
+        blob = get_title_blob(info)
+        evaluate_new_titles(blob, info, _pop_pending=False)              # 최신 달성 상태 반영
+        claimed = set(blob["ach_claimed"])
+        todo = [a for a in ACHIEVEMENTS if a["id"] in blob["achievements"] and a["id"] not in claimed]
+        if not todo:
+            return None
+        money = sum(ach_reward(a).get("money", 0) for a in todo)
+        honor = sum(ach_reward(a).get("honor", 0) for a in todo)
+        update_user_stats(user_id, money, honor)                          # 돈·명예 먼저 (실패하면 여기서 중단 → 중복 수령 없음)
+        got_titles = []
+        for a in todo:
+            claimed.add(a["id"])
+            tid = ach_title_id(a)
+            if tid and tid not in blob["titles"]:
+                blob["titles"].append(tid)
+                got_titles.append(tid)
+        blob["ach_claimed"] = list(claimed)
+        if got_titles and blob.get("equipped") not in TITLES:
+            blob["equipped"] = got_titles[0]
+        save_title_blob(user_id, blob)
+        return {"todo": todo, "money": money, "honor": honor, "titles": got_titles}
 
 def evaluate_new_achievements(blob: dict, user_info: dict) -> list:
     """새로 달성한 업적 id 목록을 돌려주고 blob['achievements'] 에 기록합니다. (저장은 호출한 쪽에서)"""
@@ -900,14 +983,15 @@ def build_title_embed(user: discord.abc.User, blob: dict, new_ids: list = None) 
     s = blob["stats"]
 
     earned = [f"• {TITLES[t]['name']} — {TITLES[t]['desc']}" for t in blob["titles"] if t in TITLES]
-    locked = [f"• ??? — {t['desc']}" for tid, t in TITLES.items() if tid not in blob["titles"]]
+    locked = [f"• ??? — {t['desc']}" for tid, t in TITLES.items() if tid not in blob["titles"] and not tid.startswith("ach_")]
+    total_titles = sum(1 for tid in TITLES if not tid.startswith("ach_") or tid in blob["titles"])
 
     embed = discord.Embed(
         title=f"[{user.name} 님의 칭호]",
         description=f"현재 장착 중인 칭호: **{equipped_name}**" + format_new_titles(new_ids or []),
         color=discord.Color.gold()
     )
-    embed.add_field(name=f"획득한 칭호 ({len(earned)}/{len(TITLES)})", value="\n".join(earned) if earned else "*아직 획득한 칭호가 없습니다.*", inline=False)
+    embed.add_field(name=f"획득한 칭호 ({len(earned)}/{total_titles})", value="\n".join(earned) if earned else "*아직 획득한 칭호가 없습니다.*", inline=False)
     if locked:
         embed.add_field(name="미획득 칭호", value="\n".join(locked), inline=False)
     embed.add_field(
@@ -982,8 +1066,10 @@ async def titles_command(interaction: discord.Interaction):
         await interaction.response.send_message(embed=embed)
 
 # ==========================================================================
-# [/업적]  기초 · 숙련 · 심화 업적 확인
+# [/업적]  기초 · 숙련 · 심화 업적 확인 / 보상 수령 / 증명서 발급
 #   • 기초·숙련은 조건과 진행도가 보이고, 심화는 이름만 보이거나(???) 이름도 가려져 있다가 달성하면 공개됩니다.
+#   • [보상 수령] 버튼: 달성했지만 아직 안 받은 보상(자금·명예, 심화는 전용 칭호)을 한 번에 지급
+#   • 아래 선택 메뉴: 달성한 업적의 '업적 증명서' 이미지를 발급 (/프로필 과 같은 종이 배경)
 # ==========================================================================
 def _ach_fmt(n) -> str:
     return f"{int(n):,}"
@@ -993,10 +1079,24 @@ def _ach_bar(cur, goal, width: int = 10) -> str:
     filled = int(ratio * width)
     return "█" * filled + "░" * (width - filled)
 
-def _ach_line(a: dict, done: dict, s: dict, info: dict) -> str:
-    aid = a["id"]
+def _ach_reward_text(a: dict) -> str:
+    r = ach_reward(a)
+    parts = [f"${r.get('money', 0):,}"]
+    if r.get("honor"):
+        parts.append(f"명예 +{r['honor']}pt")
+    if r.get("title"):
+        parts.append("전용 칭호")
+    return " · ".join(parts)
+
+def _ach_unclaimed(blob: dict) -> list:
+    claimed = set(blob["ach_claimed"])
+    return [a for a in ACHIEVEMENTS if a["id"] in blob["achievements"] and a["id"] not in claimed]
+
+def _ach_line(a: dict, blob: dict, info: dict) -> str:
+    aid, done = a["id"], blob["achievements"]
     if aid in done:                       # 달성: 등급과 상관없이 이름·조건 모두 공개
-        return f"**{a['name']}**  `달성`\n└ {a['desc']} · <t:{int(done[aid])}:d>"
+        state = "보상 수령 완료" if aid in blob["ach_claimed"] else "보상 수령 가능"
+        return f"**{a['name']}**  `달성`\n└ {a['desc']} · <t:{int(done[aid])}:d>\n└ {state} ({_ach_reward_text(a)})"
 
     hide = a.get("hide")
     if hide == "full":                    # 이름도 조건도 비공개
@@ -1004,12 +1104,13 @@ def _ach_line(a: dict, done: dict, s: dict, info: dict) -> str:
     if hide == "name":                    # 이름만 공개
         return f"**{a['name']}**\n└ 조건: ???"
 
-    try:                                  # 기초·숙련: 조건 + 진행도 공개
-        cur = min(int(a["cur"](s, info)), a["goal"])
+    try:                                  # 기초·숙련: 조건 + 진행도 + 보상 공개
+        cur = min(int(a["cur"](blob["stats"], info)), a["goal"])
     except Exception:
         cur = 0
     return (f"**{a['name']}**\n└ {a['desc']}\n"
-            f"└ `{_ach_bar(cur, a['goal'])}` {_ach_fmt(cur)} / {_ach_fmt(a['goal'])}")
+            f"└ `{_ach_bar(cur, a['goal'])}` {_ach_fmt(cur)} / {_ach_fmt(a['goal'])}\n"
+            f"└ 보상: {_ach_reward_text(a)}")
 
 def ach_overview_embed(user: discord.abc.User, blob: dict, info: dict, new_ids=None) -> discord.Embed:
     done = blob["achievements"]
@@ -1020,13 +1121,16 @@ def ach_overview_embed(user: discord.abc.User, blob: dict, info: dict, new_ids=N
         n = sum(1 for a in items if a["id"] in done)
         lines.append(f"**{tier}**  `{_ach_bar(n, len(items))}` {n} / {len(items)}")
 
+    unclaimed = _ach_unclaimed(blob)
+    claim_txt = f"\n**수령 가능한 보상 {len(unclaimed)}개** — 아래 [보상 수령] 버튼을 눌러주세요." if unclaimed else ""
+
     recent = sorted((a for a in ACHIEVEMENTS if a["id"] in done), key=lambda a: done[a["id"]], reverse=True)[:5]
     recent_txt = "\n".join(f"• [{a['tier']}] {a['name']} · <t:{int(done[a['id']])}:R>" for a in recent) or "*아직 달성한 업적이 없습니다.*"
 
     embed = discord.Embed(
         title=f"[{user.display_name} 님의 업적]",
-        description=(f"달성 **{total_done} / {len(ACHIEVEMENTS)}**\n\n" + "\n".join(lines)
-                     + "\n\n아래 버튼으로 등급별 업적을 확인하세요.\n"
+        description=(f"달성 **{total_done} / {len(ACHIEVEMENTS)}**\n\n" + "\n".join(lines) + claim_txt
+                     + "\n\n버튼으로 등급별 업적을 확인하고, 아래 메뉴에서 달성한 업적의 **증명서**를 발급받을 수 있습니다.\n"
                        "기초·숙련은 조건이 공개되고, **심화**는 달성해야 모든 내용이 드러납니다."
                      + format_new_titles(new_ids or [])),
         color=discord.Color.gold()
@@ -1040,7 +1144,7 @@ def ach_tier_embed(user: discord.abc.User, tier: str, blob: dict, info: dict) ->
     done = blob["achievements"]
     items = [a for a in ACHIEVEMENTS if a["tier"] == tier]
     n = sum(1 for a in items if a["id"] in done)
-    text = "\n\n".join(_ach_line(a, done, blob["stats"], info) for a in items)
+    text = "\n\n".join(_ach_line(a, blob, info) for a in items)
     if len(text) > 4000:
         text = text[:3990] + "…"
     embed = discord.Embed(title=f"[{tier} 업적]  {n} / {len(items)}", description=text,
@@ -1049,21 +1153,95 @@ def ach_tier_embed(user: discord.abc.User, tier: str, blob: dict, info: dict) ->
         embed.set_footer(text="심화 업적은 달성하기 전까지 조건(또는 이름)이 ??? 로 표시됩니다.")
     return embed
 
+async def _ach_owner_only(interaction: discord.Interaction, view) -> bool:
+    if interaction.user.id != view.owner.id:
+        await interaction.response.send_message("타인의 업적 창은 조작할 수 없습니다.", ephemeral=True)
+        return False
+    return True
+
 class AchTierButton(discord.ui.Button):
     def __init__(self, key: str, label: str, style=discord.ButtonStyle.secondary):
-        super().__init__(label=label, style=style)
+        super().__init__(label=label, style=style, row=0)
         self.key = key
 
     async def callback(self, interaction: discord.Interaction):
         view: "AchievementView" = self.view
-        if interaction.user.id != view.owner.id:
-            await interaction.response.send_message("타인의 업적 창은 조작할 수 없습니다.", ephemeral=True)
-            return
+        if not await _ach_owner_only(interaction, view): return
         await interaction.response.defer()
         view.current = self.key
-        for child in view.children:
-            child.style = discord.ButtonStyle.primary if child.key == self.key else discord.ButtonStyle.secondary
+        view.refresh()
         await interaction.edit_original_response(embed=view.make_embed(), view=view)
+
+class AchClaimButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="보상 수령", style=discord.ButtonStyle.success, row=0)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: "AchievementView" = self.view
+        if not await _ach_owner_only(interaction, view): return
+        await interaction.response.defer()
+        uid = view.owner.id
+        try:
+            result = await asyncio.to_thread(claim_ach_rewards_sync, uid)
+            info, blob, _ = await asyncio.to_thread(_load_achievements_sync, uid)
+        except Exception as e:
+            print(f"Achievement claim error: {e}")
+            await interaction.followup.send("보상을 지급하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
+            return
+        view.info, view.blob = info, blob
+        view.refresh()
+        await interaction.edit_original_response(embed=view.make_embed(), view=view)
+        if not result:
+            await interaction.followup.send("지금 수령할 수 있는 업적 보상이 없습니다.", ephemeral=True)
+            return
+
+        names = "\n".join(f"• [{a['tier']}] {a['name']} — {_ach_reward_text(a)}" for a in result["todo"][:15])
+        if len(result["todo"]) > 15:
+            names += f"\n… 외 {len(result['todo']) - 15}개"
+        embed = discord.Embed(
+            title="[업적 보상 수령]",
+            description=(f"{view.owner.mention} 님이 업적 보상 **{len(result['todo'])}개**를 받았습니다!\n\n{names}\n\n"
+                         f"**합계:** `${result['money']:,}`" + (f" · 명예 `+{result['honor']} pt`" if result["honor"] else "")
+                         + (f"\n**새 칭호:** {', '.join(TITLES[t]['name'] for t in result['titles'])}\n`/칭호` 에서 장착할 수 있습니다." if result["titles"] else "")),
+            color=discord.Color.green()
+        )
+        await interaction.followup.send(embed=embed)
+
+_cert_cooldowns = {}   # {user_id: 마지막 발급 시각}
+CERT_COOLDOWN_SEC = 10
+
+class AchCertSelect(discord.ui.Select):
+    def __init__(self, blob: dict):
+        done = blob["achievements"]
+        cleared = sorted((a for a in ACHIEVEMENTS if a["id"] in done),
+                         key=lambda a: (-ACH_TIERS.index(a["tier"]), -done[a["id"]]))[:25]   # 심화 → 숙련 → 기초, 최근 순
+        options = [discord.SelectOption(label=a["name"][:100], value=a["id"],
+                                        description=f"[{a['tier']}] {a['desc']}"[:100]) for a in cleared]
+        super().__init__(placeholder="증명서를 발급받을 업적을 선택하세요...", min_values=1, max_values=1, options=options, row=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: "AchievementView" = self.view
+        if not await _ach_owner_only(interaction, view): return
+        uid = interaction.user.id
+        now = time.monotonic()
+        if now - _cert_cooldowns.get(uid, 0) < CERT_COOLDOWN_SEC:
+            await interaction.response.send_message(f"증명서는 {CERT_COOLDOWN_SEC}초에 한 장씩 발급할 수 있습니다.", ephemeral=True)
+            return
+        a = ACH_BY_ID.get(self.values[0])
+        if a is None or a["id"] not in view.blob["achievements"]:
+            await interaction.response.send_message("아직 달성하지 못한 업적입니다.", ephemeral=True)
+            return
+        _cert_cooldowns[uid] = now
+        await interaction.response.defer()
+        try:
+            buf = await asyncio.to_thread(make_achievement_certificate,
+                                          interaction.user.display_name, a, view.blob["achievements"][a["id"]], uid)
+        except Exception as e:
+            print(f"Achievement certificate error: {e}")
+            await interaction.followup.send("증명서를 발급하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
+            return
+        await interaction.followup.send(content=f"{interaction.user.mention} 님의 **[{a['tier']}] {a['name']}** 업적 증명서입니다.",
+                                        file=discord.File(buf, filename=f"achievement_{a['id']}.png"))
 
 class AchievementView(discord.ui.View):
     def __init__(self, owner: discord.abc.User, blob: dict, info: dict):
@@ -1071,9 +1249,21 @@ class AchievementView(discord.ui.View):
         self.owner, self.blob, self.info = owner, blob, info
         self.current = "__all__"
         self.interaction = None
-        self.add_item(AchTierButton("__all__", "전체", discord.ButtonStyle.primary))
+        self.refresh()
+
+    def refresh(self):
+        """현재 탭 / 수령 가능 개수 / 발급 가능한 업적 목록에 맞춰 버튼과 메뉴를 다시 만든다."""
+        self.clear_items()
+        self.add_item(AchTierButton("__all__", "전체", discord.ButtonStyle.primary if self.current == "__all__" else discord.ButtonStyle.secondary))
         for tier in ACH_TIERS:
-            self.add_item(AchTierButton(tier, tier))
+            self.add_item(AchTierButton(tier, tier, discord.ButtonStyle.primary if self.current == tier else discord.ButtonStyle.secondary))
+        n = len(_ach_unclaimed(self.blob))
+        claim = AchClaimButton()
+        claim.label = f"보상 수령 ({n})" if n else "보상 수령"
+        claim.disabled = n == 0
+        self.add_item(claim)
+        if self.blob["achievements"]:
+            self.add_item(AchCertSelect(self.blob))
 
     def make_embed(self) -> discord.Embed:
         if self.current == "__all__":
@@ -1089,14 +1279,15 @@ class AchievementView(discord.ui.View):
             pass
 
 def _load_achievements_sync(user_id: int):
-    info = get_user_data(user_id)
-    blob = get_title_blob(info)
-    new_ids = evaluate_new_titles(blob, info)     # 칭호·업적을 함께 판정
-    if new_ids:
-        save_title_blob(user_id, blob)
+    with _ach_lock:
+        info = get_user_data(user_id)
+        blob = get_title_blob(info)
+        new_ids = evaluate_new_titles(blob, info)     # 칭호·업적을 함께 판정 (대기 중이던 알림 포함)
+        if new_ids:
+            save_title_blob(user_id, blob)
     return info, blob, new_ids
 
-@bot.tree.command(name="업적", description="[마피아 GM] 달성한 업적과 진행 상황을 확인합니다. (기초 · 숙련 · 심화)")
+@bot.tree.command(name="업적", description="[마피아 GM] 업적 확인 · 보상 수령 · 증명서 발급 (기초 · 숙련 · 심화)")
 async def achievements_command(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
@@ -3305,12 +3496,20 @@ class DuelBattleView(GuardedView):
         except Exception as e:
             print(f"DB Error (turn duel end): {e}")
 
+        duel_ach = ""
+        try:   # 업적 카운터 (승자만)
+            duel_new = await asyncio.to_thread(bump_user_stats_sync, self.winner.id, {"duel_wins": 1})
+            if duel_new:
+                duel_ach = f"\n\n{self.winner.mention}" + format_new_titles(duel_new)
+        except Exception as e:
+            print(f"Achievement error (duel): {e}")
+
         embed = discord.Embed(
             title="[결투 종료: 승패 결정]",
             description=f"피비린내 나는 공방 끝에 **{self.winner.mention}** 님이 승리했습니다!\n\n"
                         f"**명예 변동:**\n"
                         f"• {self.winner.mention} `+{self.bet} pt` (총 {new_w_honor} pt)\n"
-                        f"• {loser.mention} `-{self.bet} pt` (총 {new_l_honor} pt)",
+                        f"• {loser.mention} `-{self.bet} pt` (총 {new_l_honor} pt)" + duel_ach,
             color=discord.Color.gold()
         )
         log_text = "\n".join(self.logs[-8:])
@@ -4011,6 +4210,61 @@ def make_profile_image(kind: str, rows: list, user_id: int, avatar: Image.Image)
     # [5] 하단 발급 문구
     footer = f"발급처  패밀리 GM 통합 정보국   ·   발급일  {datetime.now():%Y-%m-%d}"
     draw.text((cx, y2 - 6), footer, fill=PROFILE_MUTED, font=_profile_font(22), anchor="mb")
+
+    buf = io.BytesIO()
+    paper.convert("RGB").save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+def make_achievement_certificate(recipient: str, ach: dict, achieved_at: int, user_id: int) -> io.BytesIO:
+    """업적 증명서 이미지 (종이 배경 + 붉은 도장). /프로필 과 같은 배경·폰트를 씁니다."""
+    S = PROFILE_SCALE
+    path = next(_asset_paths(PROFILE_BG_NAMES), None)
+    if path:
+        paper = Image.open(path).convert("RGBA")
+        paper = paper.resize((paper.width * S, paper.height * S), Image.Resampling.LANCZOS)
+    else:
+        paper = Image.new("RGBA", (543 * S, 394 * S), (234, 228, 205, 255))
+
+    draw = ImageDraw.Draw(paper)
+    x1, y1, x2, y2 = (v * S for v in PROFILE_AREA)
+    cx = (x1 + x2) // 2
+
+    # [1] 제목 + 이중선 + 번호
+    draw.text((cx, y1 + 8), "업 적 증 명 서", fill=PROFILE_INK, font=_profile_font(54), anchor="mt")
+    draw.line((x1 + 30, y1 + 88, x2 - 30, y1 + 88), fill=PROFILE_INK, width=3)
+    draw.line((x1 + 30, y1 + 96, x2 - 30, y1 + 96), fill=PROFILE_INK, width=1)
+    draw.text((x2 - 30, y1 + 106), f"No. {str(user_id)[-6:]}-{ACHIEVEMENTS.index(ach) + 1:02d}",
+              fill=PROFILE_MUTED, font=_profile_font(22), anchor="ra")
+
+    # [2] 수여 문구
+    name = _fit_text(draw, _clean_text(recipient) or "무명", _profile_font(40), 640)
+    draw.text((cx, y1 + 140), f"{name} 님", fill=PROFILE_INK, font=_profile_font(40), anchor="mt")
+    draw.text((cx, y1 + 196), "위 사람은 아래의 업적을 달성하였기에 이 증서를 수여합니다.",
+              fill=PROFILE_MUTED, font=_profile_font(24), anchor="mt")
+
+    # [3] 업적 이름 + 조건
+    draw.text((cx, y1 + 250), f"─  {ach['tier']} 업적  ─", fill=PROFILE_MUTED, font=_profile_font(28), anchor="mt")
+    title = _fit_text(draw, _clean_text(ach["name"]), _profile_font(58), 700)
+    draw.text((cx, y1 + 296), title, fill=PROFILE_INK, font=_profile_font(58), anchor="mt")
+    cond = _fit_text(draw, _clean_text(ach["desc"]), _profile_font(28), 540)
+    draw.text((cx, y1 + 372), cond, fill=PROFILE_MUTED, font=_profile_font(28), anchor="mt")
+
+    # [4] 붉은 도장 (오른쪽 아래)
+    stamp = Image.new("RGBA", (160, 160), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(stamp)
+    red = (170, 40, 40, 215)
+    sd.ellipse((5, 5, 155, 155), outline=red, width=6)
+    sd.ellipse((18, 18, 142, 142), outline=red, width=2)
+    sd.text((80, 68), "달성", fill=red, font=_profile_font(48), anchor="mm")
+    sd.text((80, 112), ach["tier"], fill=red, font=_profile_font(26), anchor="mm")
+    stamp = stamp.resize((128, 128), Image.Resampling.LANCZOS).rotate(-12, resample=Image.Resampling.BICUBIC)
+    paper.alpha_composite(stamp, (x2 - 30 - 132, y2 - 190))   # 이름 글자를 가리지 않도록 조금 작게, 아래쪽에
+
+    # [5] 하단 문구
+    ach_day = datetime.fromtimestamp(achieved_at) if achieved_at else datetime.now()
+    footer = f"달성일  {ach_day:%Y-%m-%d}   ·   발급일  {datetime.now():%Y-%m-%d}   ·   발급처  패밀리 GM 통합 정보국"
+    draw.text((cx, y2 - 6), footer, fill=PROFILE_MUTED, font=_profile_font(20), anchor="mb")
 
     buf = io.BytesIO()
     paper.convert("RGB").save(buf, format="PNG")
@@ -5283,6 +5537,14 @@ def _raid_settle_sync(s: RaidSession, win: bool):
                 update_user_stats(p.uid, money, honor)
             except Exception as e:
                 print(f"Raid reward error ({p.uid}): {e}")
+            if win:   # 업적 카운터 (레이드 클리어)
+                try:
+                    incs = {"raid_clears": 1}
+                    if t["name"] == RAID_TIERS["king"]["name"]:
+                        incs["raid_king_clears"] = 1
+                    bump_user_stats_sync(p.uid, incs, pending=True)
+                except Exception as e:
+                    print(f"Raid achievement error ({p.uid}): {e}")
             if win:   # 제작 재료 (/제작)
                 drops = roll_material_drops(t["name"])
                 if drops:
@@ -5889,6 +6151,14 @@ def _war_settle_sync(s: WarSession, atk_win: bool):
         except Exception as e:
             print(f"War reward error: {e}")
         results.append((p, money, honor, True))
+        if p.hits > 0:   # 업적 카운터 (구역 점령전 승리 / 공격 측 승리 = 구역 점령)
+            try:
+                incs = {"war_wins": 1}
+                if atk_win:
+                    incs["war_conquests"] = 1
+                bump_user_stats_sync(p.uid, incs, pending=True)
+            except Exception as e:
+                print(f"War achievement error ({p.uid}): {e}")
 
     for p in losers:
         money = int(s.prize * WAR_LOSE_MONEY_RATIO / max(1, len(losers))) if p.hits > 0 else 0
