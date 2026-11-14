@@ -664,7 +664,9 @@ def get_title_blob(user_info: dict) -> dict:
                 "gamble_played", "gamble_won", "gamble_wagered", "gamble_net", "jackpot", "broke",
                 "attendance",
                 "fight_wins", "named_kills", "boss_kills",            # ← 업적용 카운터
-                "duel_wins", "raid_clears", "raid_king_clears", "war_wins", "war_conquests"):
+                "duel_wins", "raid_clears", "raid_king_clears", "war_wins", "war_conquests",
+                "police_arrests", "police_big_arrests", "police_patrols", "police_interrogations",   # ← 경찰 업적용 카운터
+                "police_matches", "police_op_stages", "police_salary_s"):
         stats[key] = int(stats.get(key, 0) or 0)
     blob["stats"] = stats
     blob["titles"] = list(blob.get("titles") or [])
@@ -791,6 +793,45 @@ ACHIEVEMENTS = [
     _ach("a_duel_50",    "심화", "결투장의 지배자",      "결투 50회 승리",                    lambda s, i: s["duel_wins"],            50,       hide="full"),
     _ach("a_war_conq_5", "심화", "도시의 새 주인",       "구역 점령전에서 구역을 5회 빼앗음", lambda s, i: s["war_conquests"],        5,        hide="full"),
 ]
+# ── 경찰 업적 (role="police": 경찰에게만 보임) ──
+#   검거·순찰·심문·수사팀 작전·월급 평가를 센 카운터를 씁니다. (police_ach_bump 가 올림)
+POLICE_BIG_FISH_HONOR = 3000   # '거물 수배범' 기준: 검거 대상의 명예가 이 값 이상
+_police_ach = [
+    # 기초
+    _ach("p_arrest_1",     "기초", "첫 수갑",             "지명수배범 1회 검거",                    lambda s, i: s["police_arrests"],        1),
+    _ach("p_patrol_5",     "기초", "순찰 순경",           "순찰 5회 완료",                          lambda s, i: s["police_patrols"],        5),
+    _ach("p_interrogate_1","기초", "첫 심문",             "심문 재판 1회 완료",                     lambda s, i: s["police_interrogations"], 1),
+    # 숙련
+    _ach("p_arrest_10",    "숙련", "수배범 사냥꾼",       "지명수배범 10회 검거",                   lambda s, i: s["police_arrests"],        10),
+    _ach("p_patrol_30",    "숙련", "거리의 파수꾼",       "순찰 30회 완료",                         lambda s, i: s["police_patrols"],        30),
+    _ach("p_match_10",     "숙련", "정확한 눈",           "심문 재판 결과가 내 의견과 10회 일치",   lambda s, i: s["police_matches"],        10),
+    _ach("p_op_10",        "숙련", "합동 작전의 주역",    "수사팀 작전에서 성공 단계 10개 누적",    lambda s, i: s["police_op_stages"],      10),
+    _ach("p_salary_s_1",   "숙련", "우수 근무자",         "/월급 평가 S(우수) 1회",                 lambda s, i: s["police_salary_s"],       1),
+    # 심화
+    _ach("p_arrest_50",    "심화", "수배범의 악몽",       "지명수배범 50회 검거",                   lambda s, i: s["police_arrests"],        50,   hide="name"),
+    _ach("p_interrogate_30","심화", "정의의 저울",        "심문 재판 30회 완료",                    lambda s, i: s["police_interrogations"], 30,   hide="name"),
+    _ach("p_big_arrest_3", "심화", "거물 사냥꾼",         f"명예 {POLICE_BIG_FISH_HONOR:,}pt 이상 거물 수배범 3회 검거", lambda s, i: s["police_big_arrests"], 3, hide="full"),
+    _ach("p_salary_s_10",  "심화", "모범 수사관",         "/월급 평가 S(우수) 10회",                lambda s, i: s["police_salary_s"],       10,   hide="full"),
+    _ach("p_op_50",        "심화", "작전 총사령관",       "수사팀 작전에서 성공 단계 50개 누적",    lambda s, i: s["police_op_stages"],      50,   hide="full"),
+]
+for _a in _police_ach:
+    _a["role"] = "police"
+ACHIEVEMENTS += _police_ach
+
+# 조직원 전용 명령(/임무 /전투 /보스 /네임드 /결투 /무기상점, 조직·레이드·구역, 일일 의뢰)으로만 달성되는 업적
+_MAFIA_ONLY_ACH = {
+    "b_mission_1", "b_mission_10", "b_fight_5", "b_weapon_1", "b_duel_1", "b_raid_1", "b_attend_3",
+    "s_mission_50", "s_streak_5", "s_hard_5", "s_fight_50", "s_named_2", "s_duel_10", "s_raid_10", "s_war_3",
+    "a_boss_1", "a_named_all", "a_mission_300", "a_attend_30", "a_streak_10", "a_boss_5", "a_raid_king", "a_duel_50", "a_war_conq_5",
+}
+for _a in ACHIEVEMENTS:
+    _a.setdefault("role", "mafia" if _a["id"] in _MAFIA_ONLY_ACH else None)   # None = 공통
+
+def ach_pool(is_police: bool) -> list:
+    """이 유저에게 보여줄 업적 목록 (경찰은 경찰·공통, 그 외는 조직원·공통). 이미 달성한 것은 항상 보이도록 호출부에서 처리"""
+    want = "police" if is_police else "mafia"
+    return [a for a in ACHIEVEMENTS if a["role"] in (None, want)]
+
 ACH_BY_ID = {a["id"]: a for a in ACHIEVEMENTS}
 
 # ── 업적 보상 (/업적 의 [보상 수령] 버튼으로 받습니다) ──
@@ -832,6 +873,24 @@ def bump_user_stats_sync(user_id: int, incs: dict, pending: bool = False):
     if pending and new_ids.ach:
         _pending_ach.setdefault(str(user_id), []).extend(new_ids.ach)
     return new_ids
+
+async def police_ach_bump(user_id: int, pending: bool = False, **incs) -> str:
+    """경찰 활동 카운터를 올리고 새로 달성한 업적이 있으면 결과 메시지에 붙일 안내 문구를 돌려준다.
+    (대기 중이던 알림도 함께 표시. 실패해도 명령어 처리는 막지 않고 빈 문자열을 돌려줌)
+    pending=True 이면 안내를 바로 표시하지 않고 그 유저의 다음 경찰 활동·/업적 화면에서 보여준다."""
+    incs = {k: int(v) for k, v in incs.items() if v}
+    if not incs:
+        return ""
+    try:
+        new_ids = await asyncio.to_thread(bump_user_stats_sync, user_id, incs, pending)
+        if pending:
+            return ""
+        out = _NewIds(list(new_ids))
+        out.ach = list(_pending_ach.pop(str(user_id), [])) + list(new_ids.ach)
+        return format_new_titles(out)
+    except Exception as e:
+        print(f"[경찰 업적 카운터 오류] user={user_id}: {e}")
+        return ""
 
 def claim_ach_rewards_sync(user_id: int):
     """달성했지만 아직 받지 않은 업적 보상을 한 번에 지급. 받을 게 없으면 None."""
@@ -1112,12 +1171,13 @@ def _ach_line(a: dict, blob: dict, info: dict) -> str:
             f"└ `{_ach_bar(cur, a['goal'])}` {_ach_fmt(cur)} / {_ach_fmt(a['goal'])}\n"
             f"└ 보상: {_ach_reward_text(a)}")
 
-def ach_overview_embed(user: discord.abc.User, blob: dict, info: dict, new_ids=None) -> discord.Embed:
+def ach_overview_embed(user: discord.abc.User, blob: dict, info: dict, new_ids=None, is_police: bool = False) -> discord.Embed:
     done = blob["achievements"]
-    total_done = sum(1 for a in ACHIEVEMENTS if a["id"] in done)
+    pool = ach_pool(is_police)
+    total_done = sum(1 for a in pool if a["id"] in done)
     lines = []
     for tier in ACH_TIERS:
-        items = [a for a in ACHIEVEMENTS if a["tier"] == tier]
+        items = [a for a in pool if a["tier"] == tier]
         n = sum(1 for a in items if a["id"] in done)
         lines.append(f"**{tier}**  `{_ach_bar(n, len(items))}` {n} / {len(items)}")
 
@@ -1129,7 +1189,7 @@ def ach_overview_embed(user: discord.abc.User, blob: dict, info: dict, new_ids=N
 
     embed = discord.Embed(
         title=f"[{user.display_name} 님의 업적]",
-        description=(f"달성 **{total_done} / {len(ACHIEVEMENTS)}**\n\n" + "\n".join(lines) + claim_txt
+        description=(f"달성 **{total_done} / {len(pool)}**\n\n" + "\n".join(lines) + claim_txt
                      + "\n\n버튼으로 등급별 업적을 확인하고, 아래 메뉴에서 달성한 업적의 **증명서**를 발급받을 수 있습니다.\n"
                        "기초·숙련은 조건이 공개되고, **심화**는 달성해야 모든 내용이 드러납니다."
                      + format_new_titles(new_ids or [])),
@@ -1140,9 +1200,10 @@ def ach_overview_embed(user: discord.abc.User, blob: dict, info: dict, new_ids=N
         embed.set_thumbnail(url=user.avatar.url)
     return embed
 
-def ach_tier_embed(user: discord.abc.User, tier: str, blob: dict, info: dict) -> discord.Embed:
+def ach_tier_embed(user: discord.abc.User, tier: str, blob: dict, info: dict, is_police: bool = False) -> discord.Embed:
     done = blob["achievements"]
-    items = [a for a in ACHIEVEMENTS if a["tier"] == tier]
+    # 내 역할에 맞는 업적 + (역할이 바뀌었더라도) 이미 달성한 업적
+    items = [a for a in ACHIEVEMENTS if a["tier"] == tier and (a in ach_pool(is_police) or a["id"] in done)]
     n = sum(1 for a in items if a["id"] in done)
     text = "\n\n".join(_ach_line(a, blob, info) for a in items)
     if len(text) > 4000:
@@ -1244,9 +1305,10 @@ class AchCertSelect(discord.ui.Select):
                                         file=discord.File(buf, filename=f"achievement_{a['id']}.png"))
 
 class AchievementView(discord.ui.View):
-    def __init__(self, owner: discord.abc.User, blob: dict, info: dict):
+    def __init__(self, owner: discord.abc.User, blob: dict, info: dict, is_police: bool = False):
         super().__init__(timeout=180)
         self.owner, self.blob, self.info = owner, blob, info
+        self.is_police = is_police
         self.current = "__all__"
         self.interaction = None
         self.refresh()
@@ -1267,8 +1329,8 @@ class AchievementView(discord.ui.View):
 
     def make_embed(self) -> discord.Embed:
         if self.current == "__all__":
-            return ach_overview_embed(self.owner, self.blob, self.info)
-        return ach_tier_embed(self.owner, self.current, self.blob, self.info)
+            return ach_overview_embed(self.owner, self.blob, self.info, is_police=self.is_police)
+        return ach_tier_embed(self.owner, self.current, self.blob, self.info, is_police=self.is_police)
 
     async def on_timeout(self):
         if self.interaction is None:
@@ -1295,9 +1357,10 @@ async def achievements_command(interaction: discord.Interaction):
     await interaction.response.defer()
     user = interaction.user
     info, blob, new_ids = await asyncio.to_thread(_load_achievements_sync, user.id)
-    view = AchievementView(user, blob, info)
+    is_police = _is_police(user)
+    view = AchievementView(user, blob, info, is_police=is_police)
     view.interaction = interaction
-    await interaction.followup.send(embed=ach_overview_embed(user, blob, info, new_ids), view=view)
+    await interaction.followup.send(embed=ach_overview_embed(user, blob, info, new_ids, is_police=is_police), view=view)
 
 @bot.event
 async def on_ready():
@@ -1618,6 +1681,8 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
         pass
     police_shift_record(interaction.user.id, "arrest",
                         bonus=min(POLICE_SALARY_ARREST_BONUS_MAX, _target_honor // POLICE_SALARY_ARREST_BONUS_PER))   # /월급 근무 실적
+    ach_note = await police_ach_bump(interaction.user.id, police_arrests=1,
+                                     police_big_arrests=1 if _target_honor >= POLICE_BIG_FISH_HONOR else 0)   # 업적 카운터
 
     # 압류: 조직원 아이템 랜덤 1~2종을 경찰이 가져감
     try:
@@ -1640,6 +1705,7 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
             f"**검거 포상금:** `${arrest_money:,}`{money_note}\n"
             f"**경찰 실적:** `+{arrest_honor} pt`{honor_note} (현재 직급: `{police_rank}`)\n"
             f"**압류 물품:** {seize_text}"
+            + ach_note
         ),
         color=discord.Color.dark_blue()
     )
@@ -1890,6 +1956,7 @@ async def patrol_location(interaction: discord.Interaction, 지역: app_commands
     except Exception as e:
         print(f"Patrol reward error: {e}")
     police_shift_record(user.id, "patrol")   # /월급 근무 실적
+    ach_note = await police_ach_bump(user.id, police_patrols=1)   # 업적 카운터
 
     police_info = get_user_data(user.id)
     police_rank = get_user_rank(police_info["honor"], is_police=True)
@@ -1902,6 +1969,7 @@ async def patrol_location(interaction: discord.Interaction, 지역: app_commands
             f"**순찰 수당:** `${earned_money:,}`\n"
             f"**경찰 실적:** `+{earned_honor} pt` (현재 직급: `{police_rank}`)\n"
             f"**다음 순찰 가능:** 3분 후"
+            + ach_note
         ),
         color=discord.Color.blue()
     )
@@ -2113,6 +2181,8 @@ async def interrogate_trial(s: InterrogationSession, opinion: str):
             result = "재판부는 **기존 형량을 유지**하기로 했습니다."
 
         police_shift_record(s.police.id, "interrogate")   # /월급 근무 실적
+        ach_note = await police_ach_bump(s.police.id, police_interrogations=1,
+                                         police_matches=1 if verdict == opinion else 0)   # 업적 카운터
         reward_text = ""
         if verdict == opinion:   # 경찰 의견과 판결이 일치
             police_shift_record(s.police.id, "interrogate_match")
@@ -2134,7 +2204,7 @@ async def interrogate_trial(s: InterrogationSession, opinion: str):
                 f"**답변:** {INTERROGATE_ANSWERS[s.answer]} / **경찰 의견:** {INTERROGATE_OPINIONS[opinion]}\n\n"
                 f"{result}\n"
                 f"**{s.prisoner.display_name}** 님의 석방까지 **{remain}초** 남았습니다."
-                f"{reward_text}"
+                f"{reward_text}{ach_note}"
             ),
             color=color
         )
@@ -6827,19 +6897,110 @@ async def family_status_cmd(interaction: discord.Interaction, 이름: str = None
 
 
 # ---------------------------------------------------------------- /랭킹
-@bot.tree.command(name="랭킹", description="[공용] 서버 랭킹을 확인합니다. (명예 / 자금 / 조직)")
+# ---------------------------------------------------------------- 경찰 랭킹
+#   /랭킹 에서 고르는 경찰 전용 랭킹입니다. 현재 '경찰' 역할을 가진 사람만 집계합니다.
+#   검거·순찰·심문 횟수는 업적 카운터(user_data.data 의 stats)를 씁니다.
+POLICE_RANK_KINDS = {
+    # kind: (제목, stats 키 — None 이면 명예, 값 표시)
+    "police_honor":          ("경찰 명예 랭킹", None,                    lambda v: f"{v:,} pt"),
+    "police_arrests":        ("경찰 검거 랭킹", "police_arrests",        lambda v: f"검거 {v:,}회"),
+    "police_patrols":        ("경찰 순찰 랭킹", "police_patrols",        lambda v: f"순찰 {v:,}회"),
+    "police_interrogations": ("경찰 심문 랭킹", "police_interrogations", lambda v: f"심문 재판 {v:,}회"),
+}
+
+def police_rank_rows_sync(user_ids: list) -> list:
+    """경찰 유저들의 명예·통계 행을 읽어옴 (100명씩 나눠서 조회)"""
+    ids = [str(i) for i in user_ids]
+    rows = []
+    for k in range(0, len(ids), 100):
+        res = supabase.table("user_data").select("user_id,honor,data").in_("user_id", ids[k:k + 100]).execute()
+        rows.extend(res.data or [])
+    return rows
+
+async def send_police_ranking(interaction: discord.Interaction, kind: str):
+    guild = interaction.guild
+    footer = None
+    if kind == "police_unit":
+        try:
+            rows = await asyncio.to_thread(police_unit_list_top, interaction.guild_id, RANK_TOP_N)
+        except Exception as e:
+            print(f"Police unit ranking error: {e}")
+            await interaction.followup.send(POLICE_UNIT_DB_ERROR_MSG, ephemeral=True)
+            return
+        title = "수사팀 랭킹 (작전 점수)"
+        lines = [f"`{i + 1}위` **{r['name']}** — 작전 점수 {int(r.get('op_points') or 0):,} · 성공 {int(r.get('ops_cleared') or 0)}회 · {len(r.get('member_ids') or [])}명"
+                 for i, r in enumerate(rows) if int(r.get("op_points") or 0) > 0]
+    else:
+        title, stat_key, fmt = POLICE_RANK_KINDS[kind]
+        role = discord.utils.get(guild.roles, name="경찰")
+        members = [m for m in (role.members if role else []) if not m.bot]
+        if not members:
+            await interaction.followup.send("아직 경찰 소속이 없습니다.", ephemeral=True)
+            return
+        try:
+            rows = await asyncio.to_thread(police_rank_rows_sync, [m.id for m in members])
+        except Exception as e:
+            print(f"Police ranking error: {e}")
+            await interaction.followup.send("랭킹을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.", ephemeral=True)
+            return
+        by_id = {}
+        for r in rows:
+            try:
+                by_id[int(r["user_id"])] = r
+            except (KeyError, ValueError, TypeError):
+                continue
+        board = []   # [(member, 값, 명예)]
+        for m in members:
+            r = by_id.get(m.id)
+            if not r:
+                continue
+            honor = int(r.get("honor") or 0)
+            value = honor if stat_key is None else int(get_title_blob({"data": r.get("data")})["stats"].get(stat_key, 0))
+            if stat_key is not None and value <= 0:      # 기록이 없는 사람은 순위에 올리지 않음
+                continue
+            board.append((m, value, honor))
+        board.sort(key=lambda t: (-t[1], -t[2]))             # 값이 같으면 명예가 높은 쪽이 위
+        lines = [f"`{i + 1}위` **{m.display_name}** — {fmt(v)}" for i, (m, v, _) in enumerate(board[:RANK_TOP_N])]
+        me = next((i + 1 for i, (m, _, _) in enumerate(board) if m.id == interaction.user.id), None)
+        if me:
+            footer = f"내 순위: {me}위"
+        elif _is_police(interaction.user):
+            footer = "내 순위: 아직 기록이 없습니다."
+        else:
+            footer = "경찰 소속만 집계되는 랭킹입니다."
+        if stat_key is not None:
+            footer += " · 업적 시스템 도입 이후의 기록부터 집계됩니다."
+
+    if not lines:
+        await interaction.followup.send("아직 집계할 기록이 없습니다.", ephemeral=True)
+        return
+    embed = discord.Embed(title=title, description="\n".join(lines), color=discord.Color.blue())
+    if footer:
+        embed.set_footer(text=footer)
+    await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="랭킹", description="[공용] 서버 랭킹을 확인합니다. (명예 / 자금 / 조직 / 경찰)")
 @app_commands.describe(종류="확인할 랭킹")
 @app_commands.choices(종류=[
     app_commands.Choice(name="명예 (개인)", value="honor"),
     app_commands.Choice(name="자금 (개인)", value="money"),
     app_commands.Choice(name="레이드 점수 (조직)", value="raid_points"),
     app_commands.Choice(name="점령전 승수 (조직)", value="war_wins"),
+    app_commands.Choice(name="경찰 명예 (경찰)", value="police_honor"),
+    app_commands.Choice(name="경찰 검거 수 (경찰)", value="police_arrests"),
+    app_commands.Choice(name="경찰 순찰 수 (경찰)", value="police_patrols"),
+    app_commands.Choice(name="경찰 심문 수 (경찰)", value="police_interrogations"),
+    app_commands.Choice(name="수사팀 작전 점수 (수사팀)", value="police_unit"),
 ])
 async def ranking_cmd(interaction: discord.Interaction, 종류: app_commands.Choice[str]):
     if not await check_maintenance(interaction): return
     kind = 종류.value
     guild = interaction.guild
     await interaction.response.defer()
+    if kind in POLICE_RANK_KINDS or kind == "police_unit":      # 경찰 관련 랭킹은 따로 처리
+        await send_police_ranking(interaction, kind)
+        return
     try:
         if kind in ("honor", "money"):
             rows = await asyncio.to_thread(user_rank_rows, kind, RANK_SCAN_N)
@@ -8002,6 +8163,11 @@ async def auction_command(interaction: discord.Interaction, 아이템: str,
     if not await auction_precheck(interaction): return
 
     user = interaction.user
+    now_dt = datetime.now()
+    if any(int(k) == int(user.id) and now_dt <= exp for k, exp in list(wanted_list.items())):
+        # 수배 중에 경매로 아이템을 빼돌려 /검거 압류를 피하는 것을 막습니다. (입찰은 가능)
+        await interaction.response.send_message("**지명수배 중에는 경매에 물건을 올릴 수 없습니다.** 수배가 풀린 뒤에 다시 시도해 주세요.", ephemeral=True)
+        return
     reason = auction_blocked_reason(아이템)
     if reason:
         await interaction.response.send_message(reason, ephemeral=True)
@@ -8819,6 +8985,7 @@ async def run_police_op(session: PoliceOpSession):
         if succ > 0:
             for member in paid_to:
                 police_shift_record(member.id, "op_stage", succ)   # /월급 근무 실적
+                await police_ach_bump(member.id, pending=True, police_op_stages=succ)   # 업적 카운터
         treasury_add = int(money_each * len(paid_to) * POLICE_OP_TREASURY_RETURN) if succ > 0 else 0
         try:
             await asyncio.to_thread(police_unit_record_op, session.unit_id, treasury_add, points, succ > 0)
@@ -8933,9 +9100,9 @@ async def unit_op_info_cmd(interaction: discord.Interaction):
 #   • /월급 을 쓰면 10분짜리 근무가 시작되고, 그동안 한 경찰 활동(순찰·검거·심문·수사팀 작전)이 점수로 쌓입니다.
 #   • 10분이 지나면 자동으로 정산되어 점수에 비례한 월급(보상금 + 명예)이 지급됩니다.
 #   • 근무 기록은 메모리에만 있어서, 근무 중에 봇이 재시작되면 그 근무는 사라집니다.
+#   • 정산 직후에도 바로 새 근무를 시작할 수 있습니다. (쿨타임 없음, 단 근무는 동시에 하나만)
 # ==========================================================================
 POLICE_SALARY_SHIFT_SEC = 600          # 근무(추적) 시간
-POLICE_SALARY_COOLDOWN_SEC = 600       # 정산 후 다음 근무를 시작할 수 있을 때까지 대기시간
 POLICE_SALARY_FULL_SCORE = 100         # 이 점수에 도달하면 기본 월급의 100%
 POLICE_SALARY_MAX_RATIO = 1.5          # 월급 상한 (기본 월급의 150% = 150점)
 POLICE_SALARY_BASE_MONEY = 2000        # 100% 월급: 보상금
@@ -8957,7 +9124,6 @@ POLICE_SALARY_LABELS = {
 }
 
 police_shifts = {}              # {user_id: PoliceShift}  (진행 중인 근무)
-police_salary_cooldowns = {}    # {user_id: datetime}
 
 class PoliceShift:
     def __init__(self, member: discord.Member, interaction: discord.Interaction):
@@ -9024,7 +9190,6 @@ async def settle_police_shift(s: PoliceShift):
     s.settled = True   # 동시에 두 번 정산되지 않도록 await 전에 표시
     if police_shifts.get(s.user_id) is s:
         police_shifts.pop(s.user_id, None)
-    police_salary_cooldowns[s.user_id] = datetime.now() + timedelta(seconds=POLICE_SALARY_COOLDOWN_SEC)
 
     score = police_shift_score(s)
     ratio, money = police_shift_payout(score)
@@ -9059,7 +9224,9 @@ async def settle_police_shift(s: PoliceShift):
     else:
         desc += "이번 근무에는 지급된 월급이 없습니다." if not note else ""
     desc += note
-    desc += f"\n\n다음 근무는 **{POLICE_SALARY_COOLDOWN_SEC // 60}분 뒤**에 시작할 수 있습니다."
+    if score > 0 and not note and ratio >= 1.0:   # S(우수) 평가 → 업적 카운터
+        desc += await police_ach_bump(s.user_id, police_salary_s=1)
+    desc += "\n\n`/월급` 으로 바로 새 근무를 시작할 수 있습니다."
     embed = discord.Embed(title="[치안국 월급 명세서]", description=desc,
                           color=discord.Color.green() if money > 0 else discord.Color.dark_grey())
     if member.avatar:
@@ -9098,12 +9265,6 @@ async def salary_command(interaction: discord.Interaction):
             await settle_police_shift(s)
             return
         await interaction.response.send_message(embed=police_shift_embed(s, "[근무 중] 월급 평가 진행 상황"), ephemeral=True)
-        return
-
-    cd = police_salary_cooldowns.get(user.id)
-    if cd and datetime.now() < cd:
-        remain = int((cd - datetime.now()).total_seconds())
-        await interaction.response.send_message(f"월급 정산 직후입니다. **{remain // 60}분 {remain % 60}초** 뒤에 새 근무를 시작할 수 있습니다.", ephemeral=True)
         return
 
     s = PoliceShift(user, interaction)
