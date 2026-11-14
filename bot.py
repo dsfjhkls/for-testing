@@ -242,7 +242,9 @@ def get_user_rank(honor: int, is_police: bool = False) -> str:
         else:
             return "신입 경찰"
     else:
-        if honor >= 20000:
+        if honor >= 25000:
+            return "얼마나 쳐하는거야 시발"
+        elif honor >= 20000:
             return "슈퍼 초 울트라 메가 하이퍼 개쩌는 대충 뭐 그런 직급"
         elif honor >= 10000:
             return "대부"
