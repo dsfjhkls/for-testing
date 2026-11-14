@@ -242,9 +242,7 @@ def get_user_rank(honor: int, is_police: bool = False) -> str:
         else:
             return "신입 경찰"
     else:
-        if honor >= 25000:
-            return "얼마나 쳐하는거야 시발"
-        elif honor >= 20000:
+        if honor >= 20000:
             return "슈퍼 초 울트라 메가 하이퍼 개쩌는 대충 뭐 그런 직급"
         elif honor >= 10000:
             return "대부"
@@ -1295,6 +1293,305 @@ async def patrol_location(interaction: discord.Interaction, 지역: app_commands
         embed.set_thumbnail(url=user.avatar.url)
 
     await interaction.followup.send(embed=embed)
+
+
+# === [경찰 전용] `/심문` 명령어 (수감자 심문 -> 재판 -> 감형 / 실형 가중) ===
+#   1) 경찰이 /심문 으로 수감자에게 질문을 던집니다.
+#   2) 수감자가 버튼으로 답변합니다. (자백 / 묵비권 / 결백 주장)  ※ 시간 내 무응답 = 묵비권
+#   3) 경찰이 재판부에 의견을 제출합니다. (감형 권고 / 가중 권고)
+#   4) 재판 결과가 확률로 결정됩니다. (감형 / 유지 / 실형 가중) -> jail_list 의 석방 시간이 바뀝니다.
+INTERROGATE_COOLDOWN_SEC = 120        # 경찰의 심문 쿨타임
+INTERROGATE_STEP_TIMEOUT_SEC = 45     # 수감자 답변 / 경찰 의견 각 단계 제한 시간
+INTERROGATE_MIN_REMAIN_SEC = 30       # 석방까지 이 시간 이상 남아 있어야 심문 가능
+INTERROGATE_MAX_JAIL_SEC = 600        # 가중되어도 남은 형기는 이 시간을 넘지 않음
+INTERROGATE_DELTA_RANGE = (40, 90)    # 감형 / 가중 시간 범위 (초)
+INTERROGATE_DENY_MULT = 1.5           # 결백 주장은 도박수라 변동폭이 1.5배
+INTERROGATE_MATCH_REWARD_MONEY = 300  # 경찰 의견과 판결이 일치했을 때 수당
+INTERROGATE_MATCH_REWARD_HONOR = 10   # 경찰 의견과 판결이 일치했을 때 명예
+
+INTERROGATE_ANSWERS = {"confess": "자백 (협조)", "silent": "묵비권", "deny": "결백 주장"}
+INTERROGATE_OPINIONS = {"reduce": "감형 권고", "extend": "가중 권고"}
+
+# (수감자 답변, 경찰 의견) -> (감형, 유지, 가중) 확률 가중치
+INTERROGATE_VERDICT_WEIGHTS = {
+    ("confess", "reduce"): (70, 25, 5),
+    ("confess", "extend"): (25, 45, 30),
+    ("silent",  "reduce"): (25, 55, 20),
+    ("silent",  "extend"): (10, 40, 50),
+    ("deny",    "reduce"): (45, 5, 50),
+    ("deny",    "extend"): (20, 5, 75),
+}
+
+interrogate_cooldowns = {}     # {police_id: datetime}
+interrogate_active = {}        # {prisoner_id: 만료 timestamp}  (진행 중인 심문, 만료되면 자동 해제)
+interrogate_done_terms = {}    # {prisoner_id: 그 수감의 석방 예정 시각}  (한 번 수감당 심문 1회)
+
+
+class InterrogationSession:
+    def __init__(self, police: discord.Member, prisoner: discord.Member, release_at: datetime, question: str):
+        self.police = police
+        self.prisoner = prisoner
+        self.release_at = release_at   # 심문 시작 시점의 석방 예정 시각 (수감 식별용)
+        self.question = question
+        self.message = None
+        self.answer = None
+
+    def end(self):
+        interrogate_active.pop(self.prisoner.id, None)
+
+
+class InterrogatePrisonerView(discord.ui.View):
+    def __init__(self, s: InterrogationSession):
+        super().__init__(timeout=INTERROGATE_STEP_TIMEOUT_SEC)
+        self.s = s
+        self.answered = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.s.prisoner.id:
+            await interaction.response.send_message("심문을 받는 수감자만 답변할 수 있습니다.", ephemeral=True)
+            return False
+        return True
+
+    async def _answer(self, interaction: discord.Interaction, key: str):
+        if self.answered:
+            await interaction.response.send_message("이미 답변했습니다.", ephemeral=True)
+            return
+        self.answered = True
+        for child in self.children:
+            child.disabled = True
+        self.stop()
+        await interaction.response.defer()
+        await interrogate_police_stage(self.s, key)
+
+    @discord.ui.button(label="자백 (협조)", style=discord.ButtonStyle.success)
+    async def confess(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._answer(interaction, "confess")
+
+    @discord.ui.button(label="묵비권", style=discord.ButtonStyle.secondary)
+    async def silent(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._answer(interaction, "silent")
+
+    @discord.ui.button(label="결백 주장", style=discord.ButtonStyle.danger)
+    async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._answer(interaction, "deny")
+
+    async def on_timeout(self):
+        if self.answered:
+            return
+        self.answered = True
+        await interrogate_police_stage(self.s, "silent", timed_out=True)
+
+
+class InterrogatePoliceView(discord.ui.View):
+    def __init__(self, s: InterrogationSession):
+        super().__init__(timeout=INTERROGATE_STEP_TIMEOUT_SEC)
+        self.s = s
+        self.resolved = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.s.police.id:
+            await interaction.response.send_message("담당 경찰만 재판부에 의견을 제출할 수 있습니다.", ephemeral=True)
+            return False
+        return True
+
+    async def _submit(self, interaction: discord.Interaction, opinion: str):
+        if self.resolved:
+            await interaction.response.send_message("이미 제출된 의견입니다.", ephemeral=True)
+            return
+        self.resolved = True
+        for child in self.children:
+            child.disabled = True
+        self.stop()
+        await interaction.response.defer()
+        await interrogate_trial(self.s, opinion)
+
+    @discord.ui.button(label="감형 권고", style=discord.ButtonStyle.success)
+    async def reduce(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._submit(interaction, "reduce")
+
+    @discord.ui.button(label="가중 권고", style=discord.ButtonStyle.danger)
+    async def extend(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._submit(interaction, "extend")
+
+    async def on_timeout(self):
+        if self.resolved:
+            return
+        self.resolved = True
+        s = self.s
+        s.end()
+        embed = discord.Embed(
+            title="[재판 불성립]",
+            description=f"{s.police.mention} 경관이 의견을 제출하지 않아 재판이 열리지 못했습니다. (형량 변동 없음)",
+            color=discord.Color.dark_grey()
+        )
+        try:
+            await s.message.edit(content=None, embed=embed, view=None)
+        except Exception:
+            pass
+
+
+async def interrogate_police_stage(s: InterrogationSession, answer: str, timed_out: bool = False):
+    """수감자 답변이 끝난 뒤 -> 경찰이 재판부 의견을 고르는 단계"""
+    s.answer = answer
+    note = "(시간 내 답변이 없어 **묵비권**으로 처리되었습니다.)\n\n" if timed_out else ""
+    embed = discord.Embed(
+        title="[치안국 심문실] 재판부 의견 제출",
+        description=(
+            f"{note}"
+            f"**질문:** {s.question}\n"
+            f"**{s.prisoner.display_name}** 님의 답변: **{INTERROGATE_ANSWERS[answer]}**\n\n"
+            f"{s.police.mention} 경관은 {INTERROGATE_STEP_TIMEOUT_SEC}초 안에 재판부에 의견을 제출하세요.\n"
+            f"의견이 판결과 일치하면 수당 `${INTERROGATE_MATCH_REWARD_MONEY:,}` / 실적 `+{INTERROGATE_MATCH_REWARD_HONOR} pt` 를 받습니다."
+        ),
+        color=discord.Color.dark_blue()
+    )
+    try:
+        await s.message.edit(content=s.police.mention, embed=embed, view=InterrogatePoliceView(s))
+    except Exception as e:
+        print(f"Interrogate stage error: {e}")
+        s.end()
+
+
+async def interrogate_trial(s: InterrogationSession, opinion: str):
+    """재판: 확률로 판결을 정하고 jail_list 의 석방 시간을 조정"""
+    try:
+        weights = INTERROGATE_VERDICT_WEIGHTS[(s.answer, opinion)]
+        verdict = random.choices(["reduce", "keep", "extend"], weights=weights, k=1)[0]
+
+        delta = random.randint(*INTERROGATE_DELTA_RANGE)
+        if s.answer == "deny":
+            delta = int(delta * INTERROGATE_DENY_MULT)
+
+        now = datetime.now()
+        cur = jail_list.get(s.prisoner.id)
+
+        # 심문 도중 형기가 끝났거나 다른 수감으로 바뀐 경우
+        if cur is None or now >= cur:
+            embed = discord.Embed(
+                title="[재판 무효]",
+                description=f"{s.prisoner.mention} 님은 재판 전에 이미 석방되어 판결이 무효 처리되었습니다.",
+                color=discord.Color.dark_grey()
+            )
+            await s.message.edit(content=None, embed=embed, view=None)
+            return
+
+        if verdict == "reduce":
+            new_release = max(now + timedelta(seconds=5), cur - timedelta(seconds=delta))
+        elif verdict == "extend":
+            new_release = min(now + timedelta(seconds=INTERROGATE_MAX_JAIL_SEC), cur + timedelta(seconds=delta))
+        else:
+            new_release = cur
+        jail_list[s.prisoner.id] = new_release
+        remain = max(0, int((new_release - now).total_seconds()))
+        real_delta = abs(int((new_release - cur).total_seconds()))
+
+        if verdict == "reduce":
+            title, color = "[재판 결과] 감형", discord.Color.green()
+            result = f"재판부는 수감자의 태도를 참작해 **감형**을 선고했습니다.\n**수감 시간 `-{real_delta}초`**"
+        elif verdict == "extend":
+            title, color = "[재판 결과] 실형 가중", discord.Color.dark_red()
+            result = f"재판부는 죄질이 불량하다고 판단해 **실형을 가중**했습니다.\n**수감 시간 `+{real_delta}초`**"
+        else:
+            title, color = "[재판 결과] 형량 유지", discord.Color.light_grey()
+            result = "재판부는 **기존 형량을 유지**하기로 했습니다."
+
+        reward_text = ""
+        if verdict == opinion:   # 경찰 의견과 판결이 일치
+            try:
+                update_user_stats(s.police.id, INTERROGATE_MATCH_REWARD_MONEY, INTERROGATE_MATCH_REWARD_HONOR)
+                info = get_user_data(s.police.id)
+                rank = get_user_rank(info["honor"], is_police=True)
+                reward_text = (f"\n\n**의견 일치 수당:** `${INTERROGATE_MATCH_REWARD_MONEY:,}`\n"
+                               f"**경찰 실적:** `+{INTERROGATE_MATCH_REWARD_HONOR} pt` (현재 직급: `{rank}`)")
+            except Exception as e:
+                print(f"Interrogate reward error: {e}")
+
+        embed = discord.Embed(
+            title=title,
+            description=(
+                f"**질문:** {s.question}\n"
+                f"**답변:** {INTERROGATE_ANSWERS[s.answer]} / **경찰 의견:** {INTERROGATE_OPINIONS[opinion]}\n\n"
+                f"{result}\n"
+                f"**{s.prisoner.display_name}** 님의 석방까지 **{remain}초** 남았습니다."
+                f"{reward_text}"
+            ),
+            color=color
+        )
+        await s.message.edit(content=None, embed=embed, view=None)
+    except Exception as e:
+        print(f"Interrogate trial error: {e}")
+    finally:
+        s.end()
+
+
+@bot.tree.command(name="심문", description="[경찰 전용] 수감자를 심문하고 재판을 열어 수감 시간을 줄이거나 늘립니다.")
+@app_commands.describe(수감자="심문할 수감자", 질문="수감자에게 던질 질문 (선택)")
+async def interrogate_command(interaction: discord.Interaction, 수감자: discord.Member, 질문: str = "공범과 범행 동기를 낱낱이 말해라."):
+    if not await check_maintenance(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+    now = datetime.now()
+
+    # 1. 경찰 역할 검증
+    police_role = discord.utils.get(interaction.guild.roles, name="경찰")
+    if not police_role or police_role not in user.roles:
+        await interaction.response.send_message("치안국 소속 경찰만 심문을 진행할 수 있습니다!", ephemeral=True)
+        return
+
+    # 2. 쿨타임 체크
+    cd = interrogate_cooldowns.get(user.id)
+    if cd and now < cd:
+        remaining = int((cd - now).total_seconds())
+        await interaction.response.send_message(f"심문 준비 중입니다. **{remaining}초** 뒤에 다시 심문할 수 있습니다.", ephemeral=True)
+        return
+
+    # 3. 대상 검증
+    if 수감자.bot or 수감자.id == user.id:
+        await interaction.response.send_message("심문할 수 없는 대상입니다.", ephemeral=True)
+        return
+
+    release_at = jail_list.get(수감자.id)
+    if release_at is None or now >= release_at:
+        await interaction.response.send_message(f"**{수감자.display_name}** 님은 현재 수감 중이 아닙니다.", ephemeral=True)
+        return
+
+    remain = int((release_at - now).total_seconds())
+    if remain < INTERROGATE_MIN_REMAIN_SEC:
+        await interaction.response.send_message(f"석방이 임박해 재판을 열 수 없습니다. (남은 형기 {remain}초)", ephemeral=True)
+        return
+
+    if interrogate_done_terms.get(수감자.id) == release_at:
+        await interaction.response.send_message(f"**{수감자.display_name}** 님은 이번 수감에서 이미 심문이 진행되었습니다.", ephemeral=True)
+        return
+
+    if time.time() < interrogate_active.get(수감자.id, 0):
+        await interaction.response.send_message(f"**{수감자.display_name}** 님은 이미 심문을 받고 있습니다.", ephemeral=True)
+        return
+
+    # 4. 심문 시작 (여기부터 await 전까지 다른 명령어가 끼어들 수 없음)
+    interrogate_cooldowns[user.id] = now + timedelta(seconds=INTERROGATE_COOLDOWN_SEC)
+    interrogate_done_terms[수감자.id] = release_at
+    interrogate_active[수감자.id] = time.time() + INTERROGATE_STEP_TIMEOUT_SEC * 2 + 30
+
+    question = 질문.strip()[:100] or "공범과 범행 동기를 낱낱이 말해라."
+    session = InterrogationSession(user, 수감자, release_at, question)
+
+    embed = discord.Embed(
+        title="[치안국 심문실] 심문 개시",
+        description=(
+            f"**{user.mention}** 경관이 수감자 **{수감자.mention}** 을(를) 심문실로 불러냈습니다.\n\n"
+            f"**질문:** {question}\n\n"
+            f"{수감자.mention} 님은 {INTERROGATE_STEP_TIMEOUT_SEC}초 안에 답변을 선택하세요.\n"
+            f"- **자백:** 감형 가능성 높음 (단, 경찰이 가중을 권고하면 위험)\n"
+            f"- **묵비권:** 무난하지만 크게 기대할 건 없음\n"
+            f"- **결백 주장:** 큰 감형 또는 큰 가중, 도박수\n"
+            f"(무응답은 묵비권 처리)"
+        ),
+        color=discord.Color.dark_blue()
+    )
+    await interaction.response.send_message(content=수감자.mention, embed=embed, view=InterrogatePrisonerView(session))
+    session.message = await interaction.original_response()
 
 # === NPC 전투 대상 목록 ===
 # 권장 진입선: 깡패(처음부터) → 배신자(단검·명예 300) → 거상(몽둥이·명예 1,000) → 수배자(주사기·명예 3,000) → 암살자(명예 5,000)
