@@ -298,6 +298,7 @@ DUEL_MAX_BET = 30                # 결투 1회 최대 명예 베팅 (부계정 �
 # 실제 효과는 MISSION_BUFFS(임무) / compute_combat_stats(전투) / MissionSelect(쿨타임·소모품)에서 적용됩니다.
 BLACK_MARKET_ITEMS = {
     "레벤하임": [
+        {"id": "time_stop", "name": "시간 정지 회중시계", "price": 150000, "desc": "임무 쿨타임 완전 제거 (영구)"},
         {"id": "fail_guard", "name": "임무 실패 방지권", "price": 3000, "desc": "임무 실패 시 수배·벌금 1회 방어(소모) & 방어력 +20"},
         {"id": "chrono_watch", "name": "고급 크로노그래프 시계", "price": 16000, "desc": "임무 쿨타임 40초 → 30초"}
     ],
@@ -338,6 +339,7 @@ MISSION_BUFFS = [
 ]
 CHRONO_ITEMS = ("고급 크로노그래프 시계", "통신용 특수 바이크")
 DRINK_ITEM = "고농축 자양강장제"
+NO_COOLDOWN_ITEM = "시간 정지 회중시계"   # 보유 시 임무 쿨타임 없음 (가격은 BLACK_MARKET_ITEMS 에서 조절)
 
 # === 임무 목록 (드롭다운 표시와 실제 판정이 같은 표를 쓰도록 통합) ===
 # success_rate(%) / reward(최소, 최대 $) / honor(pt) / fine(실패 시 벌금 $)
@@ -2842,7 +2844,8 @@ class MissionSelect(discord.ui.Select):
         drink_used = False
         now_ts = time.time()
         remain = int(mission_cooldowns.get(user.id, 0) - now_ts + 0.999)
-        if remain > 0:
+        no_cd = NO_COOLDOWN_ITEM in inventory
+        if remain > 0 and not no_cd:
             if inventory.get(DRINK_ITEM, 0) > 0:
                 inventory[DRINK_ITEM] -= 1
                 if inventory[DRINK_ITEM] <= 0:
@@ -2852,7 +2855,8 @@ class MissionSelect(discord.ui.Select):
                 await interaction.followup.send(f"작전 준비 중입니다. **{remain}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
                 return
         has_fast = any(k in inventory for k in CHRONO_ITEMS)
-        mission_cooldowns[user.id] = now_ts + (MISSION_COOLDOWN_FAST_SEC if has_fast else MISSION_COOLDOWN_SEC)
+        if not no_cd:
+            mission_cooldowns[user.id] = now_ts + (MISSION_COOLDOWN_FAST_SEC if has_fast else MISSION_COOLDOWN_SEC)
 
         selected = MISSIONS[self.values[0]]
         current_loc = user_stats.get("location", "레벤하임")
@@ -3084,7 +3088,8 @@ async def execute_mission(interaction: discord.Interaction):
     current_loc = user_stats.get("location", "레벤하임")
 
     remain = int(mission_cooldowns.get(user.id, 0) - time.time() + 0.999)
-    if remain > 0 and (user_stats.get("inventory") or {}).get(DRINK_ITEM, 0) <= 0:
+    _inv = user_stats.get("inventory") or {}
+    if remain > 0 and NO_COOLDOWN_ITEM not in _inv and _inv.get(DRINK_ITEM, 0) <= 0:
         await interaction.followup.send(f"작전 준비 중입니다. **{remain}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
         return
 
@@ -3630,6 +3635,10 @@ async def info_command(interaction: discord.Interaction, keyword: str):
         "임무 실패 방지권": {
             "title": "아이템: 임무 실패 방지권",
             "desc": "• **분류:** 방어구/유틸리티\n• **효과:** 방어력 +20, 임무 실패 시 수배 자동 방어\n• **설명:** 위기 상황에서 감옥행을 모면하게 해주는 티켓입니다.",
+        },
+        "시간 정지 회중시계": {
+            "title": "아이템: 시간 정지 회중시계",
+            "desc": "• **분류:** 유틸리티\n• **효과:** 임무 쿨타임 완전 제거 (영구)\n• **설명:** 멈춘 시간 속에서 쉬지 않고 작전을 이어갈 수 있게 해주는 신비한 회중시계입니다.",
         },
     }
 
