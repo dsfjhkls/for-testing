@@ -1602,14 +1602,22 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
     # 경찰 보상 지급 (무전기: 포상금 +20% / 황금 배지: 명예 +20%)
     _pb = police_bonuses(get_user_data(interaction.user.id).get("inventory"))
     arrest_money = int(round(ARREST_BASE_REWARD * _pb["money_mult"]))
-    arrest_honor = int(round(ARREST_BASE_HONOR * _pb["honor_mult"]))
+    try:
+        _target_honor = max(0, int((await asyncio.to_thread(get_user_data, target_id)).get("honor", 0)))
+    except Exception:
+        _target_honor = 0
+    arrest_extra = min(ARREST_HONOR_BONUS_MAX, _target_honor // ARREST_HONOR_PER_POINT)   # 거물 검거 보너스
+    arrest_honor = int(round((ARREST_BASE_HONOR + arrest_extra) * _pb["honor_mult"]))
     money_note = f" (무전기 +{round(POLICE_RADIO_ARREST_BONUS * 100)}%)" if _pb["money_mult"] > 1 else ""
     honor_note = f" (황금 배지 +{round(POLICE_BADGE_HONOR_BONUS * 100)}%)" if _pb["honor_mult"] > 1 else ""
+    if arrest_extra > 0:
+        honor_note = f" (거물 검거 보너스 +{arrest_extra}){honor_note}"
     try:
         update_user_stats(interaction.user.id, arrest_money, arrest_honor)
     except Exception:
         pass
-    police_shift_record(interaction.user.id, "arrest")   # /월급 근무 실적
+    police_shift_record(interaction.user.id, "arrest",
+                        bonus=min(POLICE_SALARY_ARREST_BONUS_MAX, _target_honor // POLICE_SALARY_ARREST_BONUS_PER))   # /월급 근무 실적
 
     # 압류: 조직원 아이템 랜덤 1~2종을 경찰이 가져감
     try:
@@ -1827,6 +1835,9 @@ async def smuggle_command(interaction: discord.Interaction, 경찰: discord.Memb
     view.message = await interaction.original_response()
 
     # === [경찰 전용] `/순찰` 명령어 ===
+# 경찰 활동 명예 (이 값들을 조절해서 경찰 성장 속도를 맞추세요)
+PATROL_HONOR = 14                   # /순찰 1회 명예 (기존 10)
+
 patrol_cooldowns = {}
 
 @bot.tree.command(name="순찰", description="[경찰 전용] 지정한 거점을 순찰하여 마피아들의 임무 성공률을 낮추고 수당을 받습니다.")
@@ -1870,9 +1881,9 @@ async def patrol_location(interaction: discord.Interaction, 지역: app_commands
     patrol_duration = 300  # 5분
     active_patrols[guild_id][selected_loc] = time.time() + patrol_duration
 
-    # 4. 경찰 보상 지급 (예: 자금 $400~800, 명예 +10pt)
+    # 4. 경찰 보상 지급 (자금 $400~800, 명예 PATROL_HONOR)
     earned_money = random.randint(400, 800)
-    earned_honor = int(round(10 * police_bonuses(get_user_data(user.id).get("inventory"))["honor_mult"]))
+    earned_honor = int(round(PATROL_HONOR * police_bonuses(get_user_data(user.id).get("inventory"))["honor_mult"]))
 
     try:
         update_user_stats(user.id, earned_money, earned_honor)
@@ -1912,7 +1923,7 @@ INTERROGATE_MAX_JAIL_SEC = 600        # 가중되어도 남은 형기는 이 시
 INTERROGATE_DELTA_RANGE = (40, 90)    # 감형 / 가중 시간 범위 (초)
 INTERROGATE_DENY_MULT = 1.5           # 결백 주장은 도박수라 변동폭이 1.5배
 INTERROGATE_MATCH_REWARD_MONEY = 300  # 경찰 의견과 판결이 일치했을 때 수당
-INTERROGATE_MATCH_REWARD_HONOR = 10   # 경찰 의견과 판결이 일치했을 때 명예
+INTERROGATE_MATCH_REWARD_HONOR = 15   # 경찰 의견과 판결이 일치했을 때 명예 (기존 10)
 
 INTERROGATE_ANSWERS = {"confess": "자백 (협조)", "silent": "묵비권", "deny": "결백 주장"}
 INTERROGATE_OPINIONS = {"reduce": "감형 권고", "extend": "가중 권고"}
@@ -4472,7 +4483,9 @@ POLICE_BADGE_NAME = "특급 수사관 황금 배지"
 POLICE_RADIO_ARREST_BONUS = 0.20    # 무전기: 검거 포상금 +20%
 POLICE_BADGE_HONOR_BONUS = 0.20     # 황금 배지: 명예 실적 +20%
 ARREST_BASE_REWARD = 500            # /검거 기본 포상금
-ARREST_BASE_HONOR = 20              # /검거 기본 명예 실적
+ARREST_BASE_HONOR = 30              # /검거 기본 명예 실적
+ARREST_HONOR_PER_POINT = 50         # 수배범 명예 50pt 당 검거 명예 +1  (거물 검거 보너스)
+ARREST_HONOR_BONUS_MAX = 100        # 거물 검거 보너스 상한  → 검거 1회 명예 30 ~ 130
 
 def police_bonuses(inventory) -> dict:
     inv = inventory or {}
@@ -8202,19 +8215,19 @@ POLICE_OP_TIERS = {
     "smuggle": {
         "name": "밀수 조직 소탕", "min_players": 2, "min_honor": 0, "cost": 1000,
         "base": 0.65, "ref_atk": 300,
-        "money": 3000, "honor": 15, "points": 10,
+        "money": 3000, "honor": 22, "points": 10,
         "desc": "뒷골목 밀수 조직의 창고를 급습합니다. 입문자용 작전입니다.",
     },
     "cartel": {
         "name": "항만 카르텔 일망타진", "min_players": 3, "min_honor": 1500, "cost": 3000,
         "base": 0.55, "ref_atk": 1200,
-        "money": 7000, "honor": 30, "points": 25,
+        "money": 7000, "honor": 45, "points": 25,
         "desc": "에르느코항을 장악한 카르텔을 한 번에 소탕합니다. 화력과 인원이 필요합니다.",
     },
     "empire": {
         "name": "지하 범죄 제국 본거지 급습", "min_players": 4, "min_honor": 4000, "cost": 8000,
         "base": 0.50, "ref_atk": 3500,
-        "money": 14000, "honor": 50, "points": 60,
+        "money": 14000, "honor": 75, "points": 60,
         "desc": "칼렌데 지하 범죄 제국의 심장부. 정상급 수사팀만이 도전할 수 있습니다.",
     },
 }
@@ -8926,7 +8939,9 @@ POLICE_SALARY_COOLDOWN_SEC = 600       # 정산 후 다음 근무를 시작할 �
 POLICE_SALARY_FULL_SCORE = 100         # 이 점수에 도달하면 기본 월급의 100%
 POLICE_SALARY_MAX_RATIO = 1.5          # 월급 상한 (기본 월급의 150% = 150점)
 POLICE_SALARY_BASE_MONEY = 2000        # 100% 월급: 보상금
-POLICE_SALARY_BASE_HONOR = 15          # 100% 월급: 명예 (황금 배지 보너스 적용)
+POLICE_SALARY_BASE_HONOR = 22          # 100% 월급: 명예 (황금 배지 보너스 적용)
+POLICE_SALARY_ARREST_BONUS_PER = 100   # 거물 검거 보너스: 수배범 명예 100pt 당 +1점
+POLICE_SALARY_ARREST_BONUS_MAX = 50    # 거물 검거 보너스 상한 → 검거 1회 50 ~ 100점
 
 # 행동 하나당 점수
 POLICE_SALARY_POINTS = {
@@ -8953,18 +8968,20 @@ class PoliceShift:
         self.started = time.time()
         self.ends = self.started + POLICE_SALARY_SHIFT_SEC
         self.counts = {}
+        self.bonus_points = 0   # 거물 검거 보너스 등 행동마다 달라지는 추가 점수
         self.settled = False
         self.task = None
 
-def police_shift_record(user_id: int, kind: str, n: int = 1):
+def police_shift_record(user_id: int, kind: str, n: int = 1, bonus: int = 0):
     """경찰 명령어들이 호출: 근무 중인 경찰이면 행동을 점수로 기록 (근무 중이 아니면 아무 일도 없음)"""
     s = police_shifts.get(user_id)
     if s is None or s.settled or time.time() >= s.ends:
         return
     s.counts[kind] = s.counts.get(kind, 0) + n
+    s.bonus_points += max(0, int(bonus))
 
 def police_shift_score(s: PoliceShift) -> int:
-    return sum(POLICE_SALARY_POINTS.get(k, 0) * c for k, c in s.counts.items())
+    return sum(POLICE_SALARY_POINTS.get(k, 0) * c for k, c in s.counts.items()) + s.bonus_points
 
 def police_shift_grade(ratio: float) -> str:
     if ratio >= 1.0: return "S (우수)"
@@ -8979,6 +8996,8 @@ def police_shift_breakdown(s: PoliceShift) -> str:
         c = s.counts.get(kind, 0)
         if c:
             lines.append(f"• {label} ×{c} → `+{POLICE_SALARY_POINTS[kind] * c}점`")
+    if s.bonus_points:
+        lines.append(f"• 거물 검거 보너스 → `+{s.bonus_points}점`")
     return "\n".join(lines) or "아직 기록된 실적이 없습니다."
 
 def police_shift_payout(score: int):
@@ -9090,6 +9109,7 @@ async def salary_command(interaction: discord.Interaction):
     s = PoliceShift(user, interaction)
     police_shifts[user.id] = s   # 확인과 등록 사이에 await 가 없어 중복 시작이 불가능
     points_text = "\n".join(f"• {POLICE_SALARY_LABELS[k]}: `+{p}점`" for k, p in POLICE_SALARY_POINTS.items())
+    points_text += f"\n• 거물 검거 보너스: 수배범 명예 {POLICE_SALARY_ARREST_BONUS_PER}pt 당 `+1점` (최대 +{POLICE_SALARY_ARREST_BONUS_MAX}점)"
     embed = discord.Embed(
         title="[근무 시작] 월급 평가",
         description=(f"지금부터 **{POLICE_SALARY_SHIFT_SEC // 60}분간** 경찰 활동이 실적으로 기록됩니다.\n"
