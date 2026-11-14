@@ -2204,6 +2204,7 @@ NPC_DATA = {
 # === 히든 보스 데이터 (NPC_DATA 와 분리: /전투 로 출현 조건 없이 소환되는 것을 막기 위함) ===
 # 권장: 명예 약 5,000pt + 슈퍼 울트라 주먹/수상한 주사기 (대부 직전의 최종 시험)
 HIDDEN_BOSS = {
+    "image": "boss_dark.jpg",   # 보스 그림 (assets 폴더). 파일이 없으면 그림 없이 진행됩니다.
     "name": "[히든보스] 어둠의 지배자",   # 보스 승리 시 보스가 연속 출현하지 않도록 비교하는 이름이므로 함부로 바꾸지 마세요
     "hp": 75000,
     "atk": 2750,
@@ -2215,6 +2216,7 @@ HIDDEN_BOSS = {
 
 # === 최강 히든 보스 데이터 (태초의 파괴자) ===
 ULTIMATE_BOSS = {
+    "image": "boss_ultimate.jpg",
     "name": "[최강보스] 태초의 파괴자",
     "hp": 120000,
     "atk": 5500,
@@ -2265,6 +2267,17 @@ BOSS_KINDS = {
     },
 }
 BOSS_NAMES = tuple(k["data"]["name"] for k in BOSS_KINDS.values())
+
+def boss_image_file(boss_data: dict):
+    """보스 그림을 discord.File 로 만들어 돌려준다. 그림이 지정되지 않았거나 파일이 없으면 None.
+    (임베드에서는 set_image(url="attachment://파일이름") 로 참조한다)"""
+    name = boss_data.get("image")
+    if not name:
+        return None
+    for path in _asset_paths((name,)):
+        return discord.File(path, filename=name)
+    print(f"[보스 그림 없음] {name} 파일을 assets 폴더에서 찾지 못했습니다.")
+    return None
 
 # 출현 판정표: (종류, 확률) — 위에서부터 확률을 누적해 한 번의 주사위로 어느 보스가 나올지 정합니다.
 BOSS_SPAWN_TABLE = [
@@ -2469,6 +2482,8 @@ class NPCBattleView(GuardedView):
             value=f"```diff\n{log_text}\n```",
             inline=False
         )
+        if self.npc_info.get("image"):   # 보스 그림 (최초 전송 때 첨부한 파일을 계속 참조)
+            embed.set_image(url=f"attachment://{self.npc_info['image']}")
         return embed
 
     async def process_turn(self, interaction: discord.Interaction, action_type: str):
@@ -2674,7 +2689,12 @@ class NPCBattleView(GuardedView):
                     description=boss_spawn_msg.strip(),
                     color=BOSS_KINDS[boss_spawn_kind]["color"]
                 )
-                await interaction.followup.send(embed=boss_embed)
+                spawn_kwargs = {"embed": boss_embed}
+                spawn_file = boss_image_file(BOSS_KINDS[boss_spawn_kind]["data"])
+                if spawn_file:
+                    boss_embed.set_image(url=f"attachment://{BOSS_KINDS[boss_spawn_kind]['data']['image']}")
+                    spawn_kwargs["file"] = spawn_file
+                await interaction.followup.send(**spawn_kwargs)
             except Exception as e:
                 print(f"[보스 공지 실패 → 출현 취소] {type(e).__name__}: {e}")
                 if active_boss_guilds.get(guild_id) == boss_spawn_kind:
@@ -2779,7 +2799,13 @@ async def fight_boss(interaction: discord.Interaction):
         embed = view.get_embed()
         embed.title = boss_title
 
-        view.message = await interaction.followup.send(embed=embed, view=view)
+        send_kwargs = {"embed": embed, "view": view}
+        boss_file = boss_image_file(boss_info)
+        if boss_file:
+            send_kwargs["file"] = boss_file
+        else:
+            embed.set_image(url=None)   # 그림 파일이 없으면 깨진 이미지 표시를 막음
+        view.message = await interaction.followup.send(**send_kwargs)
     except Exception as e:
         print(f"Boss summon error: {e}")
         active_boss_guilds[guild_id] = boss_kind   # 오류 시 보스를 원래 종류 그대로 복구
