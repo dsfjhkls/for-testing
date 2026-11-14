@@ -188,8 +188,8 @@ active_boss_guilds = {}
 
 # 일반 /전투 승리 시 보스가 출현할 확률 (테스트할 때는 1.0 으로 바꾸면 항상 출현)
 # 판정 순서: 최강보스(태초의 파괴자) 먼저 → 실패하면 어둠의 지배자 → 둘 다 실패하면 출현 없음
-ULTIMATE_BOSS_SPAWN_CHANCE = 0.02   # 2%
-BOSS_SPAWN_CHANCE = 0.10            # 10% (어둠의 지배자)
+ULTIMATE_BOSS_SPAWN_CHANCE = 0.01   # 1%
+BOSS_SPAWN_CHANCE = 0.06            # 6% (어둠의 지배자)
 
 # {user_id: datetime (석방 예정 시간)}
 jail_list = {}
@@ -281,11 +281,16 @@ LOCATIONS = {
     }
 }
 
-# === 밸런스 상수 (목표: 꾸준히 플레이했을 때 약 3시간 만에 대부 = 명예 10,000pt) ===
-MISSION_COOLDOWN_SEC = 25        # 임무 기본 쿨타임
-MISSION_COOLDOWN_FAST_SEC = 19   # 크로노그래프 시계 / 특수 바이크 보유 시
-NPC_COOLDOWN_SEC = 30            # /전투 쿨타임
-BOSS_COOLDOWN_SEC = 30           # /보스 쿨타임
+# === 밸런스 상수 ===
+# 목표 페이스 (쉬지 않고 열심히 플레이했을 때 기준 / 가끔 접속하는 유저는 이것의 몇 배):
+#   행동대원(500pt) 약 1.5시간 → 솔다토(1,000) 약 3시간 → 카포(3,000) 약 7시간
+#   → 언더보스(5,000) 약 11시간 → 대부(10,000) 약 19시간
+# 페이스를 더 늘리고 싶으면 MISSIONS / NPC_DATA 의 명예(honor) 값을 줄이거나 쿨타임을 늘리면 됩니다.
+MISSION_COOLDOWN_SEC = 40        # 임무 기본 쿨타임
+MISSION_COOLDOWN_FAST_SEC = 30   # 크로노그래프 시계 / 특수 바이크 보유 시
+NPC_COOLDOWN_SEC = 45            # /전투 쿨타임
+BOSS_COOLDOWN_SEC = 60           # /보스 쿨타임
+PARTTIME_COOLDOWN_SEC = 45       # /아르바이트 쿨타임
 NPC_LOSS_PENALTY = 500           # NPC전 패배 시 치료비
 DUEL_MAX_BET = 30                # 결투 1회 최대 명예 베팅 (부계정 명예 몰아주기 방지)
 
@@ -293,14 +298,13 @@ DUEL_MAX_BET = 30                # 결투 1회 최대 명예 베팅 (부계정 �
 # 실제 효과는 MISSION_BUFFS(임무) / compute_combat_stats(전투) / MissionSelect(쿨타임·소모품)에서 적용됩니다.
 BLACK_MARKET_ITEMS = {
     "레벤하임": [
-        {"id": "gov_pass", "name": "치안국 위조 신분증", "price": 5000, "desc": "실패 시 지명수배 방어 & 방어력 +15"},
         {"id": "fail_guard", "name": "임무 실패 방지권", "price": 3000, "desc": "임무 실패 시 수배·벌금 1회 방어(소모) & 방어력 +20"},
-        {"id": "chrono_watch", "name": "고급 크로노그래프 시계", "price": 16000, "desc": "임무 쿨타임 25초 → 19초"}
+        {"id": "chrono_watch", "name": "고급 크로노그래프 시계", "price": 16000, "desc": "임무 쿨타임 40초 → 30초"}
     ],
     "던베르크": [
         {"id": "heavy_glove", "name": "강화 작업용 장갑", "price": 3000, "desc": "임무 보상금 +15%"},
         {"id": "boost_drink", "name": "고농축 자양강장제", "price": 1500, "desc": "임무 쿨타임 1회 즉시 초기화(소모)"},
-        {"id": "quick_bike", "name": "통신용 특수 바이크", "price": 16000, "desc": "임무 쿨타임 25초 → 19초"}
+        {"id": "quick_bike", "name": "통신용 특수 바이크", "price": 16000, "desc": "임무 쿨타임 40초 → 30초"}
     ],
     "블랙워드": [
         {"id": "lockpick", "name": "녹슨 락픽 세트", "price": 1000, "desc": "임무 성공률 +3%"},
@@ -338,11 +342,11 @@ DRINK_ITEM = "고농축 자양강장제"
 # === 임무 목록 (드롭다운 표시와 실제 판정이 같은 표를 쓰도록 통합) ===
 # success_rate(%) / reward(최소, 최대 $) / honor(pt) / fine(실패 시 벌금 $)
 MISSIONS = {
-    "mission_1": {"title": "타 조직 구역 비밀 조사",   "label": "타 조직 구역 비밀 조사", "diff": "하",   "success_rate": 85, "reward": (150, 350),   "honor": 8,  "fine": 80},
-    "mission_2": {"title": "밀수품 비밀 운송 작업",     "label": "밀수품 비밀 운송 작업", "diff": "중",   "success_rate": 60, "reward": (350, 800),   "honor": 19, "fine": 200},
-    "mission_3": {"title": "라이벌 보스의 장부 탈취",   "label": "라이벌 보스의 장부 탈취", "diff": "상",   "success_rate": 40, "reward": (900, 1900),  "honor": 29, "fine": 500},
-    "mission_4": {"title": "기밀 문서 야간 밀반출",     "label": "기밀 문서 야간 밀반출", "diff": "중상", "success_rate": 50, "reward": (650, 1400),  "honor": 23, "fine": 350},
-    "mission_5": {"title": "중앙 은행 호송 차량 습격",  "label": "중앙 은행 호송 차량 습격", "diff": "최상", "success_rate": 20, "reward": (2500, 5000), "honor": 58, "fine": 1200},
+    "mission_1": {"title": "타 조직 구역 비밀 조사",   "label": "타 조직 구역 비밀 조사", "diff": "하",   "success_rate": 85, "reward": (150, 350),   "honor": 3,  "fine": 80},
+    "mission_2": {"title": "밀수품 비밀 운송 작업",     "label": "밀수품 비밀 운송 작업", "diff": "중",   "success_rate": 60, "reward": (350, 800),   "honor": 6,  "fine": 200},
+    "mission_3": {"title": "라이벌 보스의 장부 탈취",   "label": "라이벌 보스의 장부 탈취", "diff": "상",   "success_rate": 40, "reward": (900, 1900),  "honor": 8,  "fine": 500},
+    "mission_4": {"title": "기밀 문서 야간 밀반출",     "label": "기밀 문서 야간 밀반출", "diff": "중상", "success_rate": 50, "reward": (650, 1400),  "honor": 7,  "fine": 350},
+    "mission_5": {"title": "중앙 은행 호송 차량 습격",  "label": "중앙 은행 호송 차량 습격", "diff": "최상", "success_rate": 20, "reward": (2500, 5000), "honor": 18, "fine": 1200},
 }
 
 # === 무기 상점 아이템 목록 ===
@@ -374,7 +378,6 @@ def compute_combat_stats(honor: int, inventory: dict) -> dict:
             hp += h
             break
     if "임무 실패 방지권" in inventory: def_val += 20
-    if "치안국 위조 신분증" in inventory: def_val += 15
     return {"hp": hp, "atk": atk, "def": def_val}
 
 # === Supabase DB 연동 함수들 ===
@@ -393,6 +396,28 @@ def normalize_inventory(inv: dict) -> dict:
         out[nk] = out.get(nk, 0) + v
     return out
 
+# 삭제된 아이템: 보유 중이면 인벤토리에서 빼고 구매가를 돌려줍니다. (환불이 필요 없으면 이 표를 비우세요)
+REMOVED_ITEM_REFUNDS = {"치안국 위조 신분증": 5000}
+
+def _refund_removed_items(user_info: dict) -> dict:
+    inv = user_info.get("inventory") or {}
+    refund = 0
+    for name, price in REMOVED_ITEM_REFUNDS.items():
+        if name in inv:
+            inv.pop(name, None)
+            refund += price
+    if refund:
+        user_info["inventory"] = inv
+        user_info["money"] = (user_info.get("money") or 0) + refund
+        try:
+            supabase.table("user_data").update({
+                "money": user_info["money"],
+                "inventory": inv
+            }).eq("user_id", str(user_info["user_id"])).execute()
+        except Exception as e:
+            print(f"DB Error (removed item refund): {e}")
+    return user_info
+
 def get_user_data(user_id: int) -> dict:
     str_id = str(user_id)
     if not supabase:
@@ -405,6 +430,7 @@ def get_user_data(user_id: int) -> dict:
             if "inventory" not in user_info or user_info["inventory"] is None:
                 user_info["inventory"] = {}
             user_info["inventory"] = normalize_inventory(user_info["inventory"])
+            user_info = _refund_removed_items(user_info)
             return user_info
         
         default_data = {
@@ -1274,7 +1300,7 @@ NPC_DATA = {
         "hp": 700,
         "atk": 70,
         "def": 5,
-        "reward_money": (100, 250),
+        "reward_money": (60, 150),
         "reward_honor": 1,
         "desc": "칼렌데 뒷골목에서 서성이는 초보 깡패입니다."
     },
@@ -1283,8 +1309,8 @@ NPC_DATA = {
         "hp": 2500,
         "atk": 170,
         "def": 30,
-        "reward_money": (400, 800),
-        "reward_honor": 3,
+        "reward_money": (200, 450),
+        "reward_honor": 1,
         "desc": "패밀리의 기밀을 팔아넘기고 도망친 위험한 배신자입니다."
     },
     "암시장 악덕 거상": {
@@ -1292,8 +1318,8 @@ NPC_DATA = {
         "hp": 5500,
         "atk": 300,
         "def": 70,
-        "reward_money": (1000, 2200),
-        "reward_honor": 6,
+        "reward_money": (450, 1000),
+        "reward_honor": 2,
         "desc": "고용한 보디가드들을 대동하고 다니는 악명 높은 거상입니다."
     },
     "지명수배자 보스": {
@@ -1301,8 +1327,8 @@ NPC_DATA = {
         "hp": 11000,
         "atk": 520,
         "def": 130,
-        "reward_money": (3000, 6000),
-        "reward_honor": 12,
+        "reward_money": (1000, 2000),
+        "reward_honor": 3,
         "desc": "치안국에서도 손대지 못하는 강력한 수배범 보스입니다."
     },
     "칼렌데 암살자": {
@@ -1310,8 +1336,8 @@ NPC_DATA = {
         "hp": 18000,
         "atk": 800,
         "def": 220,
-        "reward_money": (6000, 11000),
-        "reward_honor": 20,
+        "reward_money": (2000, 3600),
+        "reward_honor": 5,
         "desc": "그림자처럼 움직이며 거물만 노리는 전설적인 청부 암살자입니다."
     }
 }
@@ -1323,8 +1349,8 @@ HIDDEN_BOSS = {
     "hp": 75000,
     "atk": 2750,
     "def": 600,
-    "reward_money": (15000, 50000),
-    "reward_honor": 200,
+    "reward_money": (10000, 30000),
+    "reward_honor": 100,
     "desc": "전투의 살기에 이끌려 모습을 드러낸 칼렌데 지하 세계의 지배자입니다. 15턴 안에 쓰러뜨리지 못하면 제압당합니다."
 }
 
@@ -1334,8 +1360,8 @@ ULTIMATE_BOSS = {
     "hp": 120000,
     "atk": 5500,
     "def": 900,
-    "reward_money": (50000, 100000),
-    "reward_honor": 1000,
+    "reward_money": (30000, 70000),
+    "reward_honor": 400,
     "desc": "칼렌데 지하 세계의 근원이자 재앙 그 자체인 존재입니다. 15턴 안에 쓰러뜨리지 못하면 세계가 붕괴합니다."
 }
 
@@ -1348,28 +1374,28 @@ NAMED_MONSTERS = {
     "marco": {
         "name": "[네임드] 백정 마르코", "named": True, "min_honor": 500, "max_turns": 12,
         "hp": 4200, "atk": 330, "def": 55, "enrage": 1.5,
-        "reward_money": (1500, 3000), "reward_honor": 4,
+        "reward_money": (900, 1800), "reward_honor": 2,
         "drop": "[전리품] 마르코의 정육 칼",
         "desc": "블랙워드 도살장을 지배하는 청부 해결사. 피를 보면 더 사나워집니다."
     },
     "bianca": {
         "name": "[네임드] 독사 비앙카", "named": True, "min_honor": 1500, "max_turns": 12,
         "hp": 8000, "atk": 520, "def": 100, "enrage": 1.5,
-        "reward_money": (3000, 5500), "reward_honor": 8,
+        "reward_money": (1800, 3300), "reward_honor": 4,
         "drop": "[전리품] 비앙카의 독니 반지",
         "desc": "로젠펠트 뒷무대의 독살 전문가. 체력이 줄면 맹독을 뿌리며 덤빕니다."
     },
     "boronin": {
         "name": "[네임드] 철의 장군 보로닌", "named": True, "min_honor": 2500, "max_turns": 12,
         "hp": 14000, "atk": 800, "def": 170, "enrage": 1.5,
-        "reward_money": (5000, 9000), "reward_honor": 14,
+        "reward_money": (3000, 5400), "reward_honor": 7,
         "drop": "[전리품] 보로닌의 철 훈장",
         "desc": "퇴역 후 용병단을 이끄는 철벽의 장군. 방어가 매우 단단합니다."
     },
     "executioner": {
         "name": "[네임드] 붉은 달의 처형자", "named": True, "min_honor": 4000, "max_turns": 12,
         "hp": 22000, "atk": 1200, "def": 260, "enrage": 1.6,
-        "reward_money": (8000, 14000), "reward_honor": 24,
+        "reward_money": (4800, 8400), "reward_honor": 12,
         "drop": "[전리품] 처형자의 붉은 가면",
         "desc": "칼렌데 지하 세계가 두려워하는 전설의 처형자. 정상급 장비가 없으면 상대도 안 됩니다."
     },
@@ -1844,7 +1870,7 @@ async def part_time_job(interaction: discord.Interaction):
             await interaction.followup.send(f"피로를 푸는 중입니다. **{remaining}초** 뒤에 다시 일할 수 있습니다.", ephemeral=True)
             return
 
-    parttime_cooldowns[user.id] = now + timedelta(seconds=10)
+    parttime_cooldowns[user.id] = now + timedelta(seconds=PARTTIME_COOLDOWN_SEC)
 
     jobs = [
         {"title": "편의점 야간 알바", "reward": (100, 250)},
@@ -2812,7 +2838,21 @@ class MissionSelect(discord.ui.Select):
         old_rank = get_user_rank(user_stats.get("honor", 0))
         inventory = user_stats.get("inventory", {})
 
+        # 임무 쿨타임: 크로노그래프 시계/특수 바이크 보유 시 단축, 자양강장제는 1회 즉시 초기화(소모)
         drink_used = False
+        now_ts = time.time()
+        remain = int(mission_cooldowns.get(user.id, 0) - now_ts + 0.999)
+        if remain > 0:
+            if inventory.get(DRINK_ITEM, 0) > 0:
+                inventory[DRINK_ITEM] -= 1
+                if inventory[DRINK_ITEM] <= 0:
+                    del inventory[DRINK_ITEM]
+                drink_used = True
+            else:
+                await interaction.followup.send(f"작전 준비 중입니다. **{remain}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
+                return
+        has_fast = any(k in inventory for k in CHRONO_ITEMS)
+        mission_cooldowns[user.id] = now_ts + (MISSION_COOLDOWN_FAST_SEC if has_fast else MISSION_COOLDOWN_SEC)
 
         selected = MISSIONS[self.values[0]]
         current_loc = user_stats.get("location", "레벤하임")
@@ -2904,11 +2944,7 @@ class MissionSelect(discord.ui.Select):
                 fine = min(current_money, selected["fine"])
                 current_money -= fine
                 wanted_list[user.id] = datetime.now() + timedelta(seconds=60)
-                if "치안국 위조 신분증" in inventory:
-                    fail_msg = f"임무에 실패했으나 **치안국 위조 신분증** 덕분에 지명수배를 면했습니다! (벌금 `-${fine:,}`)"
-                    wanted_list.pop(user.id, None)
-                else:
-                    fail_msg = f"**작전 실패!** 현장에 흔적이 남아 **1분간 경찰 지명수배 상태**가 됩니다! (벌금 `-${fine:,}`)"
+                fail_msg = f"**작전 실패!** 현장에 흔적이 남아 **1분간 경찰 지명수배 상태**가 됩니다! (벌금 `-${fine:,}`)"
 
             s["fail"] += 1
             s["streak"] = 0
@@ -3040,12 +3076,17 @@ async def execute_mission(interaction: discord.Interaction):
     # [추가] 경찰은 조직원 임무를 수행할 수 없음
     police_role = discord.utils.get(interaction.guild.roles, name="경찰")
     if police_role and police_role in interaction.user.roles:
-        await interaction.response.send_message("치안국 경찰은 범죄 조직의 비밀 임무를 수행할 수 없습니다!", ephemeral=True)
+        await interaction.followup.send("치안국 경찰은 범죄 조직의 비밀 임무를 수행할 수 없습니다!", ephemeral=True)
         return
 
     user = interaction.user
     user_stats = get_user_data(user.id)
     current_loc = user_stats.get("location", "레벤하임")
+
+    remain = int(mission_cooldowns.get(user.id, 0) - time.time() + 0.999)
+    if remain > 0 and (user_stats.get("inventory") or {}).get(DRINK_ITEM, 0) <= 0:
+        await interaction.followup.send(f"작전 준비 중입니다. **{remain}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
+        return
 
 
     embed = discord.Embed(
@@ -3590,10 +3631,6 @@ async def info_command(interaction: discord.Interaction, keyword: str):
             "title": "아이템: 임무 실패 방지권",
             "desc": "• **분류:** 방어구/유틸리티\n• **효과:** 방어력 +20, 임무 실패 시 수배 자동 방어\n• **설명:** 위기 상황에서 감옥행을 모면하게 해주는 티켓입니다.",
         },
-        "치안국 위조 신분증": {
-            "title": "아이템: 치안국 위조 신분증",
-            "desc": "• **분류:** 방어구/유틸리티\n• **효과:** 방어력 +15, 지명수배 방지\n• **설명:** 경찰의 눈을 잠시 속일 수 있는 정교한 위조 신분증입니다.",
-        }
     }
 
     # 3. 세계관 정보 사전
@@ -3687,19 +3724,19 @@ RAID_TIERS = {
     "rat": {
         "name": "하수구의 쥐왕", "min_players": 2, "min_honor": 0, "cost": 1000,
         "hits": 38, "def_ratio": 0.25, "aoe": 0.07, "aoe_enrage": 0.10,
-        "money": 3000, "honor": 25, "points": 10,
+        "money": 3000, "honor": 15, "points": 10,
         "desc": "하수도를 지배하는 거대한 쥐떼의 왕. 입문자용 레이드입니다.",
     },
     "bull": {
         "name": "부두 항만의 폭군", "min_players": 3, "min_honor": 1500, "cost": 3000,
         "hits": 46, "def_ratio": 0.30, "aoe": 0.09, "aoe_enrage": 0.13,
-        "money": 7000, "honor": 45, "points": 25,
+        "money": 7000, "honor": 30, "points": 25,
         "desc": "에르느코항 부두를 장악한 괴력의 폭군. 응급처치 담당이 꼭 필요합니다.",
     },
     "king": {
         "name": "칼렌데 지하 황제", "min_players": 4, "min_honor": 4000, "cost": 8000,
         "hits": 54, "def_ratio": 0.35, "aoe": 0.09, "aoe_enrage": 0.13,
-        "money": 14000, "honor": 80, "points": 60,
+        "money": 14000, "honor": 50, "points": 60,
         "desc": "칼렌데 지하 세계의 진짜 주인. 정상급 조직만이 도전할 수 있습니다.",
     },
 }
