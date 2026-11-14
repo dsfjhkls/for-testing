@@ -194,6 +194,111 @@ BOSS_SPAWN_CHANCE = 0.06            # 6% (어둠의 지배자)
 # {user_id: datetime (석방 예정 시간)}
 jail_list = {}
 
+# ==========================================
+# [감옥 / 수배 DB 저장]
+#   jail_list / wanted_list 는 빠른 조회용 메모리 캐시이고, 값이 바뀔 때마다 Supabase `user_status` 테이블에 저장됩니다.
+#   봇이 재시작되면 on_ready 에서 아직 끝나지 않은 감옥·수배를 다시 불러옵니다.
+#   → status_setup.sql 을 Supabase 에서 한 번 실행해 주세요.
+#   → 테이블이 없어도 봇은 정상 동작하며, 그때는 예전처럼 메모리에만 저장됩니다.
+# ==========================================
+import threading as _status_threading
+
+_status_lock = _status_threading.Lock()
+_status_warned = False
+_status_loaded = False
+_status_tasks = set()   # 백그라운드 저장 작업이 중간에 사라지지 않도록 붙잡아 두는 집합
+
+
+def _status_warn(action: str, err):
+    global _status_warned
+    if not _status_warned:
+        _status_warned = True
+        print(f"[경고] 감옥/수배 DB {action} 실패: {err}\n"
+              f"       Supabase 에서 status_setup.sql 을 실행했는지 확인해 주세요. (그동안은 메모리에만 저장됩니다)")
+
+
+def save_status_sync(user_id: int):
+    """현재 메모리의 감옥/수배 상태를 DB 에 반영합니다. (둘 다 없으면 행을 삭제)"""
+    if not supabase:
+        return
+    with _status_lock:   # 읽기와 쓰기를 한 덩어리로 묶어서, 연달아 저장해도 오래된 값이 덮어쓰지 않게 함
+        now = datetime.now()
+        jail = jail_list.get(user_id)
+        wanted = wanted_list.get(user_id)
+        jail = jail if jail and jail > now else None
+        wanted = wanted if wanted and wanted > now else None
+        try:
+            if jail is None and wanted is None:
+                supabase.table("user_status").delete().eq("user_id", str(user_id)).execute()
+            else:
+                supabase.table("user_status").upsert({
+                    "user_id": str(user_id),
+                    "jail_until": int(jail.timestamp()) if jail else None,
+                    "wanted_until": int(wanted.timestamp()) if wanted else None,
+                }, on_conflict="user_id").execute()
+        except Exception as e:
+            _status_warn("저장", e)
+
+
+def save_status(user_id: int):
+    """비동기 코드에서 호출: DB 저장을 백그라운드로 넘겨서 명령어 응답이 늦어지지 않게 합니다."""
+    if not supabase:
+        return
+    try:
+        task = asyncio.get_running_loop().create_task(asyncio.to_thread(save_status_sync, user_id))
+        _status_tasks.add(task)
+        task.add_done_callback(_status_tasks.discard)
+    except RuntimeError:   # 실행 중인 이벤트 루프가 없으면 그냥 바로 저장
+        save_status_sync(user_id)
+
+
+def load_status_sync():
+    """봇 시작 시 DB 에 저장된 감옥/수배를 메모리로 복구합니다. 반환: (수감자 수, 수배자 수)"""
+    if not supabase:
+        return 0, 0
+    try:
+        rows = supabase.table("user_status").select("*").execute().data or []
+    except Exception as e:
+        _status_warn("불러오기", e)
+        return 0, 0
+
+    now = datetime.now()
+    jailed = wanted = 0
+    for row in rows:
+        try:
+            uid = int(row["user_id"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        j = datetime.fromtimestamp(row["jail_until"]) if row.get("jail_until") else None
+        w = datetime.fromtimestamp(row["wanted_until"]) if row.get("wanted_until") else None
+        active = False
+
+        if j and j > now:
+            if uid not in jail_list or jail_list[uid] < j:
+                jail_list[uid] = j
+            jailed += 1
+            active = True
+        elif j:
+            # 봇이 꺼져 있는 동안 형기가 끝난 수감자 → 위치가 '감옥' 으로 남지 않게 기본 거점으로 복구
+            try:
+                (supabase.table("user_data").update({"location": "레벤하임"})
+                 .eq("user_id", str(uid)).eq("location", "감옥").execute())
+            except Exception as e:
+                print(f"DB Error (status restore location): {e}")
+
+        if w and w > now:
+            if uid not in wanted_list or wanted_list[uid] < w:
+                wanted_list[uid] = w
+            wanted += 1
+            active = True
+
+        if not active:   # 둘 다 끝난 행은 정리
+            try:
+                supabase.table("user_status").delete().eq("user_id", str(uid)).execute()
+            except Exception:
+                pass
+    return jailed, wanted
+
 # === 지역별 순찰 상태 관리 ===
 # {guild_id: {location_name: expiry_timestamp}}
 active_patrols = {}
@@ -216,6 +321,7 @@ async def check_jail(interaction: discord.Interaction) -> bool:
             # 수감 시간 종료 시 감옥 해제
             jail_list.pop(user_id, None)
             
+            save_status(user_id)   # 석방 → DB 에서도 정리
             # DB의 위치를 기본 거점으로 복구
             try:
                 update_user_location(user_id, "레벤하임")
@@ -388,6 +494,9 @@ def compute_combat_stats(honor: int, inventory: dict) -> dict:
         def_val += craft_a["def"]
         hp += craft_a["hp"]
     if "임무 실패 방지권" in inventory: def_val += 20
+    for it in POLICE_SHOP_ITEMS:   # 치안국 보급품(강화 방탄복·황금 배지)의 방어력
+        if it.get("def_bonus") and it["name"] in inventory:
+            def_val += it["def_bonus"]
     return {"hp": hp, "atk": atk, "def": def_val}
 
 # === Supabase DB 연동 함수들 ===
@@ -770,6 +879,14 @@ async def titles_command(interaction: discord.Interaction):
 
 @bot.event
 async def on_ready():
+    global _status_loaded
+    if not _status_loaded:   # on_ready 는 재연결 때 또 불릴 수 있으므로 처음 한 번만
+        _status_loaded = True
+        try:
+            jailed, wanted = await asyncio.to_thread(load_status_sync)
+            print(f"감옥/수배 상태 복구: 수감 {jailed}명 / 수배 {wanted}명")
+        except Exception as e:
+            print(f"감옥/수배 상태 복구 실패: {e}")
     try:
         synced = await bot.tree.sync()
         print(f"총 {len(synced)}개의 슬래시 명령어가 동기화되었습니다.")
@@ -1004,6 +1121,7 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
     if not is_wanted:
         if matched_key is not None:
             wanted_list.pop(matched_key, None)
+            save_status(target_id)
         # 수배 상태가 아닐 때는 나만 보이게(ephemeral=True) 처리
         await interaction.followup.send(f"**{member.display_name}** 님은 현재 지명수배 상태가 아니거나 증거가 인멸되었습니다.", ephemeral=True)
         return
@@ -1012,6 +1130,7 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
     wanted_list.pop(matched_key, None)
     jail_time_seconds = 180 
     jail_list[target_id] = now + timedelta(seconds=jail_time_seconds)
+    save_status(target_id)
 
     # DB 위치 변경
     try:
@@ -1019,9 +1138,14 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
     except Exception as e:
         print(f"Location update error: {e}")
 
-    # 경찰 보상 지급
+    # 경찰 보상 지급 (무전기: 포상금 +20% / 황금 배지: 명예 +20%)
+    _pb = police_bonuses(get_user_data(interaction.user.id).get("inventory"))
+    arrest_money = int(round(ARREST_BASE_REWARD * _pb["money_mult"]))
+    arrest_honor = int(round(ARREST_BASE_HONOR * _pb["honor_mult"]))
+    money_note = f" (무전기 +{round(POLICE_RADIO_ARREST_BONUS * 100)}%)" if _pb["money_mult"] > 1 else ""
+    honor_note = f" (황금 배지 +{round(POLICE_BADGE_HONOR_BONUS * 100)}%)" if _pb["honor_mult"] > 1 else ""
     try:
-        update_user_stats(interaction.user.id, 500, 20)
+        update_user_stats(interaction.user.id, arrest_money, arrest_honor)
     except Exception:
         pass
 
@@ -1035,8 +1159,8 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
             f"**{interaction.user.mention}** 경찰관이 수배범 **{member.mention}** (을)를 현장에서 체포했습니다!\n\n"
             f"**처벌 내용:** **{jail_time_seconds // 60}분** 동안 감옥에 수감되며 프로필 외 모든 활동이 통제됩니다.\n"
             f"**현재 거점:** `감옥`\n\n"
-            f"**검거 포상금:** `${500:,}`\n"
-            f"**경찰 실적:** `+20 pt` (현재 직급: `{police_rank}`)"
+            f"**검거 포상금:** `${arrest_money:,}`{money_note}\n"
+            f"**경찰 실적:** `+{arrest_honor} pt`{honor_note} (현재 직급: `{police_rank}`)"
         ),
         color=discord.Color.dark_blue()
     )
@@ -1148,6 +1272,7 @@ class SmuggleView(discord.ui.View):
             print(f"Smuggle reject DB error: {e}")
 
         wanted_list[self.mafia.id] = datetime.now() + timedelta(seconds=SMUGGLE_REJECT_WANTED_SEC)
+        save_status(self.mafia.id)
 
         embed = discord.Embed(
             title="[밀수 시도 적발]",
@@ -1276,7 +1401,7 @@ async def patrol_location(interaction: discord.Interaction, 지역: app_commands
 
     # 4. 경찰 보상 지급 (예: 자금 $400~800, 명예 +10pt)
     earned_money = random.randint(400, 800)
-    earned_honor = 10
+    earned_honor = int(round(10 * police_bonuses(get_user_data(user.id).get("inventory"))["honor_mult"]))
 
     try:
         update_user_stats(user.id, earned_money, earned_honor)
@@ -1490,6 +1615,7 @@ async def interrogate_trial(s: InterrogationSession, opinion: str):
         else:
             new_release = cur
         jail_list[s.prisoner.id] = new_release
+        save_status(s.prisoner.id)
         remain = max(0, int((new_release - now).total_seconds()))
         real_delta = abs(int((new_release - cur).total_seconds()))
 
@@ -1506,11 +1632,13 @@ async def interrogate_trial(s: InterrogationSession, opinion: str):
         reward_text = ""
         if verdict == opinion:   # 경찰 의견과 판결이 일치
             try:
-                update_user_stats(s.police.id, INTERROGATE_MATCH_REWARD_MONEY, INTERROGATE_MATCH_REWARD_HONOR)
+                _pb = police_bonuses(get_user_data(s.police.id).get("inventory"))
+                reward_honor = int(round(INTERROGATE_MATCH_REWARD_HONOR * _pb["honor_mult"]))
+                update_user_stats(s.police.id, INTERROGATE_MATCH_REWARD_MONEY, reward_honor)
                 info = get_user_data(s.police.id)
                 rank = get_user_rank(info["honor"], is_police=True)
                 reward_text = (f"\n\n**의견 일치 수당:** `${INTERROGATE_MATCH_REWARD_MONEY:,}`\n"
-                               f"**경찰 실적:** `+{INTERROGATE_MATCH_REWARD_HONOR} pt` (현재 직급: `{rank}`)")
+                               f"**경찰 실적:** `+{reward_honor} pt` (현재 직급: `{rank}`)")
             except Exception as e:
                 print(f"Interrogate reward error: {e}")
 
@@ -1711,6 +1839,30 @@ NAMED_MONSTERS = {
 }
 
 # === [조직원 전용] `/송금` 명령어 ===
+def transfer_money_sync(sender_id: int, receiver_id: int, amount: int):
+    """송금 처리 (동기 DB 작업이라 to_thread 로 실행). 반환: (성공 여부, 송금자 잔액, 수신자 잔액)
+    잔액을 다시 확인한 뒤 '차감 → 적립' 순서로 저장하고, 적립이 실패하면 차감을 되돌립니다."""
+    _require_db()
+    with _inv_lock:
+        s_money = int(get_user_data(sender_id).get("money") or 0)
+        r_money = int(get_user_data(receiver_id).get("money") or 0)
+        if s_money < amount:
+            return False, s_money, r_money
+
+        res = supabase.table("user_data").update({"money": s_money - amount}).eq("user_id", str(sender_id)).execute()
+        _check_updated(res, "transfer (sender)")
+        try:
+            res = supabase.table("user_data").update({"money": r_money + amount}).eq("user_id", str(receiver_id)).execute()
+            _check_updated(res, "transfer (receiver)")
+        except Exception:
+            try:   # 적립에 실패했다면 송금자의 자금을 원래대로 되돌린다
+                supabase.table("user_data").update({"money": s_money}).eq("user_id", str(sender_id)).execute()
+            except Exception as rollback_err:
+                print(f"DB Error (transfer rollback): {rollback_err}")
+            raise
+        return True, s_money - amount, r_money + amount
+
+
 @bot.tree.command(name="송금", description="[조직원 전용] 다른 조직원에게 보유 자금을 양도합니다.")
 @app_commands.describe(member="돈을 받을 조직원", amount="보낼 금액 ($)")
 async def transfer_money(interaction: discord.Interaction, member: discord.Member, amount: int):
@@ -1721,23 +1873,26 @@ async def transfer_money(interaction: discord.Interaction, member: discord.Membe
     sender = interaction.user
     receiver = member
 
-    # 1. 자기 자신에게 송금하는지 확인
+    # 1. 대상·금액 검사 (아직 응답 전이므로 실패 안내는 본인에게만 보이는 메시지로 보낸다)
     if sender.id == receiver.id:
         await interaction.response.send_message("자기 자신에게는 돈을 송금할 수 없습니다.", ephemeral=True)
         return
-
-    # 2. 송금 금액 유효성 검사 (0원 이하 방지)
+    if receiver.bot:
+        await interaction.response.send_message("봇에게는 송금할 수 없습니다.", ephemeral=True)
+        return
     if amount <= 0:
         await interaction.response.send_message("송금 금액은 1원 이상이어야 합니다.", ephemeral=True)
         return
 
-    await interaction.response.defer()
+    mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
+    police_role = discord.utils.get(interaction.guild.roles, name="경찰")
+    receiver_ok = (mafia_role and mafia_role in receiver.roles) or (police_role and police_role in receiver.roles)
+    if not receiver_ok:
+        await interaction.response.send_message("받는 사람은 **조직원 또는 경찰**이어야 합니다. (가입하지 않은 사람에게는 송금할 수 없습니다)", ephemeral=True)
+        return
 
-    # 3. 송금자(나)의 최신 데이터 조회
-    sender_data = get_user_data(sender.id)
-    sender_money = sender_data.get("money", 0)
-
-    # 잔액 부족 확인
+    # 2. 잔액 확인
+    sender_money = int((await asyncio.to_thread(get_user_data, sender.id)).get("money", 0) or 0)
     if sender_money < amount:
         await interaction.response.send_message(
             f"보유 자금이 부족합니다!\n"
@@ -1747,26 +1902,21 @@ async def transfer_money(interaction: discord.Interaction, member: discord.Membe
         )
         return
 
-    # 4. 수신자(상대방) 데이터 확인 (존재하지 않으면 기본값 생성 방지를 위해 체크)
-    receiver_data = get_user_data(receiver.id)
-    receiver_money = receiver_data.get("money", 0)
+    await interaction.response.defer()
 
-    # 5. 금액 차감 및 적립 계산 (수수료 0% 또는 원하시는 경우 소폭 수수료 부과 가능)
-    new_sender_money = sender_money - amount
-    new_receiver_money = receiver_money + amount
-
+    # 3. 실제 이체 (차감 → 적립, 실패 시 되돌림)
     try:
-        _require_db()
-        # 송금자 자금 업데이트
-        supabase.table("user_data").update({"money": new_sender_money}).eq("user_id", str(sender.id)).execute()
-        # 수신자 자금 업데이트
-        supabase.table("user_data").update({"money": new_receiver_money}).eq("user_id", str(receiver.id)).execute()
+        ok, new_sender_money, new_receiver_money = await asyncio.to_thread(transfer_money_sync, sender.id, receiver.id, amount)
     except Exception as e:
         print(f"DB Error (Transfer Money): {e}")
         await interaction.followup.send("데이터베이스 오류로 송금에 실패했습니다. 나중에 다시 시도해 주세요.", ephemeral=True)
         return
 
-    # 6. 송금 완료 임베드 생성 (서버 전체 공개 또는 알림)
+    if not ok:   # 확인과 이체 사이에 잔액이 줄어든 경우
+        await interaction.followup.send(f"보유 자금이 부족합니다! (보유 `${new_sender_money:,}`)", ephemeral=True)
+        return
+
+    # 4. 송금 완료 임베드 (서버 전체 공개)
     embed = discord.Embed(
         title="[조직 자금 이체 완료]",
         description=(
@@ -3292,6 +3442,7 @@ class MissionSelect(discord.ui.Select):
                 fine = min(current_money, selected["fine"])
                 current_money -= fine
                 wanted_list[user.id] = datetime.now() + timedelta(seconds=60)
+                save_status(user.id)
                 fail_msg = f"**작전 실패!** 현장에 흔적이 남아 **1분간 경찰 지명수배 상태**가 됩니다! (벌금 `-${fine:,}`)"
 
             s["fail"] += 1
@@ -3660,9 +3811,27 @@ async def open_weapon_shop(interaction: discord.Interaction):
     # === 경찰 전용 상점 아이템 목록 ===
 POLICE_SHOP_ITEMS = [
     {"id": "police_shield", "name": "치안국 강화 방탄복", "price": 4000, "desc": "경찰의 방어력을 대폭 강화합니다 (방어력 +35)", "def_bonus": 35},
-    {"id": "police_radio", "name": "기동타격대 무전기", "price": 8000, "desc": "검거 포상금 +20% 증가 효과", "bonus_type": "radio"},
-    {"id": "police_badge", "name": "특급 수사관 황금 배지", "price": 20000, "desc": "치안국의 명예와 권위를 상징합니다 (방어력 +50 / 명예 보너스)", "def_bonus": 50},
+    {"id": "police_radio", "name": "기동타격대 무전기", "price": 8000, "desc": "/검거 포상금 +20% (보유만 해도 자동 적용)", "bonus_type": "radio"},
+    {"id": "police_badge", "name": "특급 수사관 황금 배지", "price": 20000, "desc": "방어력 +50 / 검거·순찰·심문 명예 실적 +20%", "def_bonus": 50},
 ]
+
+# --- 치안국 보급품 효과 ---
+#   • 강화 방탄복 / 황금 배지 : 방어력 (compute_combat_stats 가 전투·결투·레이드·점령전에 모두 반영)
+#   • 기동타격대 무전기       : /검거 포상금 배율
+#   • 황금 배지               : /검거 · /순찰 · /심문(의견 일치) 명예 실적 배율
+POLICE_RADIO_NAME = "기동타격대 무전기"
+POLICE_BADGE_NAME = "특급 수사관 황금 배지"
+POLICE_RADIO_ARREST_BONUS = 0.20    # 무전기: 검거 포상금 +20%
+POLICE_BADGE_HONOR_BONUS = 0.20     # 황금 배지: 명예 실적 +20%
+ARREST_BASE_REWARD = 500            # /검거 기본 포상금
+ARREST_BASE_HONOR = 20              # /검거 기본 명예 실적
+
+def police_bonuses(inventory) -> dict:
+    inv = inventory or {}
+    return {
+        "money_mult": 1.0 + (POLICE_RADIO_ARREST_BONUS if POLICE_RADIO_NAME in inv else 0.0),
+        "honor_mult": 1.0 + (POLICE_BADGE_HONOR_BONUS if POLICE_BADGE_NAME in inv else 0.0),
+    }
 
 class PoliceShopSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
@@ -3709,7 +3878,6 @@ class PoliceShopSelect(discord.ui.Select):
 
         try:
             _require_db()
-            supabase.type = "user_data" # 혹은 기존 update 구문 사용
             supabase.table("user_data").update({
                 "money": current_money,
                 "inventory": inventory
@@ -3867,6 +4035,7 @@ async def kick_member(interaction: discord.Interaction, member: discord.Member, 
     app_commands.Choice(name="카지노 & 도박 (/도박)", value="도박"),
     app_commands.Choice(name="칭호 시스템 (/칭호)", value="칭호"),
     app_commands.Choice(name="일일 의뢰 (/일퀘)", value="일퀘"),
+    app_commands.Choice(name="경찰 상점 (/경찰상점)", value="경찰상점"),
     app_commands.Choice(name="통합 설정 (/설정)", value="설정"),
     app_commands.Choice(name="네임드 몬스터 (/네임드)", value="네임드"),
     app_commands.Choice(name="밀수 거래 (/밀수)", value="밀수"),
@@ -3893,12 +4062,12 @@ async def info_command(interaction: discord.Interaction, keyword: str):
             "title": "시스템: /전투 [npc이름]",
             "desc": "지정한 NPC와 1:1 턴제 결투를 벌입니다.\n"
                     "• **특징:** 제한 턴(10턴) 내에 처치해야 승리하며, 패배 시 치료비 패널티가 발생합니다.\n"
-                    "• **히든 이벤트:** 전투 승리 시 10% 확률로 **[어둠의 지배자]**, 2% 확률로 **[태초의 파괴자]** 가 서버에 출현합니다! (한 번에 한 마리)",
+                    "• **히든 이벤트:** 전투 승리 시 6% 확률로 **[어둠의 지배자]**, 1% 확률로    **[태초의 파괴자]** 가 서버에 출현합니다! (한 번에 한 마리)",
         },
         "보스": {
             "title": "시스템: /보스 (히든 보스 토벌)",
             "desc": "전투 후 살기가 감지되었을 때 출현하는 최종 히든 보스전입니다.\n"
-                    "• **출현 조건:** 일반 `/전투` 승리 시 10% 확률로 소환 경보가 발생해야 입장 가능합니다.\n"
+                    "• **출현 조건:** 일반 `/전투` 승리 시 6% 확률로 소환 경보가 발생해야 입장 가능합니다.\n"
                     "• **보상:** 격퇴 성공 시 **$15,000~$30,000**의 막대한 자금과 **+100 pt** 명예 획득!\n"
                     "• **권장:** 명예 약 5,000pt + 수상한 주사기 / 슈퍼 울트라 주먹",
         },
@@ -3959,6 +4128,14 @@ async def info_command(interaction: discord.Interaction, keyword: str):
             "title": "명령어: /레이드 [시작·정보]",
             "desc": "조직원이 함께 레이드 보스를 잡는 협동 콘텐츠입니다. `/레이드 정보` 에서 보스별 조건·보상과 전투 방법을 볼 수 있습니다.\n"
                     "공격 / 응급처치 / 방어 태세 3가지 버튼으로 진행하며, 보상은 참여도(딜량)에 따라 나뉩니다.",
+        },
+        "경찰상점": {
+            "title": "명령어: /경찰상점 (경찰 전용)",
+            "desc": "치안국 전용 보급품을 구매합니다. 보유만 해도 효과가 적용됩니다.\n"
+                    "• **치안국 강화 방탄복:** 방어력 +35\n"
+                    "• **기동타격대 무전기:** `/검거` 포상금 +20%\n"
+                    "• **특급 수사관 황금 배지:** 방어력 +50 / `/검거`·`/순찰`·`/심문` 명예 실적 +20%\n"
+                    "방어력은 `/능력치`에서 확인할 수 있습니다.",
         },
         "무기상점": {
             "title": "명령어: /무기상점",
@@ -6156,6 +6333,7 @@ class EscapeGameView(GuardedView):
     async def _success(self, interaction: discord.Interaction):
         self._end()
         jail_list.pop(self.owner.id, None)
+        save_status(self.owner.id)
         try:   # check_jail 의 석방 처리와 동일하게 위치를 기본 거점으로 복구
             await asyncio.to_thread(update_user_location, self.owner.id, "레벤하임")
         except Exception as e:
@@ -6607,6 +6785,7 @@ def combat_stats_breakdown(honor: int, inventory: dict) -> dict:
         "weapon": weapon,
         "armor": armor,
         "ticket": "임무 실패 방지권" in inventory,
+        "police": [(it["name"], it["def_bonus"]) for it in POLICE_SHOP_ITEMS if it.get("def_bonus") and it["name"] in inventory],
         "unused": unused,
         "total": compute_combat_stats(honor, inventory),   # 실제 전투에서 쓰는 값
     }
@@ -6637,6 +6816,12 @@ def build_stats_embed(target: discord.abc.User, data: dict) -> discord.Embed:
         lines.append("• **방어구**: 없음 (`/제작`에서 만들 수 있습니다)")
     if b["ticket"]:
         lines.append("• **임무 실패 방지권**: 방어력 +20")
+    for pname, pdef in b["police"]:
+        lines.append(f"• **치안국 보급품** {pname}: 방어력 +{pdef}")
+    if POLICE_RADIO_NAME in inv:
+        lines.append(f"• **{POLICE_RADIO_NAME}**: /검거 포상금 +{round(POLICE_RADIO_ARREST_BONUS * 100)}%")
+    if POLICE_BADGE_NAME in inv:
+        lines.append(f"• **{POLICE_BADGE_NAME}**: 검거·순찰·심문 명예 실적 +{round(POLICE_BADGE_HONOR_BONUS * 100)}%")
     embed.add_field(name="능력치 구성", value="\n".join(lines), inline=False)
 
     if b["unused"]:
@@ -6663,6 +6848,141 @@ async def stats_command(interaction: discord.Interaction, member: discord.Member
     await interaction.response.defer()
     data = await asyncio.to_thread(get_user_data, target.id)
     await interaction.followup.send(embed=build_stats_embed(target, data))
+
+
+# ==========================================================================
+# [/도움말]  전체 명령어 안내
+#   • 봇에 등록된 슬래시 명령어(bot.tree)를 실시간으로 읽어서 보여줍니다.
+#     → 새 명령어를 추가해도 따로 고칠 필요 없이 자동으로 목록에 들어갑니다. (설명은 각 명령어의 description)
+#   • 아래 HELP_CATEGORIES 에 이름을 적지 않은 명령어는 '기타' 분류에 모입니다.
+# ==========================================================================
+HELP_CATEGORIES = [
+    # (키, 표시 이름, 분류 설명, [명령어 이름 — /조직 처럼 그룹 명령어는 첫 단어만])
+    ("start",   "시작 · 정보",          "가입과 내 정보 확인, 설정, 랭킹 등 기본이 되는 명령어입니다.",
+     ["도움말", "가입", "탈퇴", "프로필", "정보", "설정", "일퀘", "칭호", "랭킹"]),
+    ("economy", "이동 · 상점 · 경제",   "거점 이동, 장비 구매, 자금 이체, 제작 등 돈과 장비에 관한 명령어입니다.",
+     ["이동", "암시장", "무기상점", "인벤토리", "송금", "아르바이트", "제작"]),
+    ("mafia",   "마피아 활동",          "비밀 임무 수행, 경찰 매수, 탈옥 등 조직원의 범죄 활동입니다.",
+     ["임무", "밀수", "탈옥"]),
+    ("battle",  "전투 · 능력치",        "NPC·네임드·보스 토벌과 결투, 전투 능력치 확인입니다.",
+     ["능력치", "전투", "네임드", "보스", "결투"]),
+    ("casino",  "카지노",               "자금을 걸고 즐기는 도박입니다. (`/도박 규칙` 에서 배당표 확인)",
+     ["도박"]),
+    ("police",  "경찰",                 "경찰 소속 전용 명령어입니다.",
+     ["검거", "순찰", "심문", "경찰상점"]),
+    ("family",  "조직 · 레이드 · 구역", "조직(패밀리)을 만들어 함께하는 협동·점령 콘텐츠입니다.",
+     ["조직", "레이드", "구역"]),
+    ("admin",   "관리자",               "서버 관리자 전용 명령어입니다.",
+     ["추방"]),
+]
+
+
+def _help_usage(cmd) -> str:
+    """'/송금 <member> <amount>' 처럼 사용법 문자열 생성 (<필수> / [선택])"""
+    parts = [f"/{cmd.qualified_name}"]
+    for prm in cmd.parameters:
+        name = getattr(prm, "display_name", None) or prm.name
+        parts.append(f"<{name}>" if prm.required else f"[{name}]")
+    return " ".join(parts)
+
+
+def _help_pages() -> list:
+    """현재 등록된 명령어를 분류별로 정리 → [{key, label, desc, cmds}]"""
+    by_root = {}
+    for cmd in bot.tree.walk_commands():
+        if isinstance(cmd, app_commands.Group):
+            continue   # 그룹 자체가 아니라 그 안의 하위 명령어를 나열
+        by_root.setdefault(cmd.qualified_name.split(" ")[0], []).append(cmd)
+
+    pages, used = [], set()
+    for key, label, desc, roots in HELP_CATEGORIES:
+        cmds = []
+        for root in roots:
+            if root in by_root:
+                cmds.extend(by_root[root])
+                used.add(root)
+        if cmds:
+            pages.append({"key": key, "label": label, "desc": desc, "cmds": cmds})
+
+    leftover = [c for root, cs in by_root.items() if root not in used for c in cs]
+    if leftover:
+        pages.append({"key": "etc", "label": "기타", "desc": "분류되지 않은 명령어입니다.", "cmds": leftover})
+    return pages
+
+
+def help_overview_embed(pages: list) -> discord.Embed:
+    total = sum(len(pg["cmds"]) for pg in pages)
+    lines = [f"**{pg['label']}** ({len(pg['cmds'])}개)\n└ {pg['desc']}" for pg in pages]
+    embed = discord.Embed(
+        title="[패밀리 GM 도움말]",
+        description=(f"총 **{total}개**의 명령어가 있습니다. 아래 메뉴에서 분류를 고르면 사용법과 설명을 볼 수 있습니다.\n"
+                     f"사용법 표기: `<필수>` `[선택]`  ·  설명 앞의 `[ ]` 는 사용할 수 있는 대상입니다.\n\n"
+                     + "\n\n".join(lines)),
+        color=discord.Color.blurple()
+    )
+    embed.add_field(
+        name="처음이라면",
+        value=("`/가입` 으로 조직원 또는 경찰이 되세요.\n"
+               "조직원은 `/임무` · `/전투` 로 자금과 명예를 모으고, `/무기상점` · `/암시장` · `/제작` 으로 장비를 갖춥니다.\n"
+               f"명예 {FAMILY_CREATE_MIN_HONOR}pt 이상이면 `/조직 생성` 으로 조직을 만들어 `/레이드` 와 `/구역` 에 도전할 수 있습니다."),
+        inline=False
+    )
+    embed.set_footer(text="수감 중에는 일부 명령어를 쓸 수 없습니다. (수감자는 /탈옥 으로 탈출을 시도할 수 있어요)")
+    return embed
+
+
+def help_category_embed(page: dict) -> discord.Embed:
+    blocks = [f"**`{_help_usage(c)}`**\n└ {c.description}" for c in page["cmds"]]
+    text = f"{page['desc']}\n\n" + "\n\n".join(blocks)
+    if len(text) > 4000:
+        text = text[:3990] + "…"
+    embed = discord.Embed(title=f"[도움말] {page['label']}", description=text, color=discord.Color.blurple())
+    embed.set_footer(text=f"명령어 {len(page['cmds'])}개 · 사용법 표기: <필수> [선택]")
+    return embed
+
+
+class HelpSelect(discord.ui.Select):
+    def __init__(self, pages: list):
+        self.pages = pages
+        options = [discord.SelectOption(label="전체 보기", value="__all__", description="분류 목록과 처음 시작하는 방법", default=True)]
+        for pg in pages:
+            options.append(discord.SelectOption(label=pg["label"], value=pg["key"], description=f"명령어 {len(pg['cmds'])}개"))
+        super().__init__(placeholder="분류를 선택하세요...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        key = self.values[0]
+        for opt in self.options:
+            opt.default = (opt.value == key)
+        if key == "__all__":
+            embed = help_overview_embed(self.pages)
+        else:
+            embed = help_category_embed(next(pg for pg in self.pages if pg["key"] == key))
+        await interaction.response.edit_message(embed=embed, view=self.view)
+
+
+class HelpView(discord.ui.View):
+    def __init__(self, pages: list):
+        super().__init__(timeout=180)
+        self.interaction = None
+        self.add_item(HelpSelect(pages))
+
+    async def on_timeout(self):
+        if self.interaction is None:
+            return
+        try:
+            await self.interaction.edit_original_response(view=None)   # 시간이 지나면 죽은 메뉴를 치운다
+        except discord.HTTPException:
+            pass
+
+
+@bot.tree.command(name="도움말", description="[공용] 모든 명령어의 사용법과 설명을 분류별로 확인합니다.")
+async def help_command(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+
+    pages = _help_pages()
+    view = HelpView(pages)
+    view.interaction = interaction
+    await interaction.response.send_message(embed=help_overview_embed(pages), view=view, ephemeral=True)
 
 
 bot.run(os.getenv("DISCORD_TOKEN"))
