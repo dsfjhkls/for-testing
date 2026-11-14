@@ -181,15 +181,18 @@ MAINTENANCE_MODE = False
 wanted_list = {}
 
 # === 서버별 보스 출현 상태 관리 ===
-# {guild_id: "dark" | "ultimate" | None}  ← 서버에 지금 어떤 보스가 떠 있는지 (None/없음 = 보스 없음)
+# {guild_id: "dark" | "eden" | "ultimate" | None}  ← 서버에 지금 어떤 보스가 떠 있는지 (None/없음 = 보스 없음)
 #   "dark"     = [히든보스] 어둠의 지배자  (HIDDEN_BOSS)
+#   "eden"     = [테러보스] 에칼 데 페스토  (EDEN_BOSS)
 #   "ultimate" = [최강보스] 태초의 파괴자  (ULTIMATE_BOSS)
 active_boss_guilds = {}
 
-# 일반 /전투 승리 시 보스가 출현할 확률 (테스트할 때는 1.0 으로 바꾸면 항상 출현)
-# 판정 순서: 최강보스(태초의 파괴자) 먼저 → 실패하면 어둠의 지배자 → 둘 다 실패하면 출현 없음
-ULTIMATE_BOSS_SPAWN_CHANCE = 0.01   # 1%
-BOSS_SPAWN_CHANCE = 0.06            # 6% (어둠의 지배자)
+# 일반 /전투 승리 시 '보스마다 각각' 출현할 확률 (테스트할 때는 0.3 처럼 크게 바꾸세요)
+#   • 서버에 보스가 없을 때만 판정하고, 한 번에 보스 한 마리만 출현합니다.
+#   • 보스가 3종이라 '아무 보스나' 나올 확률은 합계 9% 입니다. (BOSS_SPAWN_TABLE 참고)
+BOSS_SPAWN_CHANCE = 0.03            # 3% (어둠의 지배자)
+EDEN_BOSS_SPAWN_CHANCE = 0.03       # 3% (에칼 데 페스토)
+ULTIMATE_BOSS_SPAWN_CHANCE = 0.03   # 3% (태초의 파괴자)
 
 # {user_id: datetime (석방 예정 시간)}
 jail_list = {}
@@ -1802,6 +1805,69 @@ ULTIMATE_BOSS = {
     "desc": "칼렌데 지하 세계의 근원이자 재앙 그 자체인 존재입니다. 15턴 안에 쓰러뜨리지 못하면 세계가 붕괴합니다."
 }
 
+# === 테러 보스: 유토피아 오브 에덴의 창립자 (세계관 /정보 참고) ===
+# 어둠의 지배자(75,000)와 태초의 파괴자(120,000) 사이의 난이도입니다.
+EDEN_BOSS = {
+    "name": "[테러보스] 에칼 데 페스토",
+    "hp": 95000,
+    "atk": 3800,
+    "def": 750,
+    "reward_money": (18000, 45000),
+    "reward_honor": 200,
+    "desc": "모두가 평등한 세상을 외치며 칼렌데를 불바다로 만들려는 유토피아 오브 에덴의 창립자입니다. 15턴 안에 쓰러뜨리지 못하면 도시가 불탑니다."
+}
+
+# === 보스 종류 표 (출현 판정 · 출현 공지 · /보스 전투가 모두 이 표를 사용합니다) ===
+#   보스를 더 추가하려면: 보스 데이터를 만들고 → 여기에 한 줄 추가 → BOSS_SPAWN_TABLE 에 확률 한 줄 추가
+BOSS_KINDS = {
+    "dark": {
+        "data": HIDDEN_BOSS,
+        "title": "[히든보스] 어둠의 지배자 토벌전",
+        "color": discord.Color.dark_red(),
+        "spawn_msg": ("**[긴급 상황 경보]** \n"
+                      "전투의 여파로 부근에서 엄청난 살기가 감지되었습니다!\n"
+                      "**어둠의 지배자**가 이 지역에 출현했습니다! (`/보스` 명령어로 토벌 가능)"),
+    },
+    "eden": {
+        "data": EDEN_BOSS,
+        "title": "[테러보스] 에칼 데 페스토 토벌전",
+        "color": discord.Color.from_rgb(200, 40, 40),
+        "spawn_msg": ("**[테러 경보]** \n"
+                      "도시 곳곳에서 붉은 깃발이 펄럭이고 폭발음이 들려옵니다!\n"
+                      "**유토피아 오브 에덴의 창립자 에칼 데 페스토**가 모습을 드러냈습니다! (`/보스` 명령어로 토벌 가능)"),
+    },
+    "ultimate": {
+        "data": ULTIMATE_BOSS,
+        "title": "[멸망의 전조] 태초의 파괴자 토벌전",
+        "color": discord.Color.from_rgb(120, 0, 160),
+        "spawn_msg": ("**[세계멸망 경보]** \n"
+                      "차원의 균열이 갈라지며 역대급 재앙의 기운이 감지되었습니다!\n"
+                      "**[최강보스] 태초의 파괴자**가 강림했습니다! (`/보스` 명령어로 토벌 가능)"),
+    },
+}
+BOSS_NAMES = tuple(k["data"]["name"] for k in BOSS_KINDS.values())
+
+# 출현 판정표: (종류, 확률) — 위에서부터 확률을 누적해 한 번의 주사위로 어느 보스가 나올지 정합니다.
+BOSS_SPAWN_TABLE = [
+    ("dark", BOSS_SPAWN_CHANCE),
+    ("eden", EDEN_BOSS_SPAWN_CHANCE),
+    ("ultimate", ULTIMATE_BOSS_SPAWN_CHANCE),
+]
+
+def boss_short_name(data: dict) -> str:
+    """'[히든보스] 어둠의 지배자' -> '어둠의 지배자'"""
+    return data["name"].split("] ", 1)[-1]
+
+def boss_chance_text() -> str:
+    """'어둠의 지배자 3% / 에칼 데 페스토 3% / 태초의 파괴자 3%'"""
+    return " / ".join(f"{boss_short_name(BOSS_KINDS[kind]['data'])} {chance * 100:g}%" for kind, chance in BOSS_SPAWN_TABLE)
+
+def boss_reward_text() -> str:
+    return "\n".join(
+        f"  └ {boss_short_name(k['data'])}: ${k['data']['reward_money'][0]:,}~${k['data']['reward_money'][1]:,} / 명예 +{k['data']['reward_honor']}pt"
+        for k in BOSS_KINDS.values()
+    )
+
 # === 네임드(강화) 몬스터 ===
 # 일반 NPC보다 훨씬 강하고, 체력이 절반 아래로 떨어지면 격노(enrage)해서 공격력이 오릅니다.
 # 처음 처치하면 고유 전리품()을 얻고, 명예는 조금만 주므로 대부 달성 속도에는 거의 영향이 없습니다.
@@ -2112,25 +2178,17 @@ class NPCBattleView(GuardedView):
                 print(f"DB Error (NPC Battle Win): {e}")
             # 보스 출현 판정 (서버에 보스가 없을 때만 / 보스·네임드 처치로는 출현하지 않음)
             guild_id = interaction.guild_id if interaction.guild else None
-            is_boss_fight = self.npc_info["name"] in (HIDDEN_BOSS["name"], ULTIMATE_BOSS["name"])
+            is_boss_fight = self.npc_info["name"] in BOSS_NAMES
             if guild_id and not is_boss_fight and not self.npc_info.get("named") and not active_boss_guilds.get(guild_id):
                 roll = random.random()
-                if roll < ULTIMATE_BOSS_SPAWN_CHANCE:
-                    active_boss_guilds[guild_id] = "ultimate"
-                    boss_spawn_kind = "ultimate"
-                    boss_spawn_msg = (
-                        "\n\n**[세계멸망 경보]** \n"
-                        "차원의 균열이 갈라지며 역대급 재앙의 기운이 감지되었습니다!\n"
-                        "**[최강보스] 태초의 파괴자**가 강림했습니다! (`/보스` 명령어로 토벌 가능)"
-                    )
-                elif roll < ULTIMATE_BOSS_SPAWN_CHANCE + BOSS_SPAWN_CHANCE:
-                    active_boss_guilds[guild_id] = "dark"
-                    boss_spawn_kind = "dark"
-                    boss_spawn_msg = (
-                        "\n\n**[긴급 상황 경보]** \n"
-                        "전투의 여파로 부근에서 엄청난 살기가 감지되었습니다!\n"
-                        "**어둠의 지배자**가 이 지역에 출현했습니다! (`/보스` 명령어로 토벌 가능)"
-                    )
+                acc = 0.0
+                for kind, chance in BOSS_SPAWN_TABLE:   # 확률을 누적해서 한 번의 주사위로 어느 보스가 나올지 정함
+                    acc += chance
+                    if roll < acc:
+                        active_boss_guilds[guild_id] = kind
+                        boss_spawn_kind = kind
+                        boss_spawn_msg = BOSS_KINDS[kind]["spawn_msg"]
+                        break
 
             embed = discord.Embed(
                 title=f"[전투 승리] {self.npc_info['name']} 격퇴!",
@@ -2187,7 +2245,7 @@ class NPCBattleView(GuardedView):
                 boss_embed = discord.Embed(
                     title="[보스 출현]",
                     description=boss_spawn_msg.strip(),
-                    color=discord.Color.dark_red() if boss_spawn_kind == "dark" else discord.Color.from_rgb(120, 0, 160)
+                    color=BOSS_KINDS[boss_spawn_kind]["color"]
                 )
                 await interaction.followup.send(embed=boss_embed)
             except Exception as e:
@@ -2259,7 +2317,7 @@ async def fight_boss(interaction: discord.Interaction):
     if not guild_id or not active_boss_guilds.get(guild_id, False):
         await interaction.response.send_message(
             "현재 이 서버에 보스가 등장하지 않았습니다.\n"
-            f"일반 `/전투` 승리 시 낮은 확률로 출현합니다. (어둠의 지배자 {int(BOSS_SPAWN_CHANCE * 100)}% / 태초의 파괴자 {int(ULTIMATE_BOSS_SPAWN_CHANCE * 100)}%)",
+            f"일반 `/전투` 승리 시 낮은 확률로 출현합니다. ({boss_chance_text()})",
             ephemeral=True
         )
         return
@@ -2274,7 +2332,7 @@ async def fight_boss(interaction: discord.Interaction):
             )
             return
 
-    boss_kind = active_boss_guilds.get(guild_id)   # "dark" 또는 "ultimate"
+    boss_kind = active_boss_guilds.get(guild_id)   # BOSS_KINDS 의 키 ("dark" / "eden" / "ultimate")
     active_boss_guilds[guild_id] = None
     npc_cooldowns[user.id] = now + timedelta(seconds=BOSS_COOLDOWN_SEC)
 
@@ -2288,10 +2346,8 @@ async def fight_boss(interaction: discord.Interaction):
         user_combat_stats = compute_combat_stats(honor, inventory)
 
         # 서버에 떠 있는 보스 종류에 맞는 보스와 전투 (둘 다 15턴 제한)
-        if boss_kind == "ultimate":
-            boss_info, boss_title = ULTIMATE_BOSS, "[멸망의 전조] 태초의 파괴자 토벌전"
-        else:
-            boss_info, boss_title = HIDDEN_BOSS, "[히든보스] 어둠의 지배자 토벌전"
+        kind_info = BOSS_KINDS.get(boss_kind) or BOSS_KINDS["dark"]
+        boss_info, boss_title = kind_info["data"], kind_info["title"]
         view = NPCBattleView(user=user, user_stats_dict=user_combat_stats, npc_info=boss_info, max_turns=15)
         embed = view.get_embed()
         embed.title = boss_title
@@ -4062,13 +4118,13 @@ async def info_command(interaction: discord.Interaction, keyword: str):
             "title": "시스템: /전투 [npc이름]",
             "desc": "지정한 NPC와 1:1 턴제 결투를 벌입니다.\n"
                     "• **특징:** 제한 턴(10턴) 내에 처치해야 승리하며, 패배 시 치료비 패널티가 발생합니다.\n"
-                    "• **히든 이벤트:** 전투 승리 시 6% 확률로 **[어둠의 지배자]**, 1% 확률로    **[태초의 파괴자]** 가 서버에 출현합니다! (한 번에 한 마리)",
+                    f"• **히든 이벤트:** 전투 승리 시 낮은 확률로 보스가 서버에 출현합니다! ({boss_chance_text()} / 한 번에 한 마리)",
         },
         "보스": {
             "title": "시스템: /보스 (히든 보스 토벌)",
             "desc": "전투 후 살기가 감지되었을 때 출현하는 최종 히든 보스전입니다.\n"
-                    "• **출현 조건:** 일반 `/전투` 승리 시 6% 확률로 소환 경보가 발생해야 입장 가능합니다.\n"
-                    "• **보상:** 격퇴 성공 시 **$15,000~$30,000**의 막대한 자금과 **+100 pt** 명예 획득!\n"
+                    f"• **출현 조건:** 일반 `/전투` 승리 시 보스마다 각각 확률로 경보가 발생해야 입장 가능합니다. ({boss_chance_text()})\n"
+                    f"• **보상:** 격퇴 성공 시 막대한 자금과 명예, 제작 재료를 획득!\n{boss_reward_text()}\n"
                     "• **권장:** 명예 약 5,000pt + 수상한 주사기 / 슈퍼 울트라 주먹",
         },
         "도박": {
@@ -6438,6 +6494,7 @@ M_BORONIN = MATERIAL_PREFIX + "보로닌의 장갑판"
 M_EXEC    = MATERIAL_PREFIX + "처형자의 붉은 파편"
 M_DARK    = MATERIAL_PREFIX + "어둠의 핵"
 M_ORIGIN  = MATERIAL_PREFIX + "태초의 파편"
+M_EDEN    = MATERIAL_PREFIX + "에덴의 붉은 깃발"
 M_RAT     = MATERIAL_PREFIX + "쥐왕의 송곳니"
 M_BULL    = MATERIAL_PREFIX + "폭군의 닻줄"
 M_KING    = MATERIAL_PREFIX + "황제의 왕관 파편"
@@ -6452,6 +6509,7 @@ MATERIAL_SOURCES = {
     M_BORONIN: "/네임드: 철의 장군 보로닌",
     M_EXEC:    "/네임드: 붉은 달의 처형자",
     M_DARK:    "/보스: 어둠의 지배자",
+    M_EDEN:    "/보스: 에칼 데 페스토",
     M_ORIGIN:  "/보스: 태초의 파괴자",
     M_RAT:     "/레이드: 하수구의 쥐왕",
     M_BULL:    "/레이드: 부두 항만의 폭군",
@@ -6473,6 +6531,7 @@ MATERIAL_DROPS = {
     "[네임드] 붉은 달의 처형자":   [(M_EXEC, 1.00, (1, 2)), (M_ALLOY, 1.00, (2, 3))],
     # /보스
     "[히든보스] 어둠의 지배자":    [(M_DARK, 1.00, (2, 3)), (M_ALLOY, 1.00, (2, 4))],
+    "[테러보스] 에칼 데 페스토":   [(M_EDEN, 1.00, (2, 3)), (M_ALLOY, 1.00, (3, 4))],
     "[최강보스] 태초의 파괴자":    [(M_ORIGIN, 1.00, (2, 3)), (M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (3, 5))],
     # /레이드 (RAID_TIERS 의 name)
     "하수구의 쥐왕":      [(M_RAT, 1.00, (1, 3)), (M_SCRAP, 1.00, (3, 5))],
@@ -6497,6 +6556,7 @@ CRAFT_RECIPES = [
     _recipe("w_king",   "황제의 홀",            "weapon",   7000, {M_KING: 3, M_ALLOY: 6},       atk=900, hp=1500,   desc="지하 황제의 왕관 파편으로 장식한 홀."),
     _recipe("w_exec",   "처형자의 붉은 낫",     "weapon",  10000, {M_EXEC: 3, M_ALLOY: 8},       atk=1100, hp=1000,  desc="붉은 달 아래 처형에 쓰이던 낫."),
     _recipe("w_dark",   "어둠의 대검",          "weapon",  15000, {M_DARK: 2, M_ALLOY: 8},       atk=1300, hp=2000,  desc="어둠의 핵이 박힌 거대한 대검."),
+    _recipe("w_eden",   "혁명의 붉은 총검",     "weapon",  22000, {M_EDEN: 2, M_ALLOY: 9},       atk=1600, hp=2800,  desc="에덴의 붉은 깃발을 감아 만든 총검."),
     _recipe("w_origin", "태초의 파괴검",        "weapon",  30000, {M_ORIGIN: 2, M_ALLOY: 10},    atk=2000, hp=3500,  desc="태초의 파편이 깃든 파괴의 검."),
     # ── 방어구
     _recipe("a_vest",    "보강 방탄 조끼",       "armor",    600, {M_SCRAP: 10},                 df=25,  hp=400,     desc="고철 판으로 보강한 조끼."),
@@ -6506,6 +6566,7 @@ CRAFT_RECIPES = [
     _recipe("a_boronin", "보로닌의 장군 갑주",   "armor",   7500, {M_BORONIN: 3, M_ALLOY: 6},    df=200, hp=2500,    desc="철의 장군의 장갑판을 이은 갑주."),
     _recipe("a_king",    "황제의 왕관 갑주",     "armor",  10000, {M_KING: 3, M_ALLOY: 8},       df=240, hp=3000,    desc="황제의 왕관 파편이 박힌 갑주."),
     _recipe("a_dark",    "어둠의 갑주",          "armor",  15000, {M_DARK: 2, M_ALLOY: 10},      df=330, hp=5000,    desc="어둠의 핵이 맥동하는 갑주."),
+    _recipe("a_eden",    "붉은 깃발 방탄 코트",  "armor",  22000, {M_EDEN: 2, M_ALLOY: 9},       df=410, hp=6500,    desc="에덴의 붉은 깃발로 안감을 댄 방탄 코트."),
     _recipe("a_origin",  "태초의 방벽",          "armor",  30000, {M_ORIGIN: 2, M_ALLOY: 10},    df=500, hp=8000,    desc="태초의 파편으로 빚어낸 절대 방벽."),
 ]
 CRAFT_BY_ID = {r["id"]: r for r in CRAFT_RECIPES}
