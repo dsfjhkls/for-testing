@@ -1499,8 +1499,47 @@ async def settings_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=view.current_embed(), view=view, ephemeral=True)
     view.message = await interaction.original_response()
 
+# === [경찰 전용] `/검거` 성공 시 아이템 압류 ===
+ARREST_SEIZE_MIN = 1   # 한 번에 압류하는 아이템 종류 수 (최소)
+ARREST_SEIZE_MAX = 2   # 한 번에 압류하는 아이템 종류 수 (최대)
+
+def seize_items_sync(police_id: int, target_id: int) -> list:
+    """검거된 조직원의 아이템 중 랜덤 1~2종을 1개씩 빼앗아 경찰 인벤토리에 넣습니다. (동기 DB 작업 → to_thread 로 실행)
+    재료와 거래 불가 아이템(네임드 전리품 등)은 압류하지 않습니다. 반환: 압류한 아이템 이름 목록"""
+    _require_db()
+    with _inv_lock:
+        t_inv = dict(get_user_data(target_id).get("inventory") or {})
+        candidates = [k for k, v in t_inv.items() if int(v or 0) > 0 and not k.startswith("[재료]") and auction_blocked_reason(k) is None]
+        if not candidates:
+            return []
+        picked = random.sample(candidates, min(random.randint(ARREST_SEIZE_MIN, ARREST_SEIZE_MAX), len(candidates)))
+        new_t_inv = dict(t_inv)
+        for k in picked:
+            if int(new_t_inv[k]) <= 1:
+                new_t_inv.pop(k, None)
+            else:
+                new_t_inv[k] = int(new_t_inv[k]) - 1
+
+        p_inv = dict(get_user_data(police_id).get("inventory") or {})
+        for k in picked:
+            p_inv[k] = int(p_inv.get(k, 0) or 0) + 1
+
+        # '조직원에게서 빼앗기 → 경찰에게 넣기' 순서로 저장하고, 경찰 쪽 저장이 실패하면 조직원 인벤토리를 되돌린다
+        res = supabase.table("user_data").update({"inventory": new_t_inv}).eq("user_id", str(target_id)).execute()
+        _check_updated(res, "seize (target)")
+        try:
+            res = supabase.table("user_data").update({"inventory": p_inv}).eq("user_id", str(police_id)).execute()
+            _check_updated(res, "seize (police)")
+        except Exception:
+            try:
+                supabase.table("user_data").update({"inventory": t_inv}).eq("user_id", str(target_id)).execute()
+            except Exception as e2:
+                print(f"DB Error (seize rollback): {e2}")
+            raise
+        return picked
+
 # === [경찰 전용] `/검거` 명령어 (서버 공개 알림형) ===
-@bot.tree.command(name="검거", description="[경찰 전용] 지명수배 중인 마피아를 체포하여 감옥에 가둡니다.")
+@bot.tree.command(name="검거", description="[경찰 전용] 지명수배 중인 마피아를 체포하여 감옥에 가두고 소지품 일부를 압류합니다.")
 @app_commands.describe(member="검거할 수배 대상 마피아")
 async def arrest_member(interaction: discord.Interaction, member: discord.Member):
     if not await check_maintenance(interaction): return
@@ -1571,6 +1610,14 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
     except Exception:
         pass
 
+    # 압류: 조직원 아이템 랜덤 1~2종을 경찰이 가져감
+    try:
+        seized_items = await asyncio.to_thread(seize_items_sync, interaction.user.id, target_id)
+    except Exception as e:
+        print(f"Seize error: {e}")
+        seized_items = []
+    seize_text = ", ".join(f"`{it}`" for it in seized_items) if seized_items else "압류할 수 있는 물품이 없었습니다."
+
     police_info = get_user_data(interaction.user.id)
     police_rank = get_user_rank(police_info["honor"], is_police=True)
 
@@ -1582,7 +1629,8 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
             f"**처벌 내용:** **{jail_time_seconds // 60}분** 동안 감옥에 수감되며 프로필 외 모든 활동이 통제됩니다.\n"
             f"**현재 거점:** `감옥`\n\n"
             f"**검거 포상금:** `${arrest_money:,}`{money_note}\n"
-            f"**경찰 실적:** `+{arrest_honor} pt`{honor_note} (현재 직급: `{police_rank}`)"
+            f"**경찰 실적:** `+{arrest_honor} pt`{honor_note} (현재 직급: `{police_rank}`)\n"
+            f"**압류 물품:** {seize_text}"
         ),
         color=discord.Color.dark_blue()
     )
@@ -4700,7 +4748,7 @@ async def info_command(interaction: discord.Interaction, keyword: str):
         },
         "검거": {
             "title": "명령어: /검거 [대상] (경찰 전용)",
-            "desc": "지명수배 중인 마피아를 현장에서 체포하여 감옥에 3분간 수감하고 포상금을 획득합니다.",
+            "desc": "지명수배 중인 마피아를 현장에서 체포하여 감옥에 3분간 수감하고 포상금을 획득합니다. 체포 시 대상 조직원의 아이템 중 랜덤 1~2종(각 1개)을 압류해 내 인벤토리로 가져옵니다. (재료와 네임드 전리품 등 거래 불가 아이템은 제외)",
         },
         "밀수": {
             "title": "명령어: /밀수 [경찰] [뇌물] (조직원 전용)",
