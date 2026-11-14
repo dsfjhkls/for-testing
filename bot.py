@@ -374,11 +374,19 @@ def compute_combat_stats(honor: int, inventory: dict) -> dict:
     hp = 1000 + honor * 5
     atk = 100 + int(honor * 0.5)
     def_val = 10
+    shop_w = (0, 0)   # 상점 무기: 위에서부터 먼저 보유한 하나만
     for name, a, h in WEAPON_TIERS:
         if name in inventory:
-            atk += a
-            hp += h
+            shop_w = (a, h)
             break
+    # 제작 장비(/제작): 무기는 상점 무기와 비교해 더 강한 쪽, 방어구는 가장 강한 1개만 적용
+    craft_w, craft_a = crafted_gear_best(inventory)
+    use_w = max(shop_w, (craft_w["atk"], craft_w["hp"])) if craft_w else shop_w
+    atk += use_w[0]
+    hp += use_w[1]
+    if craft_a:
+        def_val += craft_a["def"]
+        hp += craft_a["hp"]
     if "임무 실패 방지권" in inventory: def_val += 20
     return {"hp": hp, "atk": atk, "def": def_val}
 
@@ -527,7 +535,7 @@ TITLES = {
     "unlucky":      {"name": "불운한 쥐새끼",   "desc": "임무 5회 실패",                        "check": lambda s, i: s["fail"] >= 5},
     "rich":         {"name": "검은 돈의 주인",  "desc": "보유 자금 $100,000 이상",               "check": lambda s, i: (i.get("money") or 0) >= 100000},
     "respected":    {"name": "존경받는 자",     "desc": "조직 명예 300pt 이상 (솔다토 이상)",   "check": lambda s, i: (i.get("honor") or 0) >= 300},
-    "collector":    {"name": "장비 수집가",     "desc": "암시장 장비 10개 이상 보유",            "check": lambda s, i: len([k for k in (i.get("inventory") or {}) if not k.startswith("[전리품]")]) >= 10},
+    "collector":    {"name": "장비 수집가",     "desc": "암시장 장비 10개 이상 보유",            "check": lambda s, i: len([k for k in (i.get("inventory") or {}) if not k.startswith(("[전리품]", "[재료]", "[제작]"))]) >= 10},
     "named_hunter": {"name": "네임드 사냥꾼",   "desc": "네임드 몬스터 1종 처치",                "check": lambda s, i: any(k.startswith("[전리품]") for k in (i.get("inventory") or {}))},
     "named_slayer": {"name": "네임드 학살자",   "desc": "네임드 몬스터 4종 모두 처치",          "check": lambda s, i: sum(1 for k in (i.get("inventory") or {}) if k.startswith("[전리품]")) >= 4},
     "gambler":      {"name": "도박꾼",          "desc": "도박 10판 플레이",                     "check": lambda s, i: s["gamble_played"] >= 10},
@@ -1924,6 +1932,16 @@ class NPCBattleView(GuardedView):
                     drop_msg = f"\n**고유 전리품 획득:** {drop_item}"
                 else:
                     drop_msg = "\n이미 전리품을 보유 중입니다."
+
+            # 제작 재료 드랍 (/제작) — 일반 전투·네임드·보스 공통
+            mat_drops = roll_material_drops(self.npc_info["name"])
+            if mat_drops:
+                inv = update_payload.get("inventory")
+                if inv is None:
+                    inv = user_data.get("inventory") or {}
+                add_materials(inv, mat_drops)
+                update_payload["inventory"] = inv
+                drop_msg += f"\n**제작 재료 획득:** {format_material_drops(mat_drops)}"
 
             # 일일 의뢰 집계 (NPC 전투 승리)
             daily_blob = get_title_blob(user_data)
@@ -3571,8 +3589,12 @@ async def show_inventory(interaction: discord.Interaction):
     inventory = user_stats.get("inventory", {})
 
     embed = discord.Embed(title=f"[{interaction.user.name} 님의 장비 가방]", color=discord.Color.dark_green())
-    inv_list = [f"• **{item}** `[보유 중]`" for item in inventory.keys()] if inventory else ["*가방이 비어 있습니다.*"]
+    gear_keys = [k for k in inventory.keys() if not k.startswith(MATERIAL_PREFIX)]
+    inv_list = [f"• **{item}** `[보유 중]`" for item in gear_keys] if gear_keys else ["*보유 중인 장비가 없습니다.*"]
     embed.add_field(name="보유 중인 전용 장비", value="\n".join(inv_list), inline=False)
+    mat_lines = [f"• {k[len(MATERIAL_PREFIX):]} x{v}" for k, v in inventory.items() if k.startswith(MATERIAL_PREFIX) and v > 0]
+    if mat_lines:
+        embed.add_field(name="제작 재료 (`/제작`)", value="\n".join(mat_lines), inline=False)
     
     if interaction.user.avatar:
         embed.set_thumbnail(url=interaction.user.avatar.url)
@@ -4744,6 +4766,7 @@ def raid_do_aoe(s: RaidSession):
 def _raid_settle_sync(s: RaidSession, win: bool):
     """보상 지급 + 조직 갱신 (동기 DB 작업이라 to_thread 로 실행). 반환: [(RaidPlayer, money, honor)], total_money"""
     t = s.tier
+    s.material_drops = {}   # {user_id: {재료: 개수}}  (정산 결과 화면에 표시)
     attackers = [p for p in s.players.values() if p.dmg_done > 0]
     results = []
     total_money = 0
@@ -4764,6 +4787,14 @@ def _raid_settle_sync(s: RaidSession, win: bool):
                 update_user_stats(p.uid, money, honor)
             except Exception as e:
                 print(f"Raid reward error ({p.uid}): {e}")
+            if win:   # 제작 재료 (/제작)
+                drops = roll_material_drops(t["name"])
+                if drops:
+                    try:
+                        grant_materials_sync(p.uid, drops)
+                        s.material_drops[p.uid] = drops
+                    except Exception as e:
+                        print(f"Raid material error ({p.uid}): {e}")
     if win:
         try:
             fam = family_get_by_id(s.fid)
@@ -4856,7 +4887,9 @@ async def run_raid(s: RaidSession):
             title, color = "[레이드 실패]", discord.Color.dark_red()
         lines = []
         for p, money, honor in sorted(results, key=lambda r: -r[0].dmg_done):
-            lines.append(f"• **{p.name}** — 딜 {p.dmg_done:,} ({p.hits}회) → `${money:,}`" + (f" / 명예 `+{honor}pt`" if honor else ""))
+            _mats = getattr(s, "material_drops", {}).get(p.uid)
+            lines.append(f"• **{p.name}** — 딜 {p.dmg_done:,} ({p.hits}회) → `${money:,}`" + (f" / 명예 `+{honor}pt`" if honor else "")
+                         + (f"\n  └ 재료: {format_material_drops(_mats)}" if _mats else ""))
         if not lines:
             lines.append("공격에 참여한 사람이 없어 보상이 없습니다.")
         desc = f"{reason}\n\n" + "\n".join(lines)
@@ -6172,6 +6205,337 @@ async def escape_command(interaction: discord.Interaction):
     game = EscapeGameView(user)
     await interaction.response.send_message(embed=game.build_embed(), view=game)
     game.message = await interaction.original_response()
+
+
+# ==========================================================================
+# [제작 시스템]   /제작
+#
+#   • 재료는 전투 승리 시 인벤토리에 "[재료] ..." 이름으로 개수가 쌓입니다.
+#       - /전투(NPC)·/네임드·/보스 : NPCBattleView.end_battle 에서 지급  (MATERIAL_DROPS 의 NPC/보스 이름 기준)
+#       - /레이드 : 레이드 성공 시 공격에 참여한 사람 모두에게 지급 (_raid_settle_sync)
+#   • 제작한 장비는 "[제작] 이름" 으로 인벤토리에 1개 저장되고, compute_combat_stats 에서 전투 스탯에 반영됩니다.
+#       - 무기: 보유한 무기(상점 무기 포함) 중 가장 강한 것 하나만 적용
+#       - 방어구: 제작한 방어구 중 가장 강한 것 하나만 적용
+#   • 조직원과 경찰 모두 사용할 수 있습니다. (레이드는 기존대로 조직원만 참가 가능)
+#   • 드랍률·레시피·스탯은 아래 표에서 바로 조절할 수 있습니다. (제작비를 없애려면 money 를 0 으로)
+# ==========================================================================
+import threading as _threading
+
+MATERIAL_PREFIX = "[재료] "
+CRAFT_PREFIX = "[제작] "
+
+M_SCRAP   = MATERIAL_PREFIX + "고철 조각"
+M_STEEL   = MATERIAL_PREFIX + "단련 강철"
+M_ALLOY   = MATERIAL_PREFIX + "특수 합금"
+M_MARCO   = MATERIAL_PREFIX + "마르코의 정육 칼날"
+M_BIANCA  = MATERIAL_PREFIX + "비앙카의 맹독 결정"
+M_BORONIN = MATERIAL_PREFIX + "보로닌의 장갑판"
+M_EXEC    = MATERIAL_PREFIX + "처형자의 붉은 파편"
+M_DARK    = MATERIAL_PREFIX + "어둠의 핵"
+M_ORIGIN  = MATERIAL_PREFIX + "태초의 파편"
+M_RAT     = MATERIAL_PREFIX + "쥐왕의 송곳니"
+M_BULL    = MATERIAL_PREFIX + "폭군의 닻줄"
+M_KING    = MATERIAL_PREFIX + "황제의 왕관 파편"
+
+# 재료 → 획득처 안내 (/제작 화면에 표시)
+MATERIAL_SOURCES = {
+    M_SCRAP:   "/전투: 골목길 깡패·배신자·거상",
+    M_STEEL:   "/전투: 배신자·거상·수배자·암살자 / 네임드",
+    M_ALLOY:   "/전투: 수배자·암살자 / 네임드·보스·레이드",
+    M_MARCO:   "/네임드: 백정 마르코",
+    M_BIANCA:  "/네임드: 독사 비앙카",
+    M_BORONIN: "/네임드: 철의 장군 보로닌",
+    M_EXEC:    "/네임드: 붉은 달의 처형자",
+    M_DARK:    "/보스: 어둠의 지배자",
+    M_ORIGIN:  "/보스: 태초의 파괴자",
+    M_RAT:     "/레이드: 하수구의 쥐왕",
+    M_BULL:    "/레이드: 부두 항만의 폭군",
+    M_KING:    "/레이드: 칼렌데 지하 황제",
+}
+
+# 드랍 표: {처치한 대상 이름: [(재료, 확률, (최소, 최대)), ...]}   — 승리했을 때만 지급
+MATERIAL_DROPS = {
+    # /전투
+    "골목길 깡패":      [(M_SCRAP, 0.70, (1, 2))],
+    "조직의 배신자":    [(M_SCRAP, 1.00, (1, 3)), (M_STEEL, 0.25, (1, 1))],
+    "암시장 악덕 거상": [(M_STEEL, 0.80, (1, 2)), (M_SCRAP, 0.50, (1, 3))],
+    "지명수배자 보스":  [(M_STEEL, 1.00, (1, 3)), (M_ALLOY, 0.25, (1, 1))],
+    "칼렌데 암살자":    [(M_ALLOY, 0.70, (1, 2)), (M_STEEL, 0.50, (1, 2))],
+    # /네임드
+    "[네임드] 백정 마르코":        [(M_MARCO, 1.00, (1, 2)), (M_STEEL, 1.00, (1, 3))],
+    "[네임드] 독사 비앙카":        [(M_BIANCA, 1.00, (1, 2)), (M_STEEL, 1.00, (1, 3)), (M_ALLOY, 0.30, (1, 1))],
+    "[네임드] 철의 장군 보로닌":   [(M_BORONIN, 1.00, (1, 2)), (M_ALLOY, 1.00, (1, 2))],
+    "[네임드] 붉은 달의 처형자":   [(M_EXEC, 1.00, (1, 2)), (M_ALLOY, 1.00, (2, 3))],
+    # /보스
+    "[히든보스] 어둠의 지배자":    [(M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (2, 4))],
+    "[최강보스] 태초의 파괴자":    [(M_ORIGIN, 1.00, (1, 2)), (M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (3, 5))],
+    # /레이드 (RAID_TIERS 의 name)
+    "하수구의 쥐왕":      [(M_RAT, 1.00, (1, 2)), (M_SCRAP, 1.00, (3, 5))],
+    "부두 항만의 폭군":   [(M_BULL, 1.00, (1, 2)), (M_STEEL, 1.00, (2, 4))],
+    "칼렌데 지하 황제":   [(M_KING, 1.00, (1, 2)), (M_ALLOY, 1.00, (2, 3))],
+}
+
+
+def _recipe(rid, name, slot, money, mats, atk=0, hp=0, df=0, desc=""):
+    return {"id": rid, "name": name, "slot": slot, "money": money, "mats": mats,
+            "atk": atk, "hp": hp, "def": df, "desc": desc}
+
+# 제작 레시피 (slot: weapon / armor)
+CRAFT_RECIPES = [
+    # ── 무기
+    _recipe("w_pipe",   "보강 쇠파이프",        "weapon",   2000, {M_SCRAP: 8},                          atk=250,            desc="고철을 덧대 만든 묵직한 쇠파이프."),
+    _recipe("w_rat",    "쥐왕의 송곳니 단검",   "weapon",   3500, {M_RAT: 4, M_SCRAP: 8},                atk=350, hp=200,    desc="쥐왕의 송곳니를 갈아 만든 단검."),
+    _recipe("w_steel",  "단조 강철검",          "weapon",   6000, {M_STEEL: 6, M_SCRAP: 6},              atk=400, hp=300,    desc="단련 강철을 두들겨 만든 검."),
+    _recipe("w_alloy",  "합금 돌격소총",        "weapon",  16000, {M_ALLOY: 5, M_STEEL: 8},              atk=600, hp=600,    desc="특수 합금 부품으로 조립한 소총."),
+    _recipe("w_marco",  "마르코의 도살 칼",     "weapon",  14000, {M_MARCO: 4, M_STEEL: 10},             atk=700,            desc="백정 마르코의 칼날을 이어 붙인 정육 칼."),
+    _recipe("w_bianca", "비앙카의 독니 단검",   "weapon",  25000, {M_BIANCA: 4, M_ALLOY: 6},             atk=850, hp=500,    desc="맹독 결정을 머금은 암살용 단검."),
+    _recipe("w_king",   "황제의 홀",            "weapon",  28000, {M_KING: 4, M_ALLOY: 8},               atk=900, hp=1500,   desc="지하 황제의 왕관 파편으로 장식한 홀."),
+    _recipe("w_exec",   "처형자의 붉은 낫",     "weapon",  40000, {M_EXEC: 4, M_ALLOY: 10},              atk=1100, hp=1000,  desc="붉은 달 아래 처형에 쓰이던 낫."),
+    _recipe("w_dark",   "어둠의 대검",          "weapon",  50000, {M_DARK: 3, M_ALLOY: 10},              atk=1300, hp=2000,  desc="어둠의 핵이 박힌 거대한 대검."),
+    _recipe("w_origin", "태초의 파괴검",        "weapon", 100000, {M_ORIGIN: 3, M_DARK: 3, M_ALLOY: 12}, atk=2000, hp=3500,  desc="태초의 파편이 깃든 파괴의 검."),
+    # ── 방어구
+    _recipe("a_vest",    "보강 방탄 조끼",       "armor",   2500, {M_SCRAP: 10},                         df=25,  hp=400,     desc="고철 판으로 보강한 조끼."),
+    _recipe("a_plate",   "강철 판금 갑옷",       "armor",   7000, {M_STEEL: 8, M_SCRAP: 8},              df=60,  hp=900,     desc="단련 강철 판금으로 만든 갑옷."),
+    _recipe("a_bull",    "폭군의 닻줄 갑옷",     "armor",   9000, {M_BULL: 4, M_STEEL: 8},               df=80,  hp=1200,    desc="폭군의 닻줄을 엮어 만든 갑옷."),
+    _recipe("a_alloy",   "합금 전술 갑주",       "armor",  18000, {M_ALLOY: 6, M_STEEL: 8},              df=110, hp=1600,    desc="특수 합금으로 제작한 전술 갑주."),
+    _recipe("a_boronin", "보로닌의 장군 갑주",   "armor",  30000, {M_BORONIN: 4, M_ALLOY: 8},            df=200, hp=2500,    desc="철의 장군의 장갑판을 이은 갑주."),
+    _recipe("a_king",    "황제의 왕관 갑주",     "armor",  40000, {M_KING: 4, M_ALLOY: 10},              df=240, hp=3000,    desc="황제의 왕관 파편이 박힌 갑주."),
+    _recipe("a_dark",    "어둠의 갑주",          "armor",  60000, {M_DARK: 3, M_ALLOY: 12},              df=330, hp=5000,    desc="어둠의 핵이 맥동하는 갑주."),
+    _recipe("a_origin",  "태초의 방벽",          "armor", 110000, {M_ORIGIN: 3, M_DARK: 3, M_ALLOY: 12}, df=500, hp=8000,    desc="태초의 파편으로 빚어낸 절대 방벽."),
+]
+CRAFT_BY_ID = {r["id"]: r for r in CRAFT_RECIPES}
+CRAFT_BY_ITEM = {CRAFT_PREFIX + r["name"]: r for r in CRAFT_RECIPES}
+CRAFT_SLOT_LABEL = {"weapon": "무기", "armor": "방어구"}
+
+_inv_lock = _threading.Lock()   # 재료 지급·제작처럼 인벤토리를 읽고 다시 쓰는 작업이 서로 덮어쓰지 않도록
+
+
+def crafted_gear_best(inventory: dict):
+    """보유한 제작 장비 중 가장 강한 (무기, 방어구) 레시피. 없으면 None."""
+    best_w, best_a = None, None
+    for key, r in CRAFT_BY_ITEM.items():
+        if key not in (inventory or {}):
+            continue
+        if r["slot"] == "weapon":
+            if best_w is None or (r["atk"], r["hp"]) > (best_w["atk"], best_w["hp"]):
+                best_w = r
+        else:
+            if best_a is None or (r["def"], r["hp"]) > (best_a["def"], best_a["hp"]):
+                best_a = r
+    return best_w, best_a
+
+
+def _mat_short(name: str) -> str:
+    return name[len(MATERIAL_PREFIX):] if name.startswith(MATERIAL_PREFIX) else name
+
+
+def roll_material_drops(source_name: str) -> dict:
+    """처치한 대상 이름으로 드랍 판정 → {재료: 개수}"""
+    drops = {}
+    for mat, chance, (lo, hi) in MATERIAL_DROPS.get(source_name, []):
+        if random.random() < chance:
+            drops[mat] = drops.get(mat, 0) + random.randint(lo, hi)
+    return drops
+
+
+def add_materials(inventory: dict, drops: dict) -> dict:
+    for mat, n in drops.items():
+        inventory[mat] = inventory.get(mat, 0) + n
+    return inventory
+
+
+def format_material_drops(drops: dict) -> str:
+    return ", ".join(f"{_mat_short(k)} x{v}" for k, v in drops.items())
+
+
+def grant_materials_sync(user_id: int, drops: dict):
+    """(레이드 정산 등) 인벤토리에 재료를 더해 DB 에 저장"""
+    if not drops:
+        return
+    _require_db()
+    with _inv_lock:
+        data = get_user_data(user_id)
+        inv = dict(data.get("inventory") or {})
+        add_materials(inv, drops)
+        res = supabase.table("user_data").update({"inventory": inv}).eq("user_id", str(user_id)).execute()
+        _check_updated(res, "grant_materials")
+
+
+def craft_missing(inv: dict, money: int, r: dict) -> list:
+    """부족한 항목 설명 목록 (비어 있으면 제작 가능)"""
+    lacks = [f"{_mat_short(m)} {need - inv.get(m, 0)}개" for m, need in r["mats"].items() if inv.get(m, 0) < need]
+    if money < r["money"]:
+        lacks.append(f"제작비 ${r['money'] - money:,}")
+    return lacks
+
+
+def craft_sync(user_id: int, recipe_id: str):
+    """제작 실행. 반환: (성공 여부, 메시지, 남은 자금)"""
+    r = CRAFT_BY_ID.get(recipe_id)
+    if not r:
+        return False, "존재하지 않는 제작법입니다.", None
+    _require_db()
+    with _inv_lock:
+        data = get_user_data(user_id)
+        inv = dict(data.get("inventory") or {})
+        money = int(data.get("money") or 0)
+        item = CRAFT_PREFIX + r["name"]
+        if item in inv:
+            return False, "이미 보유한 장비입니다.", money
+        lacks = craft_missing(inv, money, r)
+        if lacks:
+            return False, "부족한 항목: " + ", ".join(lacks), money
+        for m, need in r["mats"].items():
+            inv[m] -= need
+            if inv[m] <= 0:
+                del inv[m]
+        inv[item] = 1
+        money -= r["money"]
+        res = supabase.table("user_data").update({"money": money, "inventory": inv}).eq("user_id", str(user_id)).execute()
+        _check_updated(res, "craft")
+        return True, "", money
+
+
+def craft_stat_text(r: dict) -> str:
+    parts = []
+    if r["atk"]: parts.append(f"공격력 +{r['atk']:,}")
+    if r["def"]: parts.append(f"방어력 +{r['def']:,}")
+    if r["hp"]:  parts.append(f"체력 +{r['hp']:,}")
+    return " / ".join(parts)
+
+
+# ---------------------------------------------------------------- UI
+def craft_main_embed(user: discord.Member, data: dict, note: str = "") -> discord.Embed:
+    inv = data.get("inventory") or {}
+    money = int(data.get("money") or 0)
+    embed = discord.Embed(title="[제작소] 장비 제작", color=discord.Color.dark_orange())
+    desc = ("전투에서 모은 **재료**로 무기와 방어구를 만들 수 있습니다. 아래 목록에서 제작할 장비를 고르세요.\n"
+            "무기·방어구는 각각 **가장 강한 1개만** 전투 능력치에 적용됩니다. (상점 무기와도 비교해 더 강한 쪽 적용)")
+    if note:
+        desc = f"{note}\n\n{desc}"
+    embed.description = desc
+
+    mats = [(m, inv.get(m, 0)) for m in MATERIAL_SOURCES]
+    lines = [f"• **{_mat_short(m)}** x{n} — *{MATERIAL_SOURCES[m]}*" for m, n in mats]
+    embed.add_field(name="재료 보유 현황 / 획득처", value="\n".join(lines), inline=False)
+
+    bw, ba = crafted_gear_best(inv)
+    applied = (f"무기: **{bw['name']}** ({craft_stat_text(bw)})" if bw else "무기: 없음") + "\n" + \
+              (f"방어구: **{ba['name']}** ({craft_stat_text(ba)})" if ba else "방어구: 없음")
+    embed.add_field(name="현재 적용 중인 제작 장비", value=applied, inline=False)
+    embed.set_footer(text=f"보유 자금 ${money:,}")
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    return embed
+
+
+def craft_detail_embed(user: discord.Member, data: dict, r: dict, note: str = "") -> discord.Embed:
+    inv = data.get("inventory") or {}
+    money = int(data.get("money") or 0)
+    owned = (CRAFT_PREFIX + r["name"]) in inv
+    embed = discord.Embed(title=f"[제작] {r['name']}", color=discord.Color.dark_orange())
+    desc = f"*{r['desc']}*\n\n**종류:** {CRAFT_SLOT_LABEL[r['slot']]}\n**효과:** {craft_stat_text(r)}"
+    if note:
+        desc = f"{note}\n\n{desc}"
+    if owned:
+        desc += "\n\n**이미 보유 중인 장비입니다.**"
+    embed.description = desc
+    req = []
+    for m, need in r["mats"].items():
+        have = inv.get(m, 0)
+        req.append(f"{'[충족]' if have >= need else '[부족]'} {_mat_short(m)} {have}/{need}")
+    req.append(f"{'[충족]' if money >= r['money'] else '[부족]'} 제작비 ${money:,} / ${r['money']:,}")
+    embed.add_field(name="필요 재료", value="\n".join(req), inline=False)
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    return embed
+
+
+class CraftView(GuardedView):
+    def __init__(self, owner: discord.Member, data: dict, selected: str = None):
+        super().__init__(timeout=180)
+        self.owner = owner
+        self.selected = selected
+        self.message = None
+        self._build(data)
+
+    def _build(self, data: dict):
+        self.clear_items()
+        inv = data.get("inventory") or {}
+        money = int(data.get("money") or 0)
+        options = []
+        for r in CRAFT_RECIPES:
+            if (CRAFT_PREFIX + r["name"]) in inv:
+                tag = "[보유]"
+            elif not craft_missing(inv, money, r):
+                tag = "[제작 가능]"
+            else:
+                tag = "[재료 부족]"
+            desc = f"{tag} {CRAFT_SLOT_LABEL[r['slot']]} | {craft_stat_text(r)} | ${r['money']:,}"
+            options.append(discord.SelectOption(label=r["name"], value=r["id"], description=desc[:100],
+                                                default=(r["id"] == self.selected)))
+        select = discord.ui.Select(placeholder="제작할 장비를 선택하세요...", options=options, min_values=1, max_values=1)
+        select.callback = self._on_select
+        self.add_item(select)
+
+        sel = CRAFT_BY_ID.get(self.selected)
+        can = bool(sel) and (CRAFT_PREFIX + sel["name"]) not in inv and not craft_missing(inv, money, sel)
+        button = discord.ui.Button(label="제작하기", style=discord.ButtonStyle.success, disabled=not can)
+        button.callback = self._on_craft
+        self.add_item(button)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner.id:
+            await interaction.response.send_message("본인의 제작 창만 조작할 수 있습니다.", ephemeral=True)
+            return False
+        return True
+
+    async def _on_select(self, interaction: discord.Interaction):
+        self.selected = interaction.data["values"][0]
+        data = await asyncio.to_thread(get_user_data, self.owner.id)
+        self._build(data)
+        await interaction.response.edit_message(
+            embed=craft_detail_embed(self.owner, data, CRAFT_BY_ID[self.selected]), view=self)
+
+    async def _on_craft(self, interaction: discord.Interaction):
+        rid = self.selected
+        if rid not in CRAFT_BY_ID:
+            await interaction.response.send_message("먼저 제작할 장비를 선택해 주세요.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        try:
+            ok, msg, _ = await asyncio.to_thread(craft_sync, self.owner.id, rid)
+        except Exception as e:
+            print(f"DB Error (craft): {e}")
+            await interaction.followup.send("데이터베이스 오류로 제작에 실패했습니다. 재료와 자금은 차감되지 않았습니다.", ephemeral=True)
+            return
+        data = await asyncio.to_thread(get_user_data, self.owner.id)
+        r = CRAFT_BY_ID[rid]
+        self._build(data)
+        note = f"**제작 완료!** {r['name']} 을(를) 손에 넣었습니다." if ok else f"**제작 실패** — {msg}"
+        embed = craft_detail_embed(self.owner, data, r, note)
+        embed.color = discord.Color.green() if ok else discord.Color.red()
+        await interaction.edit_original_response(embed=embed, view=self)
+
+    async def on_timeout(self):
+        if self.message is not None:
+            try:
+                await self.message.edit(view=None)
+            except discord.HTTPException:
+                pass
+
+
+@bot.tree.command(name="제작", description="[조직원/경찰] 전투·네임드·보스·레이드에서 얻은 재료로 무기와 방어구를 제작합니다.")
+async def craft_command(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    await interaction.response.defer()
+    user = interaction.user
+    data = await asyncio.to_thread(get_user_data, user.id)
+    view = CraftView(user, data)
+    view.message = await interaction.followup.send(embed=craft_main_embed(user, data), view=view)
 
 
 bot.run(os.getenv("DISCORD_TOKEN"))
