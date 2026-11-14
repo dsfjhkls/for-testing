@@ -6267,12 +6267,12 @@ MATERIAL_DROPS = {
     "[네임드] 철의 장군 보로닌":   [(M_BORONIN, 1.00, (1, 2)), (M_ALLOY, 1.00, (1, 2))],
     "[네임드] 붉은 달의 처형자":   [(M_EXEC, 1.00, (1, 2)), (M_ALLOY, 1.00, (2, 3))],
     # /보스
-    "[히든보스] 어둠의 지배자":    [(M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (2, 4))],
-    "[최강보스] 태초의 파괴자":    [(M_ORIGIN, 1.00, (1, 2)), (M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (3, 5))],
+    "[히든보스] 어둠의 지배자":    [(M_DARK, 1.00, (2, 3)), (M_ALLOY, 1.00, (2, 4))],
+    "[최강보스] 태초의 파괴자":    [(M_ORIGIN, 1.00, (2, 3)), (M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (3, 5))],
     # /레이드 (RAID_TIERS 의 name)
-    "하수구의 쥐왕":      [(M_RAT, 1.00, (1, 2)), (M_SCRAP, 1.00, (3, 5))],
-    "부두 항만의 폭군":   [(M_BULL, 1.00, (1, 2)), (M_STEEL, 1.00, (2, 4))],
-    "칼렌데 지하 황제":   [(M_KING, 1.00, (1, 2)), (M_ALLOY, 1.00, (2, 3))],
+    "하수구의 쥐왕":      [(M_RAT, 1.00, (1, 3)), (M_SCRAP, 1.00, (3, 5))],
+    "부두 항만의 폭군":   [(M_BULL, 1.00, (1, 3)), (M_STEEL, 1.00, (2, 4))],
+    "칼렌데 지하 황제":   [(M_KING, 1.00, (1, 3)), (M_ALLOY, 1.00, (2, 3))],
 }
 
 
@@ -6283,25 +6283,25 @@ def _recipe(rid, name, slot, money, mats, atk=0, hp=0, df=0, desc=""):
 # 제작 레시피 (slot: weapon / armor)
 CRAFT_RECIPES = [
     # ── 무기
-    _recipe("w_pipe",   "보강 쇠파이프",        "weapon",   2000, {M_SCRAP: 8},                          atk=250,            desc="고철을 덧대 만든 묵직한 쇠파이프."),
-    _recipe("w_rat",    "쥐왕의 송곳니 단검",   "weapon",   3500, {M_RAT: 4, M_SCRAP: 8},                atk=350, hp=200,    desc="쥐왕의 송곳니를 갈아 만든 단검."),
-    _recipe("w_steel",  "단조 강철검",          "weapon",   6000, {M_STEEL: 6, M_SCRAP: 6},              atk=400, hp=300,    desc="단련 강철을 두들겨 만든 검."),
-    _recipe("w_alloy",  "합금 돌격소총",        "weapon",  16000, {M_ALLOY: 5, M_STEEL: 8},              atk=600, hp=600,    desc="특수 합금 부품으로 조립한 소총."),
-    _recipe("w_marco",  "마르코의 도살 칼",     "weapon",  14000, {M_MARCO: 4, M_STEEL: 10},             atk=700,            desc="백정 마르코의 칼날을 이어 붙인 정육 칼."),
-    _recipe("w_bianca", "비앙카의 독니 단검",   "weapon",  25000, {M_BIANCA: 4, M_ALLOY: 6},             atk=850, hp=500,    desc="맹독 결정을 머금은 암살용 단검."),
-    _recipe("w_king",   "황제의 홀",            "weapon",  28000, {M_KING: 4, M_ALLOY: 8},               atk=900, hp=1500,   desc="지하 황제의 왕관 파편으로 장식한 홀."),
-    _recipe("w_exec",   "처형자의 붉은 낫",     "weapon",  40000, {M_EXEC: 4, M_ALLOY: 10},              atk=1100, hp=1000,  desc="붉은 달 아래 처형에 쓰이던 낫."),
-    _recipe("w_dark",   "어둠의 대검",          "weapon",  50000, {M_DARK: 3, M_ALLOY: 10},              atk=1300, hp=2000,  desc="어둠의 핵이 박힌 거대한 대검."),
-    _recipe("w_origin", "태초의 파괴검",        "weapon", 100000, {M_ORIGIN: 3, M_DARK: 3, M_ALLOY: 12}, atk=2000, hp=3500,  desc="태초의 파편이 깃든 파괴의 검."),
+    _recipe("w_pipe",   "보강 쇠파이프",        "weapon",    500, {M_SCRAP: 8},                  atk=250,            desc="고철을 덧대 만든 묵직한 쇠파이프."),
+    _recipe("w_rat",    "쥐왕의 송곳니 단검",   "weapon",   1000, {M_RAT: 3, M_SCRAP: 8},        atk=350, hp=200,    desc="쥐왕의 송곳니를 갈아 만든 단검."),
+    _recipe("w_steel",  "단조 강철검",          "weapon",   1500, {M_STEEL: 6, M_SCRAP: 6},      atk=400, hp=300,    desc="단련 강철을 두들겨 만든 검."),
+    _recipe("w_marco",  "마르코의 도살 칼",     "weapon",   3500, {M_MARCO: 3, M_STEEL: 6},      atk=700,            desc="백정 마르코의 칼날을 이어 붙인 정육 칼."),
+    _recipe("w_alloy",  "합금 돌격소총",        "weapon",   4000, {M_ALLOY: 5, M_STEEL: 8},      atk=600, hp=600,    desc="특수 합금 부품으로 조립한 소총."),
+    _recipe("w_bianca", "비앙카의 독니 단검",   "weapon",   6000, {M_BIANCA: 3, M_ALLOY: 5},     atk=850, hp=500,    desc="맹독 결정을 머금은 암살용 단검."),
+    _recipe("w_king",   "황제의 홀",            "weapon",   7000, {M_KING: 3, M_ALLOY: 6},       atk=900, hp=1500,   desc="지하 황제의 왕관 파편으로 장식한 홀."),
+    _recipe("w_exec",   "처형자의 붉은 낫",     "weapon",  10000, {M_EXEC: 3, M_ALLOY: 8},       atk=1100, hp=1000,  desc="붉은 달 아래 처형에 쓰이던 낫."),
+    _recipe("w_dark",   "어둠의 대검",          "weapon",  15000, {M_DARK: 2, M_ALLOY: 8},       atk=1300, hp=2000,  desc="어둠의 핵이 박힌 거대한 대검."),
+    _recipe("w_origin", "태초의 파괴검",        "weapon",  30000, {M_ORIGIN: 2, M_ALLOY: 10},    atk=2000, hp=3500,  desc="태초의 파편이 깃든 파괴의 검."),
     # ── 방어구
-    _recipe("a_vest",    "보강 방탄 조끼",       "armor",   2500, {M_SCRAP: 10},                         df=25,  hp=400,     desc="고철 판으로 보강한 조끼."),
-    _recipe("a_plate",   "강철 판금 갑옷",       "armor",   7000, {M_STEEL: 8, M_SCRAP: 8},              df=60,  hp=900,     desc="단련 강철 판금으로 만든 갑옷."),
-    _recipe("a_bull",    "폭군의 닻줄 갑옷",     "armor",   9000, {M_BULL: 4, M_STEEL: 8},               df=80,  hp=1200,    desc="폭군의 닻줄을 엮어 만든 갑옷."),
-    _recipe("a_alloy",   "합금 전술 갑주",       "armor",  18000, {M_ALLOY: 6, M_STEEL: 8},              df=110, hp=1600,    desc="특수 합금으로 제작한 전술 갑주."),
-    _recipe("a_boronin", "보로닌의 장군 갑주",   "armor",  30000, {M_BORONIN: 4, M_ALLOY: 8},            df=200, hp=2500,    desc="철의 장군의 장갑판을 이은 갑주."),
-    _recipe("a_king",    "황제의 왕관 갑주",     "armor",  40000, {M_KING: 4, M_ALLOY: 10},              df=240, hp=3000,    desc="황제의 왕관 파편이 박힌 갑주."),
-    _recipe("a_dark",    "어둠의 갑주",          "armor",  60000, {M_DARK: 3, M_ALLOY: 12},              df=330, hp=5000,    desc="어둠의 핵이 맥동하는 갑주."),
-    _recipe("a_origin",  "태초의 방벽",          "armor", 110000, {M_ORIGIN: 3, M_DARK: 3, M_ALLOY: 12}, df=500, hp=8000,    desc="태초의 파편으로 빚어낸 절대 방벽."),
+    _recipe("a_vest",    "보강 방탄 조끼",       "armor",    600, {M_SCRAP: 10},                 df=25,  hp=400,     desc="고철 판으로 보강한 조끼."),
+    _recipe("a_plate",   "강철 판금 갑옷",       "armor",   1800, {M_STEEL: 6, M_SCRAP: 6},      df=60,  hp=900,     desc="단련 강철 판금으로 만든 갑옷."),
+    _recipe("a_bull",    "폭군의 닻줄 갑옷",     "armor",   2500, {M_BULL: 3, M_STEEL: 6},       df=80,  hp=1200,    desc="폭군의 닻줄을 엮어 만든 갑옷."),
+    _recipe("a_alloy",   "합금 전술 갑주",       "armor",   4500, {M_ALLOY: 6, M_STEEL: 8},      df=110, hp=1600,    desc="특수 합금으로 제작한 전술 갑주."),
+    _recipe("a_boronin", "보로닌의 장군 갑주",   "armor",   7500, {M_BORONIN: 3, M_ALLOY: 6},    df=200, hp=2500,    desc="철의 장군의 장갑판을 이은 갑주."),
+    _recipe("a_king",    "황제의 왕관 갑주",     "armor",  10000, {M_KING: 3, M_ALLOY: 8},       df=240, hp=3000,    desc="황제의 왕관 파편이 박힌 갑주."),
+    _recipe("a_dark",    "어둠의 갑주",          "armor",  15000, {M_DARK: 2, M_ALLOY: 10},      df=330, hp=5000,    desc="어둠의 핵이 맥동하는 갑주."),
+    _recipe("a_origin",  "태초의 방벽",          "armor",  30000, {M_ORIGIN: 2, M_ALLOY: 10},    df=500, hp=8000,    desc="태초의 파편으로 빚어낸 절대 방벽."),
 ]
 CRAFT_BY_ID = {r["id"]: r for r in CRAFT_RECIPES}
 CRAFT_BY_ITEM = {CRAFT_PREFIX + r["name"]: r for r in CRAFT_RECIPES}
