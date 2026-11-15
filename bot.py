@@ -2544,7 +2544,7 @@ def operation_success_rate(op: dict, inventory: dict, in_patrol: bool, wanted_n:
         labels.append(f"기동타격대 무전기 (+{POLICE_RADIO_OP_BONUS}%)")
     return max(1, min(98, rate)), labels
 
-def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n: int) -> dict:
+def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n: int, forced_success=None) -> dict:
     """작전 판정 + 보상/벌금 + 업적 카운터를 한 번에 처리해 저장 (경매·업적 쓰기와 겹치지 않도록 잠금)"""
     _require_db()
     op = POLICE_OPERATIONS[op_key]
@@ -2553,7 +2553,7 @@ def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n:
         inv = info.get("inventory") or {}
         money, honor = int(info.get("money", 0) or 0), int(info.get("honor", 0) or 0)
         rate, labels = operation_success_rate(op, inv, in_patrol, wanted_n)
-        success = random.randint(1, 100) <= rate
+        success = (random.randint(1, 100) <= rate) if forced_success is None else bool(forced_success)   # 하드코어는 단계 수행 결과를 그대로 사용
         old_rank = get_user_rank(honor, is_police=True)
         blob = get_title_blob(info)
         s = blob["stats"]
@@ -2600,6 +2600,9 @@ class OperationSelect(discord.ui.Select):
         if not _is_police(user):
             await interaction.followup.send("치안국 경찰만 수사 작전을 수행할 수 있습니다!", ephemeral=True)
             return
+        if user.id in hardcore_active:
+            await interaction.followup.send("이미 하드코어 작전을 수행 중입니다.", ephemeral=True)
+            return
 
         now_ts = time.time()                       # 확인과 등록 사이에 await 가 없어 중복 클릭으로 쿨타임을 피할 수 없음
         remain = int(operation_cooldowns.get(user.id, 0) - now_ts + 0.999)
@@ -2611,17 +2614,31 @@ class OperationSelect(discord.ui.Select):
         key = self.values[0]
         op = POLICE_OPERATIONS[key]
         guild_id = interaction.guild_id
+        hc_desc = ""
         try:
-            loc = (await asyncio.to_thread(get_user_data, user.id)).get("location", "레벤하임")
+            info = await asyncio.to_thread(get_user_data, user.id)
+            loc = info.get("location", "레벤하임")
             in_patrol = bool(guild_id and active_patrols.get(guild_id, {}).get(loc, 0) > time.time())
-            res = await asyncio.to_thread(operation_resolve_sync, user.id, key, in_patrol, _active_wanted_count())
+            wanted_n = _active_wanted_count()
+            forced = None
+            if get_setting(info, "hardcore_mission"):
+                # 하드코어: 5단계를 직접 수행 (2~3분). 순찰망·수배범 정보·무전기 보너스는 판단 단계 확률에 반영
+                rate_now, _ = operation_success_rate(op, info.get("inventory") or {}, in_patrol, wanted_n)
+                hardcore_active.add(user.id)
+                try:
+                    forced, hc_desc = await run_hardcore_mission(interaction, user, op, rate_now - op["success_rate"], theme="police")
+                finally:
+                    hardcore_active.discard(user.id)
+                now_ts = time.time()    # 쿨타임은 작전이 끝난 시점부터 시작
+                operation_cooldowns[user.id] = now_ts + OPERATION_COOLDOWN_SEC
+            res = await asyncio.to_thread(operation_resolve_sync, user.id, key, in_patrol, wanted_n, forced)
         except Exception as e:
             print(f"DB Error (police operation): {e}")
             operation_cooldowns.pop(user.id, None)
             await interaction.followup.send("작전 결과를 저장하는 중 오류가 발생했습니다. 다시 시도해 주세요.", ephemeral=True)
             return
 
-        buff_desc = f"\n**적용된 보너스:** {', '.join(res['labels'])}" if res["labels"] else ""
+        buff_desc = (f"\n**적용된 보너스:** {', '.join(res['labels'])}" if res["labels"] else "") + hc_desc
         rank_up = ""
         if res["old_rank"] != res["new_rank"]:
             rank_up = f"\n\n**[승진 축하]** **{res['old_rank']}** → **{res['new_rank']}**(으)로 승진하셨습니다!"
@@ -2669,6 +2686,9 @@ async def police_operation_command(interaction: discord.Interaction):
     user = interaction.user
     if not _is_police(user):
         await interaction.response.send_message("치안국 경찰만 수사 작전을 수행할 수 있습니다! (조직원은 `/임무` 를 이용하세요)", ephemeral=True)
+        return
+    if user.id in hardcore_active:
+        await interaction.response.send_message("이미 하드코어 작전을 수행 중입니다.", ephemeral=True)
         return
     remain = int(operation_cooldowns.get(user.id, 0) - time.time() + 0.999)
     if remain > 0:
@@ -4775,6 +4795,76 @@ HC_SCENARIOS = {
     ],
 }
 
+# 경찰용 상황 판단 시나리오 (/작전 하드코어) — 형식은 HC_SCENARIOS 와 같음
+HC_POLICE_SCENARIOS = {
+    "recon": [
+        {"title": "정보원 접선", "text": "정보원이 폐창고 뒤편에서 접선하자고 합니다. 주변에서 감시하는 시선이 느껴지고, 근처 카페 창가에서는 접선 장소가 내려다보입니다.",
+         "options": [("카페 창가에서 먼저 주변을 살핀 뒤 접근한다", 2),
+                     ("사복으로 갈아입고 바로 접선 장소로 향한다", 1),
+                     ("제복 차림으로 순찰차를 몰고 접선 장소에 접근한다", 0)]},
+        {"title": "수배 차량 발견", "text": "수배 차량이 골목에 주차되어 있습니다. 운전자는 보이지 않고, 트렁크 쪽에서 소음이 납니다.",
+         "options": [("거리를 두고 지원을 요청하며 차량을 감시한다", 2),
+                     ("차량 뒤편으로 접근해 상황을 확인한다", 1),
+                     ("곧바로 차 문을 열어 내부를 확인한다", 0)]},
+        {"title": "잠복 위치 선정", "text": "아지트 맞은편 건물 두 곳이 후보입니다. 4층은 시야가 좋지만 창문이 눈에 띄고, 2층은 시야가 좁지만 어둡습니다.",
+         "options": [("2층에서 불을 끄고 망원경으로 드나드는 시간을 기록한다", 2),
+                     ("4층 창문의 커튼을 열고 관찰한다", 1),
+                     ("길가 차량 안에서 제복 차림으로 대기한다", 0)]},
+    ],
+    "target": [
+        {"title": "용의자 포위", "text": "용의자가 막다른 골목에 몰려 있습니다. 흉기를 소지했을 가능성이 있습니다.",
+         "options": [("지원 인력과 함께 퇴로를 막고 경고하며 거리를 좁힌다", 2),
+                     ("순찰차를 엄폐물 삼아 세워 두고 투항을 요구한다", 1),
+                     ("혼자 달려들어 곧바로 제압한다", 0)]},
+        {"title": "증거물 확보", "text": "현장에서 장부가 든 서류 가방을 발견했습니다. 가방에는 잠금장치가 걸려 있습니다.",
+         "options": [("장갑을 끼고 현장 사진을 남긴 뒤 증거 봉투에 밀봉한다", 2),
+                     ("그 자리에서 열어 내용을 확인한다", 1),
+                     ("가방을 통째로 챙겨 차에 던져 넣는다", 0)]},
+        {"title": "겁먹은 목격자", "text": "목격자가 보복이 두려워 진술을 꺼리고 있습니다. 주변에는 조직원으로 보이는 사람들이 오가고 있습니다.",
+         "options": [("안전한 장소로 이동시켜 신변 보호를 약속하고 진술을 받는다", 2),
+                     ("설득하며 현장에서 바로 진술을 받는다", 1),
+                     ("협조하지 않으면 처벌하겠다고 압박한다", 0)]},
+    ],
+    "escape": [
+        {"title": "증거물 호송", "text": "압수한 증거물을 치안국으로 옮겨야 합니다. 조직의 추격이 예상됩니다.",
+         "options": [("호송 차량을 두 대로 나누고 경로를 바꿔 이동한다", 2),
+                     ("가장 빠른 대로로 곧장 이동한다", 1),
+                     ("증거물을 혼자 들고 걸어서 이동한다", 0)]},
+        {"title": "몰려든 구경꾼", "text": "작전이 끝나갈 무렵 구경꾼이 몰려들었고, 일부는 사진을 찍고 있습니다.",
+         "options": [("통제선을 치고 구경꾼을 정리한 뒤 현장 보존 인력을 남긴다", 2),
+                     ("간단히 해산시키고 서둘러 철수한다", 1),
+                     ("구경꾼을 무시한 채 증거 수집을 이어간다", 0)]},
+        {"title": "무전 이상 징후", "text": "상황 보고 중 무전에 잡음이 끼며 우리 위치가 노출된 듯합니다.",
+         "options": [("주파수를 바꾸고 암호 교신으로 현재 위치를 이동한다", 2),
+                     ("같은 주파수로 지원을 계속 요청한다", 1),
+                     ("무전을 끄고 혼자 현장에 남는다", 0)]},
+    ],
+}
+
+# 하드코어 진행 문구 (조직원 / 경찰)
+HC_THEMES = {
+    "mafia": {
+        "scenarios": HC_SCENARIOS,
+        "honorific": "님",
+        "names": {"choice:recon": "정찰", "reaction": "침투", "code": "보안 해제", "choice:target": "목표 확보", "choice:escape": "탈출"},
+        "bonus_note": "아이템 보너스와 순찰 페널티는 상황 판단 단계의 성공 확률에 반영됩니다.",
+        "reaction_body": ("경비의 시선이 사각지대로 향하는 순간을 기다립니다.\n"
+                          "**버튼이 초록색으로 바뀌는 즉시** 누르세요. 신호 전에 누르면 들켜서 실수가 됩니다."),
+        "code_intro": "보안 단말의 코드가 잠깐 표시됩니다.",
+        "code_label": "보안 코드",
+    },
+    "police": {
+        "scenarios": HC_POLICE_SCENARIOS,
+        "honorific": "경관님",
+        "names": {"choice:recon": "정찰", "reaction": "진입", "code": "단말 해독", "choice:target": "용의자·증거 확보", "choice:escape": "철수"},
+        "bonus_note": "순찰망·수배범 정보·무전기 보너스는 상황 판단 단계의 성공 확률에 반영됩니다.",
+        "reaction_body": ("용의자가 등을 돌리는 순간을 기다립니다.\n"
+                          "**버튼이 초록색으로 바뀌는 즉시** 누르세요. 신호 전에 누르면 들켜서 실수가 됩니다."),
+        "code_intro": "압수한 단말의 잠금 코드가 잠깐 표시됩니다.",
+        "code_label": "잠금 코드",
+    },
+}
+
 class HCBaseView(discord.ui.View):
     """하드코어 단계 화면의 공통 부분: 소유자 확인 + 완료 신호(asyncio.Event)"""
     def __init__(self, owner: discord.abc.User):
@@ -4877,9 +4967,10 @@ def hc_stage_embed(selected: dict, step: int, total: int, name: str, body: str, 
         embed.set_footer(text=footer)
     return embed
 
-async def run_hardcore_mission(interaction: discord.Interaction, user: discord.abc.User, selected: dict, stage_bonus: int):
+async def run_hardcore_mission(interaction: discord.Interaction, user: discord.abc.User, selected: dict, stage_bonus: int, theme: str = "mafia"):
     """하드코어 작전 진행. 반환: (성공 여부, 작전 기록 문구)
     stage_bonus: 아이템 성공률 보너스 - 순찰 페널티 (상황 판단 단계의 성공 확률에 반영)"""
+    th = HC_THEMES[theme]
     pen = hc_difficulty_penalty(selected["success_rate"])
     total = 5
     strikes = 0
@@ -4895,22 +4986,22 @@ async def run_hardcore_mission(interaction: discord.Interaction, user: discord.a
             text += "\n경계도 한계를 넘어 작전이 중단되었습니다."
         return text
 
+    plan = ["choice:recon", "reaction", "code", "choice:target", "choice:escape"]
+    names = th["names"]
     try:
         intro = discord.Embed(
             title=f"[하드코어 작전 개시] {selected['title']}",
-            description=(f"**{user.mention}** 님, 작전을 **{total}단계**로 나누어 직접 수행합니다.\n\n"
+            description=(f"**{user.mention}** {th['honorific']}, 작전을 **{total}단계**로 나누어 직접 수행합니다.\n\n"
                          f"• 각 단계에는 제한 시간이 있고, 시간 초과는 실수로 처리됩니다.\n"
                          f"• 실수가 **{HC_STRIKE_LIMIT}회** 쌓이면(경계도 {HC_STRIKE_LIMIT}/{HC_STRIKE_LIMIT}) 작전은 실패합니다.\n"
-                         f"• 아이템 보너스와 순찰 페널티는 상황 판단 단계의 성공 확률에 반영됩니다.\n\n"
-                         f"잠시 후 1단계(정찰)가 시작됩니다."),
+                         f"• {th['bonus_note']}\n\n"
+                         f"잠시 후 1단계({names[plan[0]]})가 시작됩니다."),
             color=discord.Color.dark_red()
         )
         await edit(embed=intro, view=None)
         await asyncio.sleep(HC_INTRO_SEC)
 
         step = 0
-        plan = ["choice:recon", "reaction", "code", "choice:target", "choice:escape"]
-        names = {"choice:recon": "정찰", "reaction": "침투", "code": "보안 해제", "choice:target": "목표 확보", "choice:escape": "탈출"}
 
         for kind in plan:
             step += 1
@@ -4919,7 +5010,7 @@ async def run_hardcore_mission(interaction: discord.Interaction, user: discord.a
             note = ""
 
             if kind.startswith("choice:"):
-                sc = random.choice(HC_SCENARIOS[kind.split(":")[1]])
+                sc = random.choice(th["scenarios"][kind.split(":")[1]])
                 opts = list(sc["options"])
                 random.shuffle(opts)
                 lines = "\n".join(f"**{i + 1}번.** {t}" for i, (t, _) in enumerate(opts))
@@ -4939,8 +5030,7 @@ async def run_hardcore_mission(interaction: discord.Interaction, user: discord.a
             elif kind == "reaction":
                 window = max(2.0, 3.5 - 0.1 * pen)
                 view = HCReactionView(user)
-                body = ("경비의 시선이 사각지대로 향하는 순간을 기다립니다.\n"
-                        "**버튼이 초록색으로 바뀌는 즉시** 누르세요. 신호 전에 누르면 들켜서 실수가 됩니다.")
+                body = th["reaction_body"]
                 await edit(embed=hc_stage_embed(selected, step, total, name, body, strikes, "신호를 기다리는 중"), view=view)
                 early = await _hc_wait(view, random.uniform(3.0, 7.0))
                 if early and view.result == "early":
@@ -4962,8 +5052,8 @@ async def run_hardcore_mission(interaction: discord.Interaction, user: discord.a
                 digits = 4 if selected["success_rate"] >= 60 else (5 if selected["success_rate"] >= 40 else 6)
                 show_sec = 6 if digits <= 4 else (5 if digits == 5 else 4)
                 code = "".join(random.choice("0123456789") for _ in range(digits))
-                body = (f"보안 단말의 코드가 잠깐 표시됩니다. **{show_sec}초 안에 외우세요.**\n\n"
-                        f"**보안 코드:** `{code}`")
+                body = (f"{th['code_intro']} **{show_sec}초 안에 외우세요.**\n\n"
+                        f"**{th['code_label']}:** `{code}`")
                 await edit(embed=hc_stage_embed(selected, step, total, name, body, strikes, f"{show_sec}초 후 코드가 사라집니다"), view=None)
                 await asyncio.sleep(show_sec)
                 view = HCCodeView(user)
