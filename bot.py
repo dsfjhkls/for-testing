@@ -118,7 +118,10 @@ class GuardedTree(app_commands.CommandTree):
 
     async def on_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
         _finish_command(interaction)   # 오류로 끝난 명령어도 잠금 해제
-        await super().on_error(interaction, error)
+        if isinstance(error, (app_commands.CommandNotFound, app_commands.CheckFailure)):
+            return   # 유저 쪽 사유(권한 부족 등)는 오류 보고 대상이 아님
+        await report_error(f"명령어 /{_command_label(interaction)}", error, interaction)
+        await _notify_user_error(interaction)
 
 class GuardedView(discord.ui.View):
     """holds_command_lock = True 인 View 는 화면이 끝날 때까지 명령어 잠금을 유지합니다."""
@@ -1369,7 +1372,9 @@ async def achievements_command(interaction: discord.Interaction):
 
 @bot.event
 async def on_ready():
-    global _status_loaded
+    global _status_loaded, _main_loop
+    _main_loop = asyncio.get_running_loop()
+    _main_loop.set_exception_handler(_loop_exception_handler)
     if not _status_loaded:   # on_ready 는 재연결 때 또 불릴 수 있으므로 처음 한 번만
         _status_loaded = True
         try:
@@ -1415,6 +1420,494 @@ async def check_membership(interaction: discord.Interaction) -> bool:
     return True
 
 # ==========================================
+# [오류 로그 채널 / 관리자 명령어 / 송금 제한]
+#
+#   1) 오류 로그 채널
+#        - 명령어, 버튼/메뉴, 입력창, 이벤트, 백그라운드 작업에서 난 오류를 지정한 채널로 보냅니다.
+#        - 같은 오류는 ERROR_DEDUPE_SEC 안에 한 번만, 전체로는 분당 ERROR_MAX_PER_MIN 건까지만 보내 도배를 막습니다.
+#        - 채널 지정: 환경 변수 ERROR_LOG_CHANNEL_ID (영구) 또는 /관리 로그채널 (봇이 꺼지면 초기화)
+#        - 관리자 작업 기록은 ADMIN_LOG_CHANNEL_ID 채널로 보내며, 없으면 오류 채널을 같이 씁니다.
+#   2) /관리 ... : 서버 관리자(administrator 권한) 전용 운영 도구. 모든 작업이 기록 채널에 남습니다.
+#   3) /송금 제한 : 아래 TRANSFER_* 값으로 조절합니다. 서버 관리자는 제한을 받지 않습니다.
+# ==========================================
+import copy
+import sys
+import traceback as _traceback
+
+def _env_int(name: str):
+    raw = _clean_env(os.getenv(name))
+    try:
+        return int(raw) if raw else None
+    except ValueError:
+        print(f"[경고] 환경 변수 {name} 값이 숫자가 아닙니다: {raw}")
+        return None
+
+ERROR_LOG_CHANNEL_ID = _env_int("ERROR_LOG_CHANNEL_ID")
+ADMIN_LOG_CHANNEL_ID = _env_int("ADMIN_LOG_CHANNEL_ID")   # None 이면 오류 로그 채널을 같이 사용
+ERROR_DEDUPE_SEC = 60        # 같은 오류는 이 시간 안에 다시 보내지 않음
+ERROR_MAX_PER_MIN = 10       # 1분에 보낼 수 있는 오류 보고 상한
+
+# --- 송금 제한 설정 ---
+TRANSFER_MAX_PER_TX = 20000              # 1회 최대 송금액
+TRANSFER_DAILY_SEND_LIMIT = 30000        # 보내는 사람의 24시간 누적 송금 한도
+TRANSFER_DAILY_RECEIVE_LIMIT = 50000     # 받는 사람의 24시간 누적 수령 한도 (한 계정으로 몰아주기 방지)
+TRANSFER_COOLDOWN_SEC = 30               # 연속 송금 대기 시간
+TRANSFER_MIN_ACCOUNT_AGE_DAYS = 7        # 디스코드 계정을 만든 지 이만큼 지나야 송금 가능 (보내는 사람 / 받는 사람 모두)
+TRANSFER_MIN_SERVER_STAY_HOURS = 24      # 서버에 들어온 지 이만큼 지나야 송금 가능 (보내는 사람 / 받는 사람 모두)
+TRANSFER_ALERT_AMOUNT = 10000            # 이 금액 이상 송금은 관리자 기록 채널에 알림
+TRANSFER_WINDOW_SEC = 24 * 60 * 60
+
+_main_loop = None
+_err_recent = {}       # {오류 서명: 마지막 보고 시각}
+_err_sent_times = []   # 최근 보고 시각들 (분당 상한 계산용)
+_err_suppressed = 0    # 도배 방지로 건너뛴 보고 수
+
+def _unwrap_error(error):
+    return getattr(error, "original", None) or error
+
+def _tb_text(error) -> str:
+    if isinstance(error, BaseException):
+        return "".join(_traceback.format_exception(type(error), error, error.__traceback__))
+    return str(error)
+
+async def send_log_embed(channel_id, embed: discord.Embed) -> bool:
+    if not channel_id:
+        return False
+    try:
+        channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+        await channel.send(embed=embed)
+        return True
+    except Exception as e:
+        print(f"[로그 채널 전송 실패] {type(e).__name__}: {e}")
+        return False
+
+async def report_error(context: str, error, interaction: discord.Interaction = None, print_tb: bool = True):
+    """오류를 콘솔에 남기고, 오류 로그 채널이 지정되어 있으면 임베드로 보고합니다. (이 함수 자체는 절대 예외를 던지지 않음)"""
+    global _err_suppressed
+    try:
+        error = _unwrap_error(error)
+        tb = _tb_text(error)
+        if print_tb:
+            print(f"[오류] {context}\n{tb}")
+        if not ERROR_LOG_CHANNEL_ID:
+            return
+        now = time.time()
+        lines = tb.strip().splitlines()
+        signature = (context, lines[-1][:200] if lines else "")
+        if now - _err_recent.get(signature, 0) < ERROR_DEDUPE_SEC:
+            _err_suppressed += 1
+            return
+        _err_sent_times[:] = [t for t in _err_sent_times if now - t < 60]
+        if len(_err_sent_times) >= ERROR_MAX_PER_MIN:
+            _err_suppressed += 1
+            return
+        _err_recent[signature] = now
+        _err_sent_times.append(now)
+
+        embed = discord.Embed(title="[오류 보고]", color=discord.Color.red(), timestamp=discord.utils.utcnow())
+        embed.add_field(name="발생 위치", value=str(context)[:1000], inline=False)
+        if interaction is not None:
+            where = []
+            if getattr(interaction, "user", None):
+                where.append(f"유저: {interaction.user.mention} ({interaction.user.id})")
+            if getattr(interaction, "guild", None):
+                where.append(f"서버: {interaction.guild.name}")
+            if getattr(interaction, "channel", None) and getattr(interaction.channel, "id", None):
+                where.append(f"채널: <#{interaction.channel.id}>")
+            if interaction.type is discord.InteractionType.application_command:
+                where.append(f"명령어: /{_command_label(interaction)}")
+            if where:
+                embed.add_field(name="상황", value="\n".join(where)[:1000], inline=False)
+        embed.add_field(name="오류", value=f"`{type(error).__name__}: {str(error)[:300]}`", inline=False)
+        tail = tb.strip()[-850:]
+        embed.add_field(name="상세 (끝부분)", value=f"```py\n{tail}\n```", inline=False)
+        if _err_suppressed:
+            embed.set_footer(text=f"도배 방지로 건너뛴 보고 {_err_suppressed}건")
+            _err_suppressed = 0
+        await send_log_embed(ERROR_LOG_CHANNEL_ID, embed)
+    except Exception as e:
+        print(f"[오류 보고 실패] {type(e).__name__}: {e}")
+
+def report_error_sync(context: str, error):
+    """스레드(to_thread 안의 DB 작업 등)에서도 부를 수 있는 오류 보고"""
+    loop = _main_loop
+    if loop is not None and loop.is_running():
+        try:
+            asyncio.run_coroutine_threadsafe(report_error(context, error), loop)
+            return
+        except Exception:
+            pass
+    print(f"[오류] {context}: {error}")
+
+async def _notify_user_error(interaction: discord.Interaction):
+    """오류가 났을 때 유저에게 본인만 보이는 안내를 보내서, 응답 없이 멈춘 것처럼 보이지 않게 함"""
+    msg = "처리 중 오류가 발생했습니다. 관리자에게 보고되었습니다. 잠시 후 다시 시도해 주세요."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        pass
+
+# 화면(View) / 입력창(Modal) 안에서 난 오류도 같은 곳으로 보고 (각 클래스가 따로 on_error 를 만들었다면 그쪽이 우선)
+async def _view_on_error(self, interaction: discord.Interaction, error: Exception, item) -> None:
+    await report_error(f"버튼/메뉴: {type(self).__name__}", error, interaction)
+    await _notify_user_error(interaction)
+
+async def _modal_on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+    await report_error(f"입력창: {type(self).__name__}", error, interaction)
+    await _notify_user_error(interaction)
+
+discord.ui.View.on_error = _view_on_error
+discord.ui.Modal.on_error = _modal_on_error
+
+@bot.event
+async def on_error(event_method: str, *args, **kwargs):
+    await report_error(f"이벤트: {event_method}", sys.exc_info()[1] or "알 수 없는 오류")
+
+def _loop_exception_handler(loop, context):
+    loop.default_exception_handler(context)
+    exc = context.get("exception")
+    if isinstance(exc, Exception):
+        loop.create_task(report_error("백그라운드 작업", exc, print_tb=False))
+
+# ==========================================
+# [관리자 도구] /관리 ...
+# ==========================================
+def _admin_log_channel():
+    return ADMIN_LOG_CHANNEL_ID or ERROR_LOG_CHANNEL_ID
+
+async def admin_audit(interaction: discord.Interaction, action: str, target=None, detail: str = ""):
+    """관리자 작업을 콘솔과 기록 채널에 남김"""
+    who = f"{interaction.user} ({interaction.user.id})"
+    tgt = f"{target} ({target.id})" if target is not None else "-"
+    print(f"[관리자 작업] {who} / {action} / 대상 {tgt} / {detail}")
+    embed = discord.Embed(title=f"[관리자 작업] {action}", color=discord.Color.orange(), timestamp=discord.utils.utcnow())
+    embed.add_field(name="실행자", value=f"{interaction.user.mention} ({interaction.user.id})", inline=True)
+    if target is not None:
+        embed.add_field(name="대상", value=f"{target.mention} ({target.id})", inline=True)
+    if detail:
+        embed.add_field(name="내용", value=detail[:1000], inline=False)
+    await send_log_embed(_admin_log_channel(), embed)
+
+async def admin_only(interaction: discord.Interaction) -> bool:
+    if not interaction.guild or not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("서버 관리자 권한이 필요합니다.", ephemeral=True)
+        return False
+    return True
+
+def _known_item_names() -> set:
+    names = set()
+    for items in BLACK_MARKET_ITEMS.values():
+        names.update(it["name"] for it in items)
+    names.update(it["name"] for it in WEAPON_SHOP_ITEMS)
+    names.update(it["name"] for it in POLICE_SHOP_ITEMS)
+    names.update(CRAFT_BY_ITEM.keys())
+    names.update(MATERIAL_SOURCES.keys())
+    for table in (NPC_DATA, NAMED_MONSTERS):
+        for d in table.values():
+            if d.get("drop"):
+                names.add(d["drop"])
+    for d in (HIDDEN_BOSS, ULTIMATE_BOSS, EDEN_BOSS):
+        if d.get("drop"):
+            names.add(d["drop"])
+    return names
+
+def admin_adjust_sync(user_id: int, money_delta: int = 0, honor_delta: int = 0):
+    """자금/명예 증감 (0 아래로는 내려가지 않음). 반환: (이전 자금, 새 자금, 이전 명예, 새 명예)"""
+    _require_db()
+    with _inv_lock:
+        info = get_user_data(user_id)
+        old_money, old_honor = int(info.get("money") or 0), int(info.get("honor") or 0)
+        new_money, new_honor = max(0, old_money + money_delta), max(0, old_honor + honor_delta)
+        res = supabase.table("user_data").update({"money": new_money, "honor": new_honor}).eq("user_id", str(user_id)).execute()
+        _check_updated(res, "admin_adjust")
+        return old_money, new_money, old_honor, new_honor
+
+def admin_item_sync(user_id: int, name: str, delta: int, force: bool):
+    """아이템 지급(+) / 회수(-). 반환: (이전 수량, 새 수량) 또는 알 수 없는 이름이면 None"""
+    _require_db()
+    with _inv_lock:
+        info = get_user_data(user_id)
+        inv = dict(info.get("inventory") or {})
+        if not force and name not in inv and name not in _known_item_names():
+            return None
+        old = int(inv.get(name, 0) or 0)
+        new = old + delta
+        if new <= 0:
+            inv.pop(name, None)
+            new = 0
+        else:
+            inv[name] = new
+        res = supabase.table("user_data").update({"inventory": inv}).eq("user_id", str(user_id)).execute()
+        _check_updated(res, "admin_item")
+        return old, new
+
+def admin_reset_transfers_sync(user_id: int):
+    _require_db()
+    with _inv_lock:
+        blob = get_title_blob(get_user_data(user_id))
+        blob["transfers"] = {"sent": [], "received": []}
+        save_title_blob(user_id, blob)
+
+admin_group = app_commands.Group(
+    name="관리", description="[서버 관리자 전용] 운영 도구",
+    default_permissions=discord.Permissions(administrator=True), guild_only=True
+)
+bot.tree.add_command(admin_group)
+
+@admin_group.command(name="조회", description="유저의 자금, 명예, 상태, 인벤토리를 확인합니다.")
+@app_commands.describe(member="조회할 유저")
+async def admin_lookup(interaction: discord.Interaction, member: discord.Member):
+    if not await admin_only(interaction): return
+    await interaction.response.defer(ephemeral=True)
+    info = await asyncio.to_thread(get_user_data, member.id)
+    blob = get_title_blob(info)
+    now_dt, now_ts = datetime.now(), time.time()
+
+    roles = [r for r in ("조직원", "경찰", "시민") if discord.utils.get(member.roles, name=r)]
+    status = []
+    if jail_list.get(member.id) and jail_list[member.id] > now_dt:
+        status.append(f"수감 중 ({int((jail_list[member.id] - now_dt).total_seconds())}초 남음)")
+    if wanted_list.get(member.id) and wanted_list[member.id] > now_dt:
+        status.append(f"수배 중 ({int((wanted_list[member.id] - now_dt).total_seconds())}초 남음)")
+
+    inv = info.get("inventory") or {}
+    inv_text = "\n".join(f"- {k} x{v}" for k, v in list(inv.items())[:20]) or "없음"
+    if len(inv) > 20:
+        inv_text += f"\n... 외 {len(inv) - 20}종"
+    sent = sum(a for t, a in _transfer_ledger(blob, "sent", now_ts))
+    received = sum(a for t, a in _transfer_ledger(blob, "received", now_ts))
+
+    embed = discord.Embed(title=f"[유저 조회] {member.display_name}", color=discord.Color.blurple())
+    embed.add_field(name="기본 정보", value=(f"역할: {', '.join(roles) or '없음'}\n직급: {get_user_rank(int(info.get('honor') or 0), '경찰' in roles)}\n"
+                                              f"위치: {info.get('location', '-')}\n상태: {', '.join(status) or '정상'}"), inline=True)
+    embed.add_field(name="재산", value=f"자금: ${int(info.get('money') or 0):,}\n명예: {int(info.get('honor') or 0):,} pt", inline=True)
+    embed.add_field(name="최근 24시간 송금", value=f"보낸 금액: ${sent:,}\n받은 금액: ${received:,}", inline=False)
+    embed.add_field(name="인벤토리", value=inv_text[:1000], inline=False)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+@admin_group.command(name="자금", description="유저의 자금을 늘리거나 줄입니다. (음수 입력 시 차감)")
+@app_commands.describe(member="대상 유저", amount="증감할 금액 (예: 5000, -3000)", reason="사유 (기록 채널에 남음)")
+async def admin_money(interaction: discord.Interaction, member: discord.Member, amount: int, reason: str = "사유 없음"):
+    if not await admin_only(interaction): return
+    if amount == 0 or abs(amount) > 1_000_000_000:
+        await interaction.response.send_message("0이 아닌 10억 이하의 금액을 입력해 주세요.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        old_m, new_m, _, _ = await asyncio.to_thread(admin_adjust_sync, member.id, amount, 0)
+    except Exception as e:
+        await report_error("/관리 자금", e, interaction)
+        await interaction.followup.send("DB 오류로 처리하지 못했습니다.", ephemeral=True)
+        return
+    await admin_audit(interaction, "자금 조정", member, f"${old_m:,} -> ${new_m:,} ({amount:+,}) / 사유: {reason}")
+    await interaction.followup.send(f"{member.mention} 님의 자금: `${old_m:,}` -> `${new_m:,}`", ephemeral=True)
+
+@admin_group.command(name="명예", description="유저의 명예를 늘리거나 줄입니다. (음수 입력 시 차감)")
+@app_commands.describe(member="대상 유저", amount="증감할 명예 (예: 100, -50)", reason="사유 (기록 채널에 남음)")
+async def admin_honor(interaction: discord.Interaction, member: discord.Member, amount: int, reason: str = "사유 없음"):
+    if not await admin_only(interaction): return
+    if amount == 0 or abs(amount) > 10_000_000:
+        await interaction.response.send_message("0이 아닌 1,000만 이하의 값을 입력해 주세요.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        _, _, old_h, new_h = await asyncio.to_thread(admin_adjust_sync, member.id, 0, amount)
+    except Exception as e:
+        await report_error("/관리 명예", e, interaction)
+        await interaction.followup.send("DB 오류로 처리하지 못했습니다.", ephemeral=True)
+        return
+    await admin_audit(interaction, "명예 조정", member, f"{old_h:,} -> {new_h:,} pt ({amount:+,}) / 사유: {reason}")
+    await interaction.followup.send(f"{member.mention} 님의 명예: `{old_h:,} pt` -> `{new_h:,} pt`", ephemeral=True)
+
+async def _item_autocomplete(interaction: discord.Interaction, current: str):
+    cur = (current or "").lower()
+    names = [n for n in sorted(_known_item_names()) if cur in n.lower()]
+    return [app_commands.Choice(name=n[:100], value=n[:100]) for n in names[:25]]
+
+@admin_group.command(name="아이템", description="유저에게 아이템을 지급하거나 회수합니다. (수량이 음수면 회수)")
+@app_commands.describe(member="대상 유저", item="아이템 이름 (자동완성에서 선택)", amount="수량 (기본 1, 음수면 회수)",
+                       force="목록에 없는 이름도 강제로 지급 (오타 주의)")
+@app_commands.autocomplete(item=_item_autocomplete)
+async def admin_item(interaction: discord.Interaction, member: discord.Member, item: str, amount: int = 1, force: bool = False):
+    if not await admin_only(interaction): return
+    if amount == 0 or abs(amount) > 10000:
+        await interaction.response.send_message("0이 아닌 1만 이하의 수량을 입력해 주세요.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        result = await asyncio.to_thread(admin_item_sync, member.id, item, amount, force)
+    except Exception as e:
+        await report_error("/관리 아이템", e, interaction)
+        await interaction.followup.send("DB 오류로 처리하지 못했습니다.", ephemeral=True)
+        return
+    if result is None:
+        await interaction.followup.send(
+            "게임에 없는 아이템 이름입니다. 자동완성 목록에서 선택해 주세요. (이 이름이 확실하다면 `force` 옵션을 켜세요)", ephemeral=True)
+        return
+    old, new = result
+    await admin_audit(interaction, "아이템 조정", member, f"{item}: {old} -> {new} ({amount:+d})")
+    await interaction.followup.send(f"{member.mention} 님의 `{item}`: {old}개 -> {new}개", ephemeral=True)
+
+@admin_group.command(name="점검", description="점검 모드를 켜거나 끕니다. (봇을 재시작하면 코드의 기본값으로 돌아갑니다)")
+@app_commands.describe(mode="점검 모드")
+@app_commands.choices(mode=[app_commands.Choice(name="켜기", value="on"), app_commands.Choice(name="끄기", value="off")])
+async def admin_maintenance(interaction: discord.Interaction, mode: app_commands.Choice[str]):
+    global MAINTENANCE_MODE
+    if not await admin_only(interaction): return
+    MAINTENANCE_MODE = (mode.value == "on")
+    await admin_audit(interaction, "점검 모드 변경", None, "켜짐" if MAINTENANCE_MODE else "꺼짐")
+    await interaction.response.send_message(
+        f"점검 모드를 **{'켰습니다. 관리자 외에는 명령어를 쓸 수 없습니다' if MAINTENANCE_MODE else '껐습니다'}**.", ephemeral=True)
+
+@admin_group.command(name="석방", description="유저의 수감 / 수배 상태를 해제합니다.")
+@app_commands.describe(member="대상 유저")
+async def admin_release(interaction: discord.Interaction, member: discord.Member):
+    if not await admin_only(interaction): return
+    was_jailed = member.id in jail_list
+    was_wanted = member.id in wanted_list
+    jail_list.pop(member.id, None)
+    wanted_list.pop(member.id, None)
+    save_status(member.id)
+    if was_jailed:
+        try:
+            await asyncio.to_thread(update_user_location, member.id, "레벤하임")
+        except Exception as e:
+            await report_error("/관리 석방 (위치 복구)", e, interaction)
+    await admin_audit(interaction, "수감/수배 해제", member, f"수감 {'해제' if was_jailed else '없음'} / 수배 {'해제' if was_wanted else '없음'}")
+    await interaction.response.send_message(
+        f"{member.mention} 님: 수감 {'해제' if was_jailed else '없음'} / 수배 {'해제' if was_wanted else '없음'}", ephemeral=True)
+
+@admin_group.command(name="송금초기화", description="유저의 24시간 송금 기록(한도 계산용)을 지웁니다.")
+@app_commands.describe(member="대상 유저")
+async def admin_reset_transfers(interaction: discord.Interaction, member: discord.Member):
+    if not await admin_only(interaction): return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        await asyncio.to_thread(admin_reset_transfers_sync, member.id)
+    except Exception as e:
+        await report_error("/관리 송금초기화", e, interaction)
+        await interaction.followup.send("DB 오류로 처리하지 못했습니다.", ephemeral=True)
+        return
+    await admin_audit(interaction, "송금 기록 초기화", member)
+    await interaction.followup.send(f"{member.mention} 님의 송금 기록을 초기화했습니다.", ephemeral=True)
+
+@admin_group.command(name="로그채널", description="오류 보고 / 관리자 작업 기록을 받을 채널을 지정합니다. (영구 설정은 환경 변수 사용)")
+@app_commands.describe(channel="로그를 받을 텍스트 채널")
+async def admin_log_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    global ERROR_LOG_CHANNEL_ID, ADMIN_LOG_CHANNEL_ID
+    if not await admin_only(interaction): return
+    await interaction.response.defer(ephemeral=True)
+    test = discord.Embed(title="[로그 채널 설정]", description="이 채널로 오류 보고와 관리자 작업 기록이 전송됩니다.", color=discord.Color.green())
+    if not await send_log_embed(channel.id, test):
+        await interaction.followup.send("해당 채널에 메시지를 보낼 수 없습니다. 봇에게 채널 보기 / 메시지 보내기 / 링크 첨부 권한이 있는지 확인해 주세요.", ephemeral=True)
+        return
+    ERROR_LOG_CHANNEL_ID = channel.id
+    ADMIN_LOG_CHANNEL_ID = channel.id
+    await admin_audit(interaction, "로그 채널 지정", None, f"{channel.mention}")
+    await interaction.followup.send(
+        f"로그 채널을 {channel.mention} 으로 지정했습니다.\n"
+        f"봇을 재시작해도 유지하려면 환경 변수 `ERROR_LOG_CHANNEL_ID={channel.id}` 를 설정해 주세요.", ephemeral=True)
+
+@admin_group.command(name="오류테스트", description="오류 로그 채널 연결이 잘 되었는지 일부러 오류를 발생시켜 확인합니다.")
+async def admin_error_test(interaction: discord.Interaction):
+    if not await admin_only(interaction): return
+    raise RuntimeError("오류 로그 테스트입니다. 이 메시지가 로그 채널에 보이면 정상입니다.")
+
+# ==========================================
+# [송금 제한]
+#   기록은 유저 데이터(data)의 "transfers" 항목에 24시간 분만 보관됩니다.  {"sent": [[시각, 금액]...], "received": [...]}
+# ==========================================
+def _transfer_ledger(blob: dict, kind: str, now: float) -> list:
+    tr = blob.get("transfers") if isinstance(blob.get("transfers"), dict) else {}
+    rows = []
+    for row in (tr.get(kind) or []):
+        try:
+            t, a = float(row[0]), int(row[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if now - t < TRANSFER_WINDOW_SEC:
+            rows.append([t, a])
+    rows.sort()
+    tr[kind] = rows
+    blob["transfers"] = tr
+    return rows
+
+def transfer_money_limited_sync(sender_id: int, receiver_id: int, amount: int, bypass: bool = False, commit: bool = True) -> dict:
+    """제한을 확인하고 송금합니다. (commit=False 이면 확인만 하고 저장하지 않음)
+    반환: {"ok": bool, "reason": 실패 사유, "sender_money", "receiver_money", "sent_today"}"""
+    _require_db()
+    now = time.time()
+    with _inv_lock:
+        s_info, r_info = get_user_data(sender_id), get_user_data(receiver_id)
+        s_money, r_money = int(s_info.get("money") or 0), int(r_info.get("money") or 0)
+        s_data_before = copy.deepcopy(s_info.get("data"))      # 되돌릴 때 쓸 원본
+        s_blob, r_blob = get_title_blob(copy.deepcopy(s_info)), get_title_blob(copy.deepcopy(r_info))
+        sent = _transfer_ledger(s_blob, "sent", now)
+        recv = _transfer_ledger(r_blob, "received", now)
+        sent_total = sum(a for _, a in sent)
+
+        def fail(reason):
+            return {"ok": False, "reason": reason, "sender_money": s_money, "receiver_money": r_money, "sent_today": sent_total}
+
+        if s_money < amount:
+            return fail(f"보유 자금이 부족합니다!\n- 보유 중인 자금: `${s_money:,}`\n- 송금하려는 금액: `${amount:,}`")
+        if not bypass:
+            if amount > TRANSFER_MAX_PER_TX:
+                return fail(f"1회 송금은 최대 `${TRANSFER_MAX_PER_TX:,}` 까지 가능합니다.")
+            if sent and now - sent[-1][0] < TRANSFER_COOLDOWN_SEC:
+                wait = int(TRANSFER_COOLDOWN_SEC - (now - sent[-1][0]) + 0.999)
+                return fail(f"연속 송금은 제한되어 있습니다. **{wait}초** 뒤에 다시 시도해 주세요.")
+            if sent_total + amount > TRANSFER_DAILY_SEND_LIMIT:
+                left = max(0, TRANSFER_DAILY_SEND_LIMIT - sent_total)
+                reset = int(sent[0][0] + TRANSFER_WINDOW_SEC) if sent else int(now)
+                return fail(f"하루 송금 한도를 넘습니다. (24시간 한도 `${TRANSFER_DAILY_SEND_LIMIT:,}` / 지금 보낼 수 있는 금액 `${left:,}`)\n"
+                            f"가장 오래된 송금 기록이 <t:{reset}:R> 에 풀립니다.")
+            recv_total = sum(a for _, a in recv)
+            if recv_total + amount > TRANSFER_DAILY_RECEIVE_LIMIT:
+                left = max(0, TRANSFER_DAILY_RECEIVE_LIMIT - recv_total)
+                return fail(f"받는 사람의 하루 수령 한도를 넘습니다. (상대가 지금 받을 수 있는 금액 `${left:,}`)")
+
+        if not commit:
+            return {"ok": True, "reason": "", "sender_money": s_money, "receiver_money": r_money, "sent_today": sent_total}
+
+        sent.append([now, amount])
+        recv.append([now, amount])
+        res = supabase.table("user_data").update({"money": s_money - amount, "data": s_blob}).eq("user_id", str(sender_id)).execute()
+        _check_updated(res, "transfer (sender)")
+        try:
+            res = supabase.table("user_data").update({"money": r_money + amount, "data": r_blob}).eq("user_id", str(receiver_id)).execute()
+            _check_updated(res, "transfer (receiver)")
+        except Exception:
+            try:   # 적립에 실패했다면 송금자의 자금과 기록을 원래대로 되돌린다
+                supabase.table("user_data").update({"money": s_money, "data": s_data_before}).eq("user_id", str(sender_id)).execute()
+            except Exception as rollback_err:
+                print(f"DB Error (transfer rollback): {rollback_err}")
+            raise
+        return {"ok": True, "reason": "", "sender_money": s_money - amount, "receiver_money": r_money + amount,
+                "sent_today": sent_total + amount}
+
+async def check_transfer_member_eligibility(interaction: discord.Interaction, sender: discord.Member, receiver: discord.Member) -> bool:
+    """계정 생성일 / 서버 가입 시간 제한 (신규·다계정 악용 방지). 통과하면 True"""
+    now = discord.utils.utcnow()
+    for who, label in ((sender, "보내는 사람"), (receiver, "받는 사람")):
+        age_days = (now - who.created_at).days
+        if age_days < TRANSFER_MIN_ACCOUNT_AGE_DAYS:
+            await interaction.response.send_message(
+                f"{label}({who.display_name})의 디스코드 계정이 만들어진 지 **{TRANSFER_MIN_ACCOUNT_AGE_DAYS}일**이 지나야 송금할 수 있습니다.", ephemeral=True)
+            return False
+        if who.joined_at is not None:
+            stay_hours = (now - who.joined_at).total_seconds() / 3600
+            if stay_hours < TRANSFER_MIN_SERVER_STAY_HOURS:
+                left = int(TRANSFER_MIN_SERVER_STAY_HOURS - stay_hours + 0.999)
+                await interaction.response.send_message(
+                    f"{label}({who.display_name})가 서버에 들어온 지 **{TRANSFER_MIN_SERVER_STAY_HOURS}시간**이 지나야 송금할 수 있습니다. (약 {left}시간 남음)", ephemeral=True)
+                return False
+    return True
+
+# ==========================================
 # 통합 설정 시스템
 #   /설정 → 설정칸(카드)이 표시되고, 버튼으로 칸 이동 / 가운데 버튼으로 켜기·끄기
 #
@@ -1432,6 +1925,17 @@ SETTINGS_DEFS = [
         "on_text": "자동 사용",
         "off_text": "수동 사용",
         "default": True,
+    },
+    {
+        "key": "hardcore_mission",
+        "category": "임무 진행 방식",
+        "name": "임무(작전) 수행 하드코어",
+        "desc": "켜면 임무(작전)를 5단계로 나누어 세세히 직접 수행합니다.\n"
+                "임무 한 번에 2~3분이 걸리고 난이도가 높아 켜는 것을 추천하지 않습니다.\n"
+                "끄면 기존 방식의 간단한 임무로 진행됩니다.",
+        "on_text": "하드코어",
+        "off_text": "기본 방식",
+        "default": False,
     },
     {
         "key": "alert_mode",
@@ -2756,30 +3260,37 @@ async def transfer_money(interaction: discord.Interaction, member: discord.Membe
         await interaction.response.send_message("받는 사람은 **조직원 또는 경찰**이어야 합니다. (가입하지 않은 사람에게는 송금할 수 없습니다)", ephemeral=True)
         return
 
-    # 2. 잔액 확인
-    sender_money = int((await asyncio.to_thread(get_user_data, sender.id)).get("money", 0) or 0)
-    if sender_money < amount:
-        await interaction.response.send_message(
-            f"보유 자금이 부족합니다!\n"
-            f"• 보유 중인 자금: `${sender_money:,}`\n"
-            f"• 송금하려는 금액: `${amount:,}`",
-            ephemeral=True
-        )
+    # 2. 송금 제한 (서버 관리자는 면제). 응답 전에 확인해야 실패 안내가 본인에게만 보인다.
+    is_admin = bool(sender.guild_permissions.administrator)
+    if not is_admin:
+        if not await check_transfer_member_eligibility(interaction, sender, receiver): return
+    try:
+        pre = await asyncio.to_thread(transfer_money_limited_sync, sender.id, receiver.id, amount, is_admin, False)
+    except Exception as e:
+        await report_error("/송금 (사전 확인)", e, interaction)
+        await interaction.response.send_message("데이터베이스 오류로 송금에 실패했습니다. 나중에 다시 시도해 주세요.", ephemeral=True)
+        return
+    if not pre["ok"]:
+        await interaction.response.send_message(pre["reason"], ephemeral=True)
         return
 
     await interaction.response.defer()
 
-    # 3. 실제 이체 (차감 → 적립, 실패 시 되돌림)
+    # 3. 실제 이체 (제한 재확인 → 차감 → 적립, 실패 시 되돌림)
     try:
-        ok, new_sender_money, new_receiver_money = await asyncio.to_thread(transfer_money_sync, sender.id, receiver.id, amount)
+        result = await asyncio.to_thread(transfer_money_limited_sync, sender.id, receiver.id, amount, is_admin, True)
     except Exception as e:
-        print(f"DB Error (Transfer Money): {e}")
+        await report_error("/송금 (이체)", e, interaction)
         await interaction.followup.send("데이터베이스 오류로 송금에 실패했습니다. 나중에 다시 시도해 주세요.", ephemeral=True)
         return
 
-    if not ok:   # 확인과 이체 사이에 잔액이 줄어든 경우
-        await interaction.followup.send(f"보유 자금이 부족합니다! (보유 `${new_sender_money:,}`)", ephemeral=True)
+    if not result["ok"]:   # 확인과 이체 사이에 상태가 바뀐 경우
+        await interaction.followup.send(result["reason"], ephemeral=True)
         return
+    new_sender_money, new_receiver_money = result["sender_money"], result["receiver_money"]
+
+    if amount >= TRANSFER_ALERT_AMOUNT:   # 큰 금액은 관리자 기록 채널에 알림
+        await admin_audit(interaction, "고액 송금", receiver, f"${amount:,} (보낸 사람 {sender.display_name})")
 
     # 4. 송금 완료 임베드 (서버 전체 공개)
     embed = discord.Embed(
@@ -2794,6 +3305,8 @@ async def transfer_money(interaction: discord.Interaction, member: discord.Membe
     )
     if sender.avatar:
         embed.set_thumbnail(url=sender.avatar.url)
+    if not is_admin:
+        embed.set_footer(text=f"오늘 보낸 금액 ${result['sent_today']:,} / 하루 한도 ${TRANSFER_DAILY_SEND_LIMIT:,}")
 
     await interaction.followup.send(embed=embed)
 
@@ -4204,6 +4717,289 @@ class LeaveConfirmView(discord.ui.View):
         )
         await interaction.edit_original_response(embed=embed, view=self)
 
+# === 임무(작전) 수행 하드코어 ===
+# /설정 의 "임무(작전) 수행 하드코어" 를 켠 유저는 임무를 한 번에 판정하지 않고, 5단계를 직접 수행합니다.
+#   1) 정찰(상황 판단)  2) 침투(반응 속도)  3) 보안 해제(코드 암기)  4) 목표 확보(상황 판단)  5) 탈출(상황 판단)
+# 실수(경계도)가 HC_STRIKE_LIMIT 번 쌓이면 작전 실패, 5단계를 모두 넘기면 성공입니다. (보상·벌금은 기존 임무와 동일)
+hardcore_active = set()      # 하드코어 작전 수행 중인 유저 (동시에 두 번 시작하지 못하게)
+HC_STRIKE_LIMIT = 2          # 경계도가 이 값에 도달하면 작전 실패
+HC_INTRO_SEC = 6             # 작전 개시 안내 표시 시간
+HC_GAP_SEC = 7               # 단계 사이 정비 시간
+HC_CHOICE_SEC = 35           # 상황 판단 제한 시간
+HC_CODE_INPUT_SEC = 40       # 코드 입력 제한 시간
+HC_CHOICE_BASE = {2: 82, 1: 45, 0: 12}   # 선택지 품질(최선/무난/최악)별 기본 성공 확률(%)
+
+# 상황 판단 시나리오: 선택지는 (문구, 품질) — 품질 2 = 최선, 1 = 무난, 0 = 최악 (표시 순서는 매번 섞입니다)
+HC_SCENARIOS = {
+    "recon": [
+        {"title": "정문 경비 교대", "text": "목표 건물 정문에 경비 두 명이 서 있습니다. 곧 교대 시간이 되고, 건물 뒤편에는 낡은 환기구가 보입니다.",
+         "options": [("교대하며 경비가 자리를 비우는 틈에 정문을 통과한다", 2),
+                     ("뒤편 환기구로 돌아서 들어간다", 1),
+                     ("배달원인 척 경비에게 말을 걸어 정면으로 통과한다", 0)]},
+        {"title": "순찰 중인 경찰", "text": "골목 입구에 경찰 순찰차가 서 있고, 경관 한 명이 차에 기대어 통화 중입니다. 반대편에는 쓰레기 수거 골목이 있습니다.",
+         "options": [("순찰차 시야 밖인 수거 골목으로 우회한다", 2),
+                     ("순찰차 뒤편 그림자를 따라 몸을 낮추고 지나간다", 1),
+                     ("모자를 눌러쓰고 태연하게 앞을 지나간다", 0)]},
+        {"title": "경비견", "text": "건물 마당에 경비견이 풀려 있습니다. 바람은 건물 쪽에서 당신 쪽으로 불고 있습니다.",
+         "options": [("바람이 불어오는 반대편으로 돌아 접근하고 고기를 던져 시선을 돌린다", 2),
+                     ("개가 잠잠해질 때까지 기다렸다가 조용히 지나간다", 1),
+                     ("소리를 질러 개를 쫓아낸다", 0)]},
+    ],
+    "target": [
+        {"title": "잠긴 목표실", "text": "목표가 보관된 방의 문이 잠겨 있습니다. 문 옆에는 얇은 창문이, 복도 끝에는 경비실이 있습니다.",
+         "options": [("락픽으로 소리 없이 문을 연다", 2),
+                     ("창문으로 우회해 진입한다", 1),
+                     ("문을 걷어차 부순다", 0)]},
+        {"title": "감시 카메라", "text": "복도 천장의 카메라가 좌우로 천천히 회전하고 있습니다. 회전 끝점에서 카메라가 벽 쪽을 향하는 몇 초가 있습니다.",
+         "options": [("카메라가 벽 쪽을 향할 때 맞춰 벽을 따라 이동한다", 2),
+                     ("카메라 렌즈를 천으로 가리고 지나간다", 1),
+                     ("전속력으로 달려서 통과한다", 0)]},
+        {"title": "뜻밖의 목격자", "text": "목표실 앞 휴게 공간에 취한 직원이 앉아 있습니다. 아직 당신을 보지는 못했습니다.",
+         "options": [("모퉁이에서 기다리다 직원이 잠들거나 자리를 뜨면 이동한다", 2),
+                     ("술 취한 동료인 척 어깨를 두드리며 지나간다", 1),
+                     ("직원을 위협해 입을 막는다", 0)]},
+    ],
+    "escape": [
+        {"title": "탈출 경로 선택", "text": "목표를 확보했습니다. 건물 밖에서 경보 사이렌이 울리기 시작했습니다. 근처에는 붐비는 시장, 하수로 입구, 넓은 대로가 있습니다.",
+         "options": [("인파가 많은 시장으로 섞여 들어가 빠져나간다", 2),
+                     ("하수로를 통해 멀리 이동한다", 1),
+                     ("대로에서 차를 훔쳐 전속력으로 달린다", 0)]},
+        {"title": "남겨진 흔적", "text": "작전 현장에 발자국과 소지품 몇 가지가 남았습니다. 순찰 인원이 곧 도착할 것 같습니다.",
+         "options": [("흔적만 빠르게 정리하고 평소 걸음으로 현장을 떠난다", 2),
+                     ("흔적은 두고 최대한 빨리 현장을 벗어난다", 1),
+                     ("현장에 불을 질러 흔적을 없앤다", 0)]},
+        {"title": "경비 무전", "text": "경비의 무전기에서 이상 징후를 보고하는 소리가 들립니다. 당신은 아직 발견되지 않았습니다.",
+         "options": [("몸을 낮추고 정지해 교신이 끝나길 기다린 뒤 이동한다", 2),
+                     ("반대편 복도로 빠르게 이동한다", 1),
+                     ("무전기를 든 경비를 제압하려 달려든다", 0)]},
+    ],
+}
+
+class HCBaseView(discord.ui.View):
+    """하드코어 단계 화면의 공통 부분: 소유자 확인 + 완료 신호(asyncio.Event)"""
+    def __init__(self, owner: discord.abc.User):
+        super().__init__(timeout=None)
+        self.owner = owner
+        self.done = asyncio.Event()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner.id:
+            await interaction.response.send_message("본인의 작전 창만 조작할 수 있습니다.", ephemeral=True)
+            return False
+        return True
+
+async def _hc_wait(view: HCBaseView, timeout: float) -> bool:
+    """단계 화면이 끝날 때까지 기다림. 제한 시간 안에 끝났으면 True, 시간 초과면 False"""
+    try:
+        await asyncio.wait_for(view.done.wait(), timeout=timeout)
+        return True
+    except asyncio.TimeoutError:
+        return False
+
+class HCChoiceView(HCBaseView):
+    def __init__(self, owner: discord.abc.User, count: int):
+        super().__init__(owner)
+        self.choice = None
+        for i in range(count):
+            btn = discord.ui.Button(label=f"{i + 1}번", style=discord.ButtonStyle.primary)
+            btn.callback = self._make_callback(i)
+            self.add_item(btn)
+
+    def _make_callback(self, idx: int):
+        async def cb(interaction: discord.Interaction):
+            await interaction.response.defer()
+            if self.choice is None:
+                self.choice = idx
+                self.done.set()
+        return cb
+
+class HCReactionView(HCBaseView):
+    def __init__(self, owner: discord.abc.User):
+        super().__init__(owner)
+        self.armed = False
+        self.armed_at = 0.0
+        self.result = None      # "early" / "hit"
+        self.reaction = 0.0
+        self.btn = discord.ui.Button(label="신호 대기 중", style=discord.ButtonStyle.secondary)
+        self.btn.callback = self._on_click
+        self.add_item(self.btn)
+
+    async def _on_click(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        if self.result is not None:
+            return
+        if not self.armed:
+            self.result = "early"
+        else:
+            self.result = "hit"
+            self.reaction = time.monotonic() - self.armed_at
+        self.done.set()
+
+class HCCodeModal(discord.ui.Modal, title="보안 해제"):
+    code = discord.ui.TextInput(label="암기한 코드를 입력하세요", min_length=1, max_length=10)
+
+    def __init__(self, hc_view: "HCCodeView"):
+        super().__init__()
+        self.hc_view = hc_view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        if self.hc_view.answer is None:
+            self.hc_view.answer = str(self.code.value).strip()
+            self.hc_view.done.set()
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        print(f"HC modal error: {error}")
+
+class HCCodeView(HCBaseView):
+    def __init__(self, owner: discord.abc.User):
+        super().__init__(owner)
+        self.answer = None
+
+    @discord.ui.button(label="코드 입력", style=discord.ButtonStyle.success)
+    async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.answer is not None:
+            await interaction.response.send_message("이미 코드를 입력했습니다.", ephemeral=True)
+            return
+        await interaction.response.send_modal(HCCodeModal(self))
+
+def hc_difficulty_penalty(success_rate: int) -> float:
+    """원래 성공률이 낮은(어려운) 임무일수록 커지는 난이도 보정값"""
+    return max(0.0, (70 - success_rate) / 3)
+
+def hc_stage_embed(selected: dict, step: int, total: int, name: str, body: str, strikes: int, footer: str = "") -> discord.Embed:
+    embed = discord.Embed(
+        title=f"[하드코어 작전] {selected['title']} - {step}/{total}단계: {name}",
+        description=f"{body}\n\n**경계도:** `{strikes}/{HC_STRIKE_LIMIT}`",
+        color=discord.Color.dark_red()
+    )
+    if footer:
+        embed.set_footer(text=footer)
+    return embed
+
+async def run_hardcore_mission(interaction: discord.Interaction, user: discord.abc.User, selected: dict, stage_bonus: int):
+    """하드코어 작전 진행. 반환: (성공 여부, 작전 기록 문구)
+    stage_bonus: 아이템 성공률 보너스 - 순찰 페널티 (상황 판단 단계의 성공 확률에 반영)"""
+    pen = hc_difficulty_penalty(selected["success_rate"])
+    total = 5
+    strikes = 0
+    log = []
+    edit = interaction.edit_original_response
+
+    def record(step_name: str, ok: bool, note: str):
+        log.append(f"{len(log) + 1}단계 {step_name}: {'성공' if ok else '실패'}{(' (' + note + ')') if note else ''}")
+
+    def log_text(aborted: bool = False) -> str:
+        text = "\n\n**[하드코어 작전 기록]**\n" + "\n".join(log)
+        if aborted:
+            text += "\n경계도 한계를 넘어 작전이 중단되었습니다."
+        return text
+
+    try:
+        intro = discord.Embed(
+            title=f"[하드코어 작전 개시] {selected['title']}",
+            description=(f"**{user.mention}** 님, 작전을 **{total}단계**로 나누어 직접 수행합니다.\n\n"
+                         f"• 각 단계에는 제한 시간이 있고, 시간 초과는 실수로 처리됩니다.\n"
+                         f"• 실수가 **{HC_STRIKE_LIMIT}회** 쌓이면(경계도 {HC_STRIKE_LIMIT}/{HC_STRIKE_LIMIT}) 작전은 실패합니다.\n"
+                         f"• 아이템 보너스와 순찰 페널티는 상황 판단 단계의 성공 확률에 반영됩니다.\n\n"
+                         f"잠시 후 1단계(정찰)가 시작됩니다."),
+            color=discord.Color.dark_red()
+        )
+        await edit(embed=intro, view=None)
+        await asyncio.sleep(HC_INTRO_SEC)
+
+        step = 0
+        plan = ["choice:recon", "reaction", "code", "choice:target", "choice:escape"]
+        names = {"choice:recon": "정찰", "reaction": "침투", "code": "보안 해제", "choice:target": "목표 확보", "choice:escape": "탈출"}
+
+        for kind in plan:
+            step += 1
+            name = names[kind]
+            ok = False
+            note = ""
+
+            if kind.startswith("choice:"):
+                sc = random.choice(HC_SCENARIOS[kind.split(":")[1]])
+                opts = list(sc["options"])
+                random.shuffle(opts)
+                lines = "\n".join(f"**{i + 1}번.** {t}" for i, (t, _) in enumerate(opts))
+                body = f"**{sc['title']}**\n{sc['text']}\n\n{lines}"
+                view = HCChoiceView(user, len(opts))
+                await edit(embed=hc_stage_embed(selected, step, total, name, body, strikes, f"제한 시간 {HC_CHOICE_SEC}초"), view=view)
+                answered = await _hc_wait(view, HC_CHOICE_SEC)
+                view.stop()
+                if not answered or view.choice is None:
+                    note = "시간 초과"
+                else:
+                    quality = opts[view.choice][1]
+                    chance = max(5, min(97, int(HC_CHOICE_BASE[quality] - 3 * pen + stage_bonus)))
+                    ok = random.randint(1, 100) <= chance
+                    note = "" if ok else "판단이 어긋나 상황이 꼬였습니다"
+
+            elif kind == "reaction":
+                window = max(2.0, 3.5 - 0.1 * pen)
+                view = HCReactionView(user)
+                body = ("경비의 시선이 사각지대로 향하는 순간을 기다립니다.\n"
+                        "**버튼이 초록색으로 바뀌는 즉시** 누르세요. 신호 전에 누르면 들켜서 실수가 됩니다.")
+                await edit(embed=hc_stage_embed(selected, step, total, name, body, strikes, "신호를 기다리는 중"), view=view)
+                early = await _hc_wait(view, random.uniform(3.0, 7.0))
+                if early and view.result == "early":
+                    note = "신호 전에 움직였습니다"
+                else:
+                    view.btn.label = "지금 돌파"
+                    view.btn.style = discord.ButtonStyle.success
+                    view.armed = True
+                    await edit(embed=hc_stage_embed(selected, step, total, name, "**지금입니다! 돌파하세요!**", strikes, f"제한 시간 {window:.1f}초"), view=view)
+                    view.armed_at = time.monotonic()
+                    hit = await _hc_wait(view, window)
+                    if hit and view.result == "hit":
+                        ok = True
+                    else:
+                        note = "반응이 늦었습니다"
+                view.stop()
+
+            else:   # code
+                digits = 4 if selected["success_rate"] >= 60 else (5 if selected["success_rate"] >= 40 else 6)
+                show_sec = 6 if digits <= 4 else (5 if digits == 5 else 4)
+                code = "".join(random.choice("0123456789") for _ in range(digits))
+                body = (f"보안 단말의 코드가 잠깐 표시됩니다. **{show_sec}초 안에 외우세요.**\n\n"
+                        f"**보안 코드:** `{code}`")
+                await edit(embed=hc_stage_embed(selected, step, total, name, body, strikes, f"{show_sec}초 후 코드가 사라집니다"), view=None)
+                await asyncio.sleep(show_sec)
+                view = HCCodeView(user)
+                body = f"코드가 사라졌습니다. **{digits}자리** 코드를 입력하세요."
+                await edit(embed=hc_stage_embed(selected, step, total, name, body, strikes, f"제한 시간 {HC_CODE_INPUT_SEC}초"), view=view)
+                answered = await _hc_wait(view, HC_CODE_INPUT_SEC)
+                view.stop()
+                if not answered or view.answer is None:
+                    note = "시간 초과"
+                elif view.answer == code:
+                    ok = True
+                else:
+                    note = "코드가 틀렸습니다"
+
+            if not ok:
+                strikes += 1
+            record(name, ok, note if not ok else "")
+
+            result_body = f"**{name} 단계 {'성공' if ok else '실패'}**" + (f"\n{note}" if note and not ok else "")
+            if strikes >= HC_STRIKE_LIMIT:
+                await edit(embed=hc_stage_embed(selected, step, total, name, result_body + "\n\n경계도가 한계에 도달했습니다. 작전이 중단됩니다.", strikes), view=None)
+                await asyncio.sleep(3)
+                return False, log_text(aborted=True)
+            if step < total:
+                await edit(embed=hc_stage_embed(selected, step, total, name, result_body + f"\n\n다음 단계를 준비 중입니다... ({HC_GAP_SEC}초)", strikes), view=None)
+                await asyncio.sleep(HC_GAP_SEC)
+            else:
+                await edit(embed=hc_stage_embed(selected, step, total, name, result_body + "\n\n작전 결과를 정산 중입니다...", strikes), view=None)
+                await asyncio.sleep(2)
+
+        return True, log_text()
+    except discord.HTTPException as e:
+        print(f"Hardcore mission HTTP error: {e}")
+        log.append("통신 장애로 작전이 중단되었습니다.")
+        return False, log_text()
+
 # === 3. 임무 선택 뷰 ===
 class MissionSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
@@ -4225,9 +5021,13 @@ class MissionSelect(discord.ui.Select):
             return
 
         user = interaction.user
+        if user.id in hardcore_active:
+            await interaction.followup.send("이미 하드코어 작전을 수행 중입니다.", ephemeral=True)
+            return
         user_stats = get_user_data(user.id)
         old_rank = get_user_rank(user_stats.get("honor", 0))
         inventory = user_stats.get("inventory", {})
+        hardcore_on = get_setting(user_stats, "hardcore_mission")
 
         # 임무 쿨타임: 크로노그래프 시계/특수 바이크 보유 시 단축, 자양강장제는 1회 즉시 초기화(소모)
         drink_used = False
@@ -4274,8 +5074,26 @@ class MissionSelect(discord.ui.Select):
                 active_buffs.append("경찰 순찰망 가동 (-15% 성공률)")    
 
         final_success_rate = max(1, min(98, selected["success_rate"] + success_bonus - patrol_penalty))
-        is_success = random.randint(1, 100) <= final_success_rate
-        buff_desc = f"\n**적용된 보너스:** {', '.join(active_buffs)}" if active_buffs else ""
+        hc_desc = ""
+        if hardcore_on:
+            # 하드코어: 5단계를 직접 수행 (2~3분). 끝나면 그동안 바뀐 자금·가방을 반영하도록 데이터를 다시 읽는다.
+            hardcore_active.add(user.id)
+            try:
+                is_success, hc_desc = await run_hardcore_mission(interaction, user, selected, success_bonus - patrol_penalty)
+            finally:
+                hardcore_active.discard(user.id)
+            user_stats = get_user_data(user.id)
+            inventory = user_stats.get("inventory", {})
+            old_rank = get_user_rank(user_stats.get("honor", 0))
+            if drink_used and inventory.get(DRINK_ITEM, 0) > 0:
+                inventory[DRINK_ITEM] -= 1
+                if inventory[DRINK_ITEM] <= 0:
+                    del inventory[DRINK_ITEM]
+            if not no_cd:
+                mission_cooldowns[user.id] = time.time() + (MISSION_COOLDOWN_FAST_SEC if has_fast else MISSION_COOLDOWN_SEC)
+        else:
+            is_success = random.randint(1, 100) <= final_success_rate
+        buff_desc = (f"\n**적용된 보너스:** {', '.join(active_buffs)}" if active_buffs else "") + hc_desc
 
         current_money = user_stats.get("money", 0)
         current_honor = user_stats.get("honor", 0)
@@ -4476,6 +5294,10 @@ async def execute_mission(interaction: discord.Interaction):
     user = interaction.user
     user_stats = get_user_data(user.id)
     current_loc = user_stats.get("location", "레벤하임")
+
+    if user.id in hardcore_active:
+        await interaction.followup.send("이미 하드코어 작전을 수행 중입니다.", ephemeral=True)
+        return
 
     remain = int(mission_cooldowns.get(user.id, 0) - time.time() + 0.999)
     _inv = user_stats.get("inventory") or {}
@@ -5044,7 +5866,7 @@ async def info_command(interaction: discord.Interaction, keyword: str):
         },
         "설정": {
             "title": "시스템: /설정",
-            "desc": "임무 실패 방지권 자동 사용 여부, 이벤트 긴급 알림 등 내 플레이 환경을 직접 커스텀할 수 있는 설정 창입니다.",
+            "desc": "임무 실패 방지권 자동 사용 여부, 임무(작전) 수행 하드코어(5단계 직접 수행, 2~3분 소요), 이벤트 긴급 알림 등 내 플레이 환경을 직접 커스텀할 수 있는 설정 창입니다.",
         },
         "이동": {
             "title": "시스템: /이동 [지역명]",
