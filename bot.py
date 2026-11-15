@@ -2577,6 +2577,7 @@ ULTIMATE_BOSS = {
 # === 테러 보스: 유토피아 오브 에덴의 창립자 (세계관 /정보 참고) ===
 # 어둠의 지배자(75,000)와 태초의 파괴자(120,000) 사이의 난이도입니다.
 EDEN_BOSS = {
+    "image": "boss_eden.png",   # 보스 그림 (assets 폴더, 십자가까지 잘라 둔 상반신). 파일이 없으면 그림 없이 진행됩니다.
     "name": "[테러보스] 에칼 데 페스토",
     "hp": 95000,
     "atk": 3800,
@@ -2683,6 +2684,7 @@ NAMED_MONSTERS = {
         "hp": 8000, "atk": 520, "def": 100, "enrage": 1.5,
         "reward_money": (1800, 3300), "reward_honor": 4,
         "drop": "[전리품] 비앙카의 독니 반지",
+        "image": "named_bianca.png",   # 전투 화면 그림 (assets 폴더). 파일이 없으면 그림 없이 진행됩니다.
         "desc": "로젠펠트 뒷무대의 독살 전문가. 체력이 줄면 맹독을 뿌리며 덤빕니다."
     },
     "boronin": {
@@ -3219,7 +3221,13 @@ async def fight_named(interaction: discord.Interaction, monster: app_commands.Ch
     view = NPCBattleView(user=user, user_stats_dict=stats, npc_info=target, max_turns=target["max_turns"])
     embed = view.get_embed()
     embed.title = f"[네임드 전투] {target['name']} - 턴 {view.turn_count} / {view.max_turns}"
-    view.message = await interaction.followup.send(embed=embed, view=view)
+    send_kwargs = {"embed": embed, "view": view}
+    named_file = boss_image_file(target)   # 보스와 같은 방식으로 그림 첨부
+    if named_file:
+        send_kwargs["file"] = named_file
+    elif target.get("image"):
+        embed.set_image(url=None)          # 그림 파일이 없으면 깨진 이미지 표시를 막음
+    view.message = await interaction.followup.send(**send_kwargs)
 
 # === 시민 전용 아르바이트 쿨타임 사전 ===
 parttime_cooldowns = {}
