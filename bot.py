@@ -337,6 +337,7 @@ async def check_jail(interaction: discord.Interaction) -> bool:
 
 # 쿨타임 관리를 위한 메모리 사전 (유저ID: 다음 수행 가능 시간)
 mission_cooldowns = {}
+mission_inflight = set()   # 지금 임무를 처리 중인 유저 (쿨타임은 결과가 나온 뒤에 걸리므로, 그 사이의 중복 실행 방지용)
 
 # === 명예 포인트 및 소속(마피아/경찰)에 따른 직급 계산 함수 ===
 def get_user_rank(honor: int, is_police: bool = False) -> str:
@@ -5114,6 +5115,31 @@ class MissionSelect(discord.ui.Select):
         if user.id in hardcore_active:
             await interaction.followup.send("이미 하드코어 작전을 수행 중입니다.", ephemeral=True)
             return
+        if user.id in mission_inflight:
+            await interaction.followup.send("이미 임무를 처리 중입니다. 결과가 나올 때까지 잠시만 기다려 주세요.", ephemeral=True)
+            return
+
+        # [쿨타임 적용 순서]  임무 입력 → 결과 저장·출력 → 쿨타임 적용
+        #   중간에 오류가 나서 결과가 저장되지 못했다면 쿨타임도 수배도 걸리지 않고 처음으로 되돌아갑니다.
+        mission_inflight.add(user.id)
+        state = {"committed": False, "cd_sec": None, "set_wanted": False}
+        try:
+            await self._mission_flow(interaction, state)
+        except Exception as e:
+            await report_error("임무 수행", e, interaction)
+            if state["committed"]:
+                # 결과는 이미 저장됐고 화면 출력만 실패한 경우: 보상을 받았으므로 쿨타임은 그대로 적용된다
+                await interaction.followup.send("임무 결과는 저장되었지만 화면 표시 중 오류가 발생했습니다. `/프로필` 로 확인해 주세요.", ephemeral=True)
+            else:
+                try:
+                    await interaction.followup.send("임무 처리 중 오류가 발생했습니다. **쿨타임은 적용되지 않았으니** 다시 시도해 주세요.", ephemeral=True)
+                except Exception:
+                    pass
+        finally:
+            mission_inflight.discard(user.id)
+
+    async def _mission_flow(self, interaction: discord.Interaction, state: dict):
+        user = interaction.user
         user_stats = get_user_data(user.id)
         old_rank = get_user_rank(user_stats.get("honor", 0))
         inventory = user_stats.get("inventory", {})
@@ -5134,8 +5160,8 @@ class MissionSelect(discord.ui.Select):
                 await interaction.followup.send(f"작전 준비 중입니다. **{remain}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
                 return
         has_fast = any(k in inventory for k in CHRONO_ITEMS)
-        if not no_cd:
-            mission_cooldowns[user.id] = now_ts + (MISSION_COOLDOWN_FAST_SEC if has_fast else MISSION_COOLDOWN_SEC)
+        # 쿨타임은 여기서 걸지 않는다. 임무 결과가 저장되고 출력된 뒤에 적용한다. (아래 맨 끝 참고)
+        state["cd_sec"] = None if no_cd else (MISSION_COOLDOWN_FAST_SEC if has_fast else MISSION_COOLDOWN_SEC)
 
         selected = MISSIONS[self.values[0]]
         current_loc = user_stats.get("location", "레벤하임")
@@ -5179,8 +5205,6 @@ class MissionSelect(discord.ui.Select):
                 inventory[DRINK_ITEM] -= 1
                 if inventory[DRINK_ITEM] <= 0:
                     del inventory[DRINK_ITEM]
-            if not no_cd:
-                mission_cooldowns[user.id] = time.time() + (MISSION_COOLDOWN_FAST_SEC if has_fast else MISSION_COOLDOWN_SEC)
         else:
             is_success = random.randint(1, 100) <= final_success_rate
         buff_desc = (f"\n**적용된 보너스:** {', '.join(active_buffs)}" if active_buffs else "") + hc_desc
@@ -5244,8 +5268,7 @@ class MissionSelect(discord.ui.Select):
             else:
                 fine = min(current_money, selected["fine"])
                 current_money -= fine
-                wanted_list[user.id] = datetime.now() + timedelta(seconds=60)
-                save_status(user.id)
+                state["set_wanted"] = True   # 수배는 결과가 DB 에 저장된 뒤에 건다 (저장 실패 시 수배도 없던 일로)
                 fail_msg = f"**작전 실패!** 현장에 흔적이 남아 **1분간 경찰 지명수배 상태**가 됩니다! (벌금 `-${fine:,}`)"
 
             s["fail"] += 1
@@ -5274,13 +5297,24 @@ class MissionSelect(discord.ui.Select):
             }).eq("user_id", str(user.id)).execute()
         except Exception as e:
             print(f"DB Error (mission update): {e}")
-            await interaction.followup.send("DB 저장 중 오류가 발생했습니다.", ephemeral=True)
-            return
+            await interaction.followup.send("DB 저장 중 오류가 발생했습니다. **쿨타임은 적용되지 않았으니** 다시 시도해 주세요.", ephemeral=True)
+            return   # 저장에 실패했으면 쿨타임도 수배도 없이 그대로 되돌아간다
+
+        state["committed"] = True   # 여기부터는 결과가 확정됨
+
+        if state["set_wanted"]:
+            wanted_list[user.id] = datetime.now() + timedelta(seconds=60)
+            save_status(user.id)
 
         if user.avatar:
             embed.set_thumbnail(url=user.avatar.url)
 
-        await interaction.edit_original_response(embed=embed, view=None)
+        try:
+            await interaction.edit_original_response(embed=embed, view=None)
+        finally:
+            # 결과를 보여준 뒤에 쿨타임 적용 (화면 출력이 실패했더라도 이미 보상이 저장됐으므로 쿨타임은 건다)
+            if state["cd_sec"]:
+                mission_cooldowns[user.id] = time.time() + state["cd_sec"]
 
 class MissionView(discord.ui.View):
     def __init__(self, owner: discord.Member):
