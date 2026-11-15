@@ -666,7 +666,8 @@ def get_title_blob(user_info: dict) -> dict:
                 "fight_wins", "named_kills", "boss_kills",            # ← 업적용 카운터
                 "duel_wins", "raid_clears", "raid_king_clears", "war_wins", "war_conquests",
                 "police_arrests", "police_big_arrests", "police_patrols", "police_interrogations",   # ← 경찰 업적용 카운터
-                "police_matches", "police_op_stages", "police_salary_s"):
+                "police_matches", "police_op_stages", "police_salary_s",
+                "police_ops", "police_ops_boss"):          # ← /작전 성공 수 · 최상 난이도 성공 수
         stats[key] = int(stats.get(key, 0) or 0)
     blob["stats"] = stats
     blob["titles"] = list(blob.get("titles") or [])
@@ -812,6 +813,10 @@ _police_ach = [
     _ach("p_interrogate_30","심화", "정의의 저울",        "심문 재판 30회 완료",                    lambda s, i: s["police_interrogations"], 30,   hide="name"),
     _ach("p_big_arrest_3", "심화", "거물 사냥꾼",         f"명예 {POLICE_BIG_FISH_HONOR:,}pt 이상 거물 수배범 3회 검거", lambda s, i: s["police_big_arrests"], 3, hide="full"),
     _ach("p_salary_s_10",  "심화", "모범 수사관",         "/월급 평가 S(우수) 10회",                lambda s, i: s["police_salary_s"],       10,   hide="full"),
+    _ach("p_ops_1",        "기초", "첫 작전 완수",         "/작전 1회 성공",                         lambda s, i: s["police_ops"],            1),
+    _ach("p_ops_30",       "숙련", "작전 베테랑",          "/작전 30회 성공",                        lambda s, i: s["police_ops"],            30),
+    _ach("p_ops_150",      "심화", "특수 작전의 전설",     "/작전 150회 성공",                       lambda s, i: s["police_ops"],            150,  hide="name"),
+    _ach("p_ops_boss_3",   "심화", "거물 소탕 작전",       "'거물 마피아 보스 소탕 작전' 3회 성공",  lambda s, i: s["police_ops_boss"],       3,    hide="full"),
     _ach("p_op_50",        "심화", "작전 총사령관",       "수사팀 작전에서 성공 단계 50개 누적",    lambda s, i: s["police_op_stages"],      50,   hide="full"),
 ]
 for _a in _police_ach:
@@ -1978,6 +1983,214 @@ async def patrol_location(interaction: discord.Interaction, 지역: app_commands
 
     await interaction.followup.send(embed=embed)
 
+
+# ==========================================================================
+# [경찰 전용] /작전  —  경찰판 '임무'
+#   • 조직원의 /임무 처럼, 경찰이 수사 작전을 직접 골라 성공률 판정을 받고 포상금·명예를 얻습니다.
+#   • 성공 → 포상금 + 경찰 명예 (황금 배지 +20%), 실패 → 작전 경비로 벌금 + 쿨타임 연장 (조직원처럼 지명수배는 없음)
+#   • 성공률 보너스 (경찰만의 요소)
+#       - 순찰망 가동: 내가 있는 지역에 /순찰 효과가 남아 있으면 +10%
+#       - 수배범 정보: 지금 지명수배 중인 마피아 1명당 +2% (최대 +10%)
+#       - 기동타격대 무전기 보유: +5%
+#   • /월급 근무 중이면 성공한 작전이 실적 점수로 쌓입니다. (작전 난이도가 높을수록 점수가 큼)
+#   • 업적: police_ops(작전 성공 수), police_ops_boss(최상 난이도 성공 수)
+#   ※ /수사팀 작전(여럿이 함께하는 합동 소탕)과는 별개의 명령어입니다.
+# ==========================================================================
+OPERATION_COOLDOWN_SEC = 45          # 작전 쿨타임
+OPERATION_FAIL_EXTRA_SEC = 30        # 실패하면 보고서 작성으로 쿨타임이 이만큼 늘어남
+OPERATION_PATROL_BONUS = 10          # 순찰망 가동 지역 성공률 보너스(%)
+OPERATION_WANTED_BONUS_PER = 2       # 지명수배 중인 마피아 1명당 성공률 보너스(%)
+OPERATION_WANTED_BONUS_MAX = 10      #   위 보너스의 상한(%)
+POLICE_RADIO_OP_BONUS = 5            # 기동타격대 무전기: 성공률 +5%
+
+# success_rate(%) / reward(최소, 최대 $) / honor(pt) / fine(실패 시 벌금 $) / shift_bonus(/월급 실적 추가 점수)
+POLICE_OPERATIONS = {
+    "op_1": {"title": "불법 노점·소매치기 단속",     "diff": "하",   "success_rate": 85, "reward": (150, 350),   "honor": 3,  "fine": 80,   "shift_bonus": 0},
+    "op_2": {"title": "밀수 의심 화물 검문",         "diff": "중",   "success_rate": 60, "reward": (350, 800),   "honor": 6,  "fine": 200,  "shift_bonus": 2},
+    "op_3": {"title": "마약 조직 정보원 접선",       "diff": "상",   "success_rate": 40, "reward": (900, 1900),  "honor": 8,  "fine": 500,  "shift_bonus": 4},
+    "op_4": {"title": "조직 아지트 잠복 수사",       "diff": "중상", "success_rate": 50, "reward": (650, 1400),  "honor": 7,  "fine": 350,  "shift_bonus": 3},
+    "op_5": {"title": "거물 마피아 보스 소탕 작전",  "diff": "최상", "success_rate": 20, "reward": (2500, 5000), "honor": 18, "fine": 1200, "shift_bonus": 12},
+}
+operation_cooldowns = {}   # {user_id: 다음 작전 가능 시각(time.time 기준)}
+
+def _active_wanted_count() -> int:
+    """지금 지명수배 중인 마피아 수 (만료된 항목은 제외)"""
+    now = datetime.now()
+    return sum(1 for exp in list(wanted_list.values()) if exp > now)
+
+def operation_bonus_preview(in_patrol: bool, wanted_n: int) -> list:
+    """경찰 장비와 무관한 지역·수배 보너스 (성공률 %, 표시 문구) 목록"""
+    out = []
+    if in_patrol:
+        out.append((OPERATION_PATROL_BONUS, f"순찰망 가동 (+{OPERATION_PATROL_BONUS}%)"))
+    if wanted_n:
+        w = min(OPERATION_WANTED_BONUS_MAX, wanted_n * OPERATION_WANTED_BONUS_PER)
+        out.append((w, f"수배범 정보 확보 {wanted_n}명 (+{w}%)"))
+    return out
+
+def operation_success_rate(op: dict, inventory: dict, in_patrol: bool, wanted_n: int):
+    """(최종 성공률, 적용된 보너스 문구 목록)"""
+    rate = op["success_rate"]
+    labels = []
+    for pct, label in operation_bonus_preview(in_patrol, wanted_n):
+        rate += pct
+        labels.append(label)
+    if POLICE_RADIO_NAME in (inventory or {}):
+        rate += POLICE_RADIO_OP_BONUS
+        labels.append(f"기동타격대 무전기 (+{POLICE_RADIO_OP_BONUS}%)")
+    return max(1, min(98, rate)), labels
+
+def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n: int) -> dict:
+    """작전 판정 + 보상/벌금 + 업적 카운터를 한 번에 처리해 저장 (경매·업적 쓰기와 겹치지 않도록 잠금)"""
+    _require_db()
+    op = POLICE_OPERATIONS[op_key]
+    with _ach_lock, _inv_lock:
+        info = get_user_data(user_id)
+        inv = info.get("inventory") or {}
+        money, honor = int(info.get("money", 0) or 0), int(info.get("honor", 0) or 0)
+        rate, labels = operation_success_rate(op, inv, in_patrol, wanted_n)
+        success = random.randint(1, 100) <= rate
+        old_rank = get_user_rank(honor, is_police=True)
+        blob = get_title_blob(info)
+        s = blob["stats"]
+
+        earned_money = earned_honor = fine = 0
+        if success:
+            earned_money = random.randint(*op["reward"])
+            earned_honor = int(round(op["honor"] * police_bonuses(inv)["honor_mult"]))
+            money += earned_money
+            honor += earned_honor
+            s["police_ops"] += 1
+            if op_key == "op_5":
+                s["police_ops_boss"] += 1
+        else:
+            fine = min(money, op["fine"])
+            money -= fine
+
+        new_ids = evaluate_new_titles(blob, {**info, "money": money, "honor": honor})   # 새 칭호·업적 (대기 알림 포함)
+        _auction_update(user_id, {"money": money, "honor": honor, "data": blob})
+
+    return {"success": success, "rate": rate, "labels": labels, "money": money, "honor": honor,
+            "earned_money": earned_money, "earned_honor": earned_honor, "fine": fine,
+            "old_rank": old_rank, "new_rank": get_user_rank(honor, is_police=True),
+            "notice": format_new_titles(new_ids)}
+
+class OperationSelect(discord.ui.Select):
+    def __init__(self, owner: discord.Member):
+        self.owner = owner
+        options = [
+            discord.SelectOption(
+                label=m["title"],
+                description=f"난이도: {m['diff']} | 성공률 {m['success_rate']}% | ${m['reward'][0]:,}~${m['reward'][1]:,} / 명예 +{m['honor']}pt / 실패 -${m['fine']:,}",
+                value=key
+            ) for key, m in POLICE_OPERATIONS.items()
+        ]
+        super().__init__(placeholder="수행할 수사 작전을 선택하세요...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        if interaction.user != self.owner:
+            await interaction.followup.send("타인의 작전 선택 창은 조작할 수 없습니다.", ephemeral=True)
+            return
+        user = interaction.user
+        if not _is_police(user):
+            await interaction.followup.send("치안국 경찰만 수사 작전을 수행할 수 있습니다!", ephemeral=True)
+            return
+
+        now_ts = time.time()                       # 확인과 등록 사이에 await 가 없어 중복 클릭으로 쿨타임을 피할 수 없음
+        remain = int(operation_cooldowns.get(user.id, 0) - now_ts + 0.999)
+        if remain > 0:
+            await interaction.followup.send(f"작전 보고서를 작성 중입니다. **{remain}초** 뒤에 다시 작전을 수행할 수 있습니다.", ephemeral=True)
+            return
+        operation_cooldowns[user.id] = now_ts + OPERATION_COOLDOWN_SEC
+
+        key = self.values[0]
+        op = POLICE_OPERATIONS[key]
+        guild_id = interaction.guild_id
+        try:
+            loc = (await asyncio.to_thread(get_user_data, user.id)).get("location", "레벤하임")
+            in_patrol = bool(guild_id and active_patrols.get(guild_id, {}).get(loc, 0) > time.time())
+            res = await asyncio.to_thread(operation_resolve_sync, user.id, key, in_patrol, _active_wanted_count())
+        except Exception as e:
+            print(f"DB Error (police operation): {e}")
+            operation_cooldowns.pop(user.id, None)
+            await interaction.followup.send("작전 결과를 저장하는 중 오류가 발생했습니다. 다시 시도해 주세요.", ephemeral=True)
+            return
+
+        buff_desc = f"\n**적용된 보너스:** {', '.join(res['labels'])}" if res["labels"] else ""
+        rank_up = ""
+        if res["old_rank"] != res["new_rank"]:
+            rank_up = f"\n\n**[승진 축하]** **{res['old_rank']}** → **{res['new_rank']}**(으)로 승진하셨습니다!"
+
+        if res["success"]:
+            police_shift_record(user.id, "operation", 1, bonus=op["shift_bonus"])   # /월급 근무 실적
+            embed = discord.Embed(
+                title=f"[{loc}] 작전 성공",
+                description=(f"**{user.mention}** 경관이 작전을 성공적으로 마쳤습니다!{buff_desc}\n\n"
+                             f"**작전명:** {op['title']}\n"
+                             f"**지급 포상금:** `${res['earned_money']:,}`\n"
+                             f"**경찰 실적:** `+{res['earned_honor']} pt`\n\n"
+                             f"**현재 직급:** `{res['new_rank']}`\n"
+                             f"**보유 자금:** `${res['money']:,}`\n"
+                             f"**총 명예:** `{res['honor']} pt`{rank_up}{res['notice']}"),
+                color=discord.Color.blue()
+            )
+        else:
+            operation_cooldowns[user.id] = now_ts + OPERATION_COOLDOWN_SEC + OPERATION_FAIL_EXTRA_SEC
+            embed = discord.Embed(
+                title=f"[{loc}] 작전 실패",
+                description=(f"**{user.mention}** 경관의 작전 도중 문제가 발생했습니다!{buff_desc}\n\n"
+                             f"**작전명:** {op['title']}\n"
+                             f"**작전 실패!** 증거 확보에 실패해 작전 경비로 벌금 `-${res['fine']:,}` 이(가) 부과되었습니다.\n"
+                             f"보고서 작성으로 다음 작전까지 **{OPERATION_COOLDOWN_SEC + OPERATION_FAIL_EXTRA_SEC}초**가 걸립니다.\n\n"
+                             f"**현재 직급:** `{res['new_rank']}`\n"
+                             f"**보유 자금:** `${res['money']:,}`\n"
+                             f"**총 명예:** `{res['honor']} pt`{res['notice']}"),
+                color=discord.Color.red()
+            )
+        if user.avatar:
+            embed.set_thumbnail(url=user.avatar.url)
+        await interaction.edit_original_response(embed=embed, view=None)
+
+class OperationView(discord.ui.View):
+    def __init__(self, owner: discord.Member):
+        super().__init__(timeout=180)
+        self.add_item(OperationSelect(owner=owner))
+
+@bot.tree.command(name="작전", description="[경찰 전용] 원하는 수사 작전을 직접 선택하여 수행하고 포상금과 명예를 얻습니다.")
+async def police_operation_command(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+    user = interaction.user
+    if not _is_police(user):
+        await interaction.response.send_message("치안국 경찰만 수사 작전을 수행할 수 있습니다! (조직원은 `/임무` 를 이용하세요)", ephemeral=True)
+        return
+    remain = int(operation_cooldowns.get(user.id, 0) - time.time() + 0.999)
+    if remain > 0:
+        await interaction.response.send_message(f"작전 보고서를 작성 중입니다. **{remain}초** 뒤에 다시 작전을 수행할 수 있습니다.", ephemeral=True)
+        return
+    await interaction.response.defer()
+
+    try:
+        loc = (await asyncio.to_thread(get_user_data, user.id)).get("location", "레벤하임")
+    except Exception:
+        loc = "레벤하임"
+    in_patrol = bool(interaction.guild_id and active_patrols.get(interaction.guild_id, {}).get(loc, 0) > time.time())
+    wanted_n = _active_wanted_count()
+    notes = [label for _, label in operation_bonus_preview(in_patrol, wanted_n)]
+    if not in_patrol:
+        notes.append(f"`/순찰` 로 순찰망을 가동하면 이 지역 작전 성공률 +{OPERATION_PATROL_BONUS}%")
+    embed = discord.Embed(
+        title=f"[{loc}] 수사 작전 하달",
+        description=(f"**{user.mention}** 경관님, 수행할 작전을 선택해 주십시오.\n\n"
+                     f"**현재 지명수배 중인 마피아:** {wanted_n}명 (1명당 성공률 +{OPERATION_WANTED_BONUS_PER}%, 최대 +{OPERATION_WANTED_BONUS_MAX}%)\n"
+                     f"**적용 중인 보너스:** " + (", ".join(notes) if notes else "없음")),
+        color=discord.Color.dark_blue()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    await interaction.followup.send(embed=embed, view=OperationView(owner=user))
 
 # === [경찰 전용] `/심문` 명령어 (수감자 심문 -> 재판 -> 감형 / 실형 가중) ===
 #   1) 경찰이 /심문 으로 수감자에게 질문을 던집니다.
@@ -4540,14 +4753,14 @@ async def open_weapon_shop(interaction: discord.Interaction):
     # === 경찰 전용 상점 아이템 목록 ===
 POLICE_SHOP_ITEMS = [
     {"id": "police_shield", "name": "치안국 강화 방탄복", "price": 4000, "desc": "경찰의 방어력을 대폭 강화합니다 (방어력 +35)", "def_bonus": 35},
-    {"id": "police_radio", "name": "기동타격대 무전기", "price": 8000, "desc": "/검거 포상금 +20% (보유만 해도 자동 적용)", "bonus_type": "radio"},
-    {"id": "police_badge", "name": "특급 수사관 황금 배지", "price": 20000, "desc": "방어력 +50 / 검거·순찰·심문 명예 실적 +20%", "def_bonus": 50},
+    {"id": "police_radio", "name": "기동타격대 무전기", "price": 8000, "desc": "/검거 포상금 +20% · /작전 성공률 +5% (보유만 해도 자동 적용)", "bonus_type": "radio"},
+    {"id": "police_badge", "name": "특급 수사관 황금 배지", "price": 20000, "desc": "방어력 +50 / 검거·순찰·심문·작전 명예 실적 +20%", "def_bonus": 50},
 ]
 
 # --- 치안국 보급품 효과 ---
 #   • 강화 방탄복 / 황금 배지 : 방어력 (compute_combat_stats 가 전투·결투·레이드·점령전에 모두 반영)
-#   • 기동타격대 무전기       : /검거 포상금 배율
-#   • 황금 배지               : /검거 · /순찰 · /심문(의견 일치) 명예 실적 배율
+#   • 기동타격대 무전기       : /검거 포상금 배율, /작전 성공률 +5%
+#   • 황금 배지               : /검거 · /순찰 · /심문(의견 일치) · /작전 명예 실적 배율
 POLICE_RADIO_NAME = "기동타격대 무전기"
 POLICE_BADGE_NAME = "특급 수사관 황금 배지"
 POLICE_RADIO_ARREST_BONUS = 0.20    # 무전기: 검거 포상금 +20%
@@ -4864,8 +5077,8 @@ async def info_command(interaction: discord.Interaction, keyword: str):
             "title": "명령어: /경찰상점 (경찰 전용)",
             "desc": "치안국 전용 보급품을 구매합니다. 보유만 해도 효과가 적용됩니다.\n"
                     "• **치안국 강화 방탄복:** 방어력 +35\n"
-                    "• **기동타격대 무전기:** `/검거` 포상금 +20%\n"
-                    "• **특급 수사관 황금 배지:** 방어력 +50 / `/검거`·`/순찰`·`/심문` 명예 실적 +20%\n"
+                    "• **기동타격대 무전기:** `/검거` 포상금 +20% / `/작전` 성공률 +5%\n"
+                    "• **특급 수사관 황금 배지:** 방어력 +50 / `/검거`·`/순찰`·`/심문`·`/작전` 명예 실적 +20%\n"
                     "방어력은 `/능력치`에서 확인할 수 있습니다.",
         },
         "무기상점": {
@@ -7664,9 +7877,9 @@ def build_stats_embed(target: discord.abc.User, data: dict) -> discord.Embed:
     for pname, pdef in b["police"]:
         lines.append(f"• **치안국 보급품** {pname}: 방어력 +{pdef}")
     if POLICE_RADIO_NAME in inv:
-        lines.append(f"• **{POLICE_RADIO_NAME}**: /검거 포상금 +{round(POLICE_RADIO_ARREST_BONUS * 100)}%")
+        lines.append(f"• **{POLICE_RADIO_NAME}**: /검거 포상금 +{round(POLICE_RADIO_ARREST_BONUS * 100)}% · /작전 성공률 +{POLICE_RADIO_OP_BONUS}%")
     if POLICE_BADGE_NAME in inv:
-        lines.append(f"• **{POLICE_BADGE_NAME}**: 검거·순찰·심문 명예 실적 +{round(POLICE_BADGE_HONOR_BONUS * 100)}%")
+        lines.append(f"• **{POLICE_BADGE_NAME}**: 검거·순찰·심문·작전 명예 실적 +{round(POLICE_BADGE_HONOR_BONUS * 100)}%")
     embed.add_field(name="능력치 구성", value="\n".join(lines), inline=False)
 
     if b["unused"]:
@@ -8234,7 +8447,7 @@ HELP_CATEGORIES = [
     ("casino",  "카지노",               "자금을 걸고 즐기는 도박입니다. (`/도박 규칙` 에서 배당표 확인)",
      ["도박"]),
     ("police",  "경찰",                 "경찰 소속 전용 명령어입니다.",
-     ["검거", "순찰", "심문", "월급", "경찰상점", "수사팀"]),
+     ["작전", "검거", "순찰", "심문", "월급", "경찰상점", "수사팀"]),
     ("family",  "조직 · 레이드 · 구역", "조직(패밀리)을 만들어 함께하는 협동·점령 콘텐츠입니다.",
      ["조직", "레이드", "구역"]),
     ("admin",   "관리자",               "서버 관리자 전용 명령어입니다.",
@@ -9097,7 +9310,7 @@ async def unit_op_info_cmd(interaction: discord.Interaction):
 
 # ==========================================================================
 # [경찰 전용] /월급  —  10분 근무 평가
-#   • /월급 을 쓰면 10분짜리 근무가 시작되고, 그동안 한 경찰 활동(순찰·검거·심문·수사팀 작전)이 점수로 쌓입니다.
+#   • /월급 을 쓰면 10분짜리 근무가 시작되고, 그동안 한 경찰 활동(순찰·검거·심문·작전·수사팀 작전)이 점수로 쌓입니다.
 #   • 10분이 지나면 자동으로 정산되어 점수에 비례한 월급(보상금 + 명예)이 지급됩니다.
 #   • 근무 기록은 메모리에만 있어서, 근무 중에 봇이 재시작되면 그 근무는 사라집니다.
 #   • 정산 직후에도 바로 새 근무를 시작할 수 있습니다. (쿨타임 없음, 단 근무는 동시에 하나만)
@@ -9117,10 +9330,11 @@ POLICE_SALARY_POINTS = {
     "interrogate": 25,         # 심문 재판 완료 1회
     "interrogate_match": 15,   # 재판 결과가 내 의견과 일치 (심문 점수에 추가)
     "op_stage": 15,            # 수사팀 합동 작전에서 성공한 단계 1개당
+    "operation": 8,            # /작전 성공 1회 (+ 난이도별 추가 점수 0~12)
 }
 POLICE_SALARY_LABELS = {
     "patrol": "순찰", "arrest": "검거", "interrogate": "심문 재판",
-    "interrogate_match": "의견 일치 판결", "op_stage": "작전 성공 단계",
+    "interrogate_match": "의견 일치 판결", "op_stage": "작전 성공 단계", "operation": "/작전 성공",
 }
 
 police_shifts = {}              # {user_id: PoliceShift}  (진행 중인 근무)
