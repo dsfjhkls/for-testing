@@ -342,7 +342,11 @@ mission_inflight = set()   # 지금 임무를 처리 중인 유저 (쿨타임은
 # === 명예 포인트 및 소속(마피아/경찰)에 따른 직급 계산 함수 ===
 def get_user_rank(honor: int, is_police: bool = False) -> str:
     if is_police:
-        if honor >= 10000:
+        if honor >= 50000:
+            return "FBI"
+        elif honor >= 20000:
+            return "CIA"
+        elif honor >= 10000:
             return "총경"
         elif honor >= 5000:
             return "경정"
@@ -355,8 +359,10 @@ def get_user_rank(honor: int, is_police: bool = False) -> str:
         else:
             return "신입 경찰"
     else:
-        if honor >= 20000:
-            return "슈퍼 초 울트라 메가 하이퍼 개쩌는 대충 뭐 그런 직급"
+        if honor >= 50000:
+            return "한 지역을 지배하는 보스"
+        elif honor >= 20000:
+            return "한 나라를 지배하는 보스"
         elif honor >= 10000:
             return "대부"
         elif honor >= 5000:
