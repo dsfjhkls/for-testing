@@ -9963,24 +9963,43 @@ async def unit_transfer_cmd(interaction: discord.Interaction, member: discord.Me
 async def unit_donate_cmd(interaction: discord.Interaction, 금액: app_commands.Range[int, POLICE_UNIT_MIN_DONATE, 10_000_000]):
     if not await _unit_precheck(interaction): return
     user = interaction.user
+    # DB 호출이 여러 번이라 3초를 넘길 수 있으므로 먼저 응답을 보류한다 (안 하면 '응답하지 않음' 오류)
+    try:
+        await interaction.response.defer()
+    except discord.HTTPException:
+        return
+    paid = False
     try:
         unit = await asyncio.to_thread(police_unit_get_by_user, interaction.guild_id, user.id)
         if not unit:
-            await interaction.response.send_message("소속된 수사팀이 없습니다.", ephemeral=True)
+            await interaction.followup.send("소속된 수사팀이 없습니다.", ephemeral=True)
             return
         info = await asyncio.to_thread(get_user_data, user.id)
         if info["money"] < 금액:
-            await interaction.response.send_message("보유 자금이 부족합니다.", ephemeral=True)
+            await interaction.followup.send("보유 자금이 부족합니다.", ephemeral=True)
             return
         await asyncio.to_thread(update_user_stats, user.id, -금액, 0)
+        paid = True
         unit = await asyncio.to_thread(police_unit_get_by_id, unit["id"])   # 최신 금고 값으로 갱신
+        if not unit:
+            raise RuntimeError("수사팀을 다시 불러오지 못했습니다")
         new_treasury = unit.get("treasury", 0) + 금액
         await asyncio.to_thread(police_unit_update, unit["id"], {"treasury": new_treasury})
     except Exception as e:
+        import traceback
         print(f"Police unit donate error: {e}")
-        await interaction.response.send_message(POLICE_UNIT_DB_ERROR_MSG, ephemeral=True)
+        traceback.print_exc()
+        if paid:   # 돈만 빠지고 금고에 못 넣은 경우 되돌려 준다
+            try:
+                await asyncio.to_thread(update_user_stats, user.id, 금액, 0)
+            except Exception as e2:
+                print(f"Police unit donate refund error: {e2}")
+        try:
+            await interaction.followup.send(POLICE_UNIT_DB_ERROR_MSG, ephemeral=True)
+        except discord.HTTPException:
+            pass
         return
-    await interaction.response.send_message(f"**{user.mention}** 님이 수사팀 금고에 `${금액:,}` 을(를) 기부했습니다! (금고 `${new_treasury:,}`)")
+    await interaction.followup.send(f"**{user.mention}** 님이 수사팀 금고에 `${금액:,}` 을(를) 기부했습니다! (금고 `${new_treasury:,}`)")
 
 class PoliceUnitDisbandView(discord.ui.View):
     def __init__(self, owner: discord.Member, unit_id, unit_name: str):
