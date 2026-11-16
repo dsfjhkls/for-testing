@@ -1460,11 +1460,11 @@ ERROR_DEDUPE_SEC = 60        # 같은 오류는 이 시간 안에 다시 보내�
 ERROR_MAX_PER_MIN = 10       # 1분에 보낼 수 있는 오류 보고 상한
 
 # --- 송금 제한 설정 ---
-TRANSFER_MAX_PER_TX = 20000              # 1회 최대 송금액
-TRANSFER_DAILY_SEND_LIMIT = 30000        # 보내는 사람의 24시간 누적 송금 한도
-TRANSFER_DAILY_RECEIVE_LIMIT = 50000     # 받는 사람의 24시간 누적 수령 한도 (한 계정으로 몰아주기 방지)
-TRANSFER_COOLDOWN_SEC = 30               # 연속 송금 대기 시간
-TRANSFER_MIN_ACCOUNT_AGE_DAYS = 7        # 디스코드 계정을 만든 지 이만큼 지나야 송금 가능 (보내는 사람 / 받는 사람 모두)
+TRANSFER_MAX_PER_TX = 500000              # 1회 최대 송금액
+TRANSFER_DAILY_SEND_LIMIT = 500000        # 보내는 사람의 24시간 누적 송금 한도
+TRANSFER_DAILY_RECEIVE_LIMIT = 500000     # 받는 사람의 24시간 누적 수령 한도 (한 계정으로 몰아주기 방지)
+TRANSFER_COOLDOWN_SEC = 10               # 연속 송금 대기 시간
+TRANSFER_MIN_ACCOUNT_AGE_DAYS = 1        # 디스코드 계정을 만든 지 이만큼 지나야 송금 가능 (보내는 사람 / 받는 사람 모두)
 TRANSFER_MIN_SERVER_STAY_HOURS = 24      # 서버에 들어온 지 이만큼 지나야 송금 가능 (보내는 사람 / 받는 사람 모두)
 TRANSFER_ALERT_AMOUNT = 10000            # 이 금액 이상 송금은 관리자 기록 채널에 알림
 TRANSFER_WINDOW_SEC = 24 * 60 * 60
