@@ -555,6 +555,8 @@ def get_user_data(user_id: int) -> dict:
             user_info = response.data[0]
             if "inventory" not in user_info or user_info["inventory"] is None:
                 user_info["inventory"] = {}
+            if not isinstance(user_info.get("settings"), dict):   # DB 에 null 로 남은 옛 데이터 보정
+                user_info["settings"] = {}
             user_info["inventory"] = normalize_inventory(user_info["inventory"])
             user_info = _refund_removed_items(user_info)
             return user_info
@@ -5132,7 +5134,7 @@ class MissionSelect(discord.ui.Select):
                 await interaction.followup.send("임무 결과는 저장되었지만 화면 표시 중 오류가 발생했습니다. `/프로필` 로 확인해 주세요.", ephemeral=True)
             else:
                 try:
-                    await interaction.followup.send("임무 처리 중 오류가 발생했습니다. **쿨타임은 적용되지 않았으니** 다시 시도해 주세요.", ephemeral=True)
+                    await interaction.followup.send(f"임무 처리 중 오류가 발생했습니다. **쿨타임은 적용되지 않았으니** 다시 시도해 주세요. (오류 종류: `{type(e).__name__}`)", ephemeral=True)
                 except Exception:
                     pass
         finally:
@@ -5164,7 +5166,7 @@ class MissionSelect(discord.ui.Select):
         state["cd_sec"] = None if no_cd else (MISSION_COOLDOWN_FAST_SEC if has_fast else MISSION_COOLDOWN_SEC)
 
         selected = MISSIONS[self.values[0]]
-        current_loc = user_stats.get("location", "레벤하임")
+        current_loc = user_stats.get("location") or "레벤하임"
 
         success_bonus = 0
         money_mult = 1.0
@@ -5209,8 +5211,8 @@ class MissionSelect(discord.ui.Select):
             is_success = random.randint(1, 100) <= final_success_rate
         buff_desc = (f"\n**적용된 보너스:** {', '.join(active_buffs)}" if active_buffs else "") + hc_desc
 
-        current_money = user_stats.get("money", 0)
-        current_honor = user_stats.get("honor", 0)
+        current_money = int(user_stats.get("money") or 0)
+        current_honor = int(user_stats.get("honor") or 0)
         
         fail_msg = ""
         rank_up_msg = ""
@@ -5253,11 +5255,11 @@ class MissionSelect(discord.ui.Select):
                 color=discord.Color.green()
             )
         else:
-            settings = user_stats.get("settings", {"auto_fail_guard": True})
+            # (예전에는 settings 가 DB 에 null 로 저장된 유저가 임무에 실패하면 여기서 오류가 났다 → get_setting 은 null 이어도 기본값을 돌려준다)
             guard_item_key = "임무 실패 방지권"
             guard_used = False
 
-            if settings.get("auto_fail_guard", True) and inventory.get(guard_item_key, 0) > 0:
+            if get_setting(user_stats, "auto_fail_guard") and inventory.get(guard_item_key, 0) > 0:
                 inventory[guard_item_key] -= 1
                 if inventory[guard_item_key] <= 0:
                     del inventory[guard_item_key]
