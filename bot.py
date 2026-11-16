@@ -2549,9 +2549,9 @@ def operation_success_rate(op: dict, inventory: dict, in_patrol: bool, wanted_n:
     for pct, label in operation_bonus_preview(in_patrol, wanted_n):
         rate += pct
         labels.append(label)
-    if POLICE_RADIO_NAME in (inventory or {}):
-        rate += POLICE_RADIO_OP_BONUS
-        labels.append(f"기동타격대 무전기 (+{POLICE_RADIO_OP_BONUS}%)")
+    for pct, label in police_equipment_op_bonuses(inventory):
+        rate += pct
+        labels.append(label)
     return max(1, min(98, rate)), labels
 
 def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n: int, forced_success=None) -> dict:
@@ -2706,13 +2706,17 @@ async def police_operation_command(interaction: discord.Interaction):
         return
     await interaction.response.defer()
 
+    inv = {}
     try:
-        loc = (await asyncio.to_thread(get_user_data, user.id)).get("location", "레벤하임")
+        _info = await asyncio.to_thread(get_user_data, user.id)
+        loc = _info.get("location", "레벤하임")
+        inv = _info.get("inventory") or {}
     except Exception:
         loc = "레벤하임"
     in_patrol = bool(interaction.guild_id and active_patrols.get(interaction.guild_id, {}).get(loc, 0) > time.time())
     wanted_n = _active_wanted_count()
     notes = [label for _, label in operation_bonus_preview(in_patrol, wanted_n)]
+    notes += [label for _, label in police_equipment_op_bonuses(inv)]
     if not in_patrol:
         notes.append(f"`/순찰` 로 순찰망을 가동하면 이 지역 작전 성공률 +{OPERATION_PATROL_BONUS}%")
     embed = discord.Embed(
@@ -5718,11 +5722,18 @@ POLICE_SHOP_ITEMS = [
     {"id": "police_shield", "name": "치안국 강화 방탄복", "price": 4000, "desc": "경찰의 방어력을 대폭 강화합니다 (방어력 +35)", "def_bonus": 35},
     {"id": "police_radio", "name": "기동타격대 무전기", "price": 8000, "desc": "/검거 포상금 +20% · /작전 성공률 +5% (보유만 해도 자동 적용)", "bonus_type": "radio"},
     {"id": "police_badge", "name": "특급 수사관 황금 배지", "price": 20000, "desc": "방어력 +50 / 검거·순찰·심문·작전 명예 실적 +20%", "def_bonus": 50},
+    # --- /작전 성공률 장비 (보유만 해도 자동 적용, 전부 모으면 +20%) ---
+    {"id": "police_flashlight", "name": "전술 손전등", "price": 3000, "desc": "/작전 성공률 +2% (보유만 해도 자동 적용)", "op_bonus": 2},
+    {"id": "police_evidence_kit", "name": "현장 증거 채취 키트", "price": 6000, "desc": "/작전 성공률 +3% (보유만 해도 자동 적용)", "op_bonus": 3},
+    {"id": "police_profiling", "name": "범죄 프로파일링 자료집", "price": 10000, "desc": "/작전 성공률 +4% (보유만 해도 자동 적용)", "op_bonus": 4},
+    {"id": "police_informant", "name": "정보원 연락망 명부", "price": 15000, "desc": "/작전 성공률 +5% (보유만 해도 자동 적용)", "op_bonus": 5},
+    {"id": "police_command", "name": "작전 지휘 단말기", "price": 25000, "desc": "/작전 성공률 +6% (보유만 해도 자동 적용)", "op_bonus": 6},
 ]
 
 # --- 치안국 보급품 효과 ---
 #   • 강화 방탄복 / 황금 배지 : 방어력 (compute_combat_stats 가 전투·결투·레이드·점령전에 모두 반영)
 #   • 기동타격대 무전기       : /검거 포상금 배율, /작전 성공률 +5%
+#   • 작전 성공률 장비 5종    : 전술 손전등 +2 / 증거 채취 키트 +3 / 프로파일링 자료집 +4 / 정보원 명부 +5 / 지휘 단말기 +6 (%)
 #   • 황금 배지               : /검거 · /순찰 · /심문(의견 일치) · /작전 명예 실적 배율
 POLICE_RADIO_NAME = "기동타격대 무전기"
 POLICE_BADGE_NAME = "특급 수사관 황금 배지"
@@ -5732,6 +5743,17 @@ ARREST_BASE_REWARD = 500            # /검거 기본 포상금
 ARREST_BASE_HONOR = 60              # /검거 기본 명예 실적
 ARREST_HONOR_PER_POINT = 25         # 수배범 명예 25pt 당 검거 명예 +1  (거물 검거 보너스)
 ARREST_HONOR_BONUS_MAX = 200        # 거물 검거 보너스 상한  → 검거 1회 명예 60 ~ 260
+
+def police_equipment_op_bonuses(inventory) -> list:
+    """보유 중인 치안국 보급품이 주는 /작전 성공률 보너스 (성공률 %, 표시 문구) 목록"""
+    inv = inventory or {}
+    out = []
+    if POLICE_RADIO_NAME in inv:
+        out.append((POLICE_RADIO_OP_BONUS, f"기동타격대 무전기 (+{POLICE_RADIO_OP_BONUS}%)"))
+    for it in POLICE_SHOP_ITEMS:
+        if it.get("op_bonus") and it["name"] in inv:
+            out.append((it["op_bonus"], f"{it['name']} (+{it['op_bonus']}%)"))
+    return out
 
 def police_bonuses(inventory) -> dict:
     inv = inventory or {}
@@ -6042,6 +6064,7 @@ async def info_command(interaction: discord.Interaction, keyword: str):
                     "• **치안국 강화 방탄복:** 방어력 +35\n"
                     "• **기동타격대 무전기:** `/검거` 포상금 +20% / `/작전` 성공률 +5%\n"
                     "• **특급 수사관 황금 배지:** 방어력 +50 / `/검거`·`/순찰`·`/심문`·`/작전` 명예 실적 +20%\n"
+                    "• **작전 성공률 장비:** 전술 손전등 +2% / 현장 증거 채취 키트 +3% / 범죄 프로파일링 자료집 +4% / 정보원 연락망 명부 +5% / 작전 지휘 단말기 +6% (`/작전` 성공률, 전부 모으면 +20%)\n"
                     "방어력은 `/능력치`에서 확인할 수 있습니다.",
         },
         "무기상점": {
@@ -8841,6 +8864,9 @@ def build_stats_embed(target: discord.abc.User, data: dict) -> discord.Embed:
         lines.append(f"• **치안국 보급품** {pname}: 방어력 +{pdef}")
     if POLICE_RADIO_NAME in inv:
         lines.append(f"• **{POLICE_RADIO_NAME}**: /검거 포상금 +{round(POLICE_RADIO_ARREST_BONUS * 100)}% · /작전 성공률 +{POLICE_RADIO_OP_BONUS}%")
+    for it in POLICE_SHOP_ITEMS:
+        if it.get("op_bonus") and it["name"] in inv:
+            lines.append(f"• **{it['name']}**: /작전 성공률 +{it['op_bonus']}%")
     if POLICE_BADGE_NAME in inv:
         lines.append(f"• **{POLICE_BADGE_NAME}**: 검거·순찰·심문·작전 명예 실적 +{round(POLICE_BADGE_HONOR_BONUS * 100)}%")
     embed.add_field(name="능력치 구성", value="\n".join(lines), inline=False)
