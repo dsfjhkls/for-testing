@@ -4652,7 +4652,7 @@ class SelfJoinView(discord.ui.View):
         embed = discord.Embed(
             title=f"[{rank_title} 발령/입단]",
             description=f"**{user.mention}** 님이 시민의 삶을 마치고 **{target_role_name}**(으)로 새로운 활동을 시작합니다!\n\n"
-                        f"**신분 변화:** `시민` `{target_role_name}`",
+                        f"**신분 변화:** `시민` -> `{target_role_name}`",
             color=discord.Color.gold()
         )
         if user.avatar:
@@ -4722,7 +4722,7 @@ class LeaveConfirmView(discord.ui.View):
             description=(
                 f"**{member.mention}** 님이 소속을 최종 탈퇴하셨습니다.\n\n"
                 f"**초기화 완료:** 모든 보유 자금, 명예, 인벤토리 아이템 및 기록이 DB에서 완전히 삭제되었습니다.\n"
-                f"**신분 변화:** `마피아/경찰` `시민`"
+                f"**신분 변화:** `마피아/경찰` -> `시민`"
             ),
             color=discord.Color.dark_gray()
         )
