@@ -652,6 +652,7 @@ ATTENDANCE_TITLE_STACKS = 30          # 출석 스택이 이 값에 도달하면
 # === 칭호 시스템 ===
 TITLES = {
     "attendance_month": {"name": "성실한 출석왕", "desc": f"일일 의뢰 출석 {ATTENDANCE_TITLE_STACKS}스택 달성 (한 달)", "check": lambda s, i: s["attendance"] >= ATTENDANCE_TITLE_STACKS},
+    "parttime_100": {"name": "도시의 일꾼",    "desc": "/아르바이트 100회 완료",               "check": lambda s, i: s["parttime_total"] >= 100},
     "first_step":   {"name": "첫 발걸음",       "desc": "임무 1회 성공",                        "check": lambda s, i: s["success"] >= 1},
     "veteran":      {"name": "노련한 청부꾼",   "desc": "임무 10회 성공",                       "check": lambda s, i: s["success"] >= 10},
     "legend":       {"name": "전설의 그림자",   "desc": "임무 50회 성공",                       "check": lambda s, i: s["success"] >= 50},
@@ -677,7 +678,7 @@ def get_title_blob(user_info: dict) -> dict:
     stats = blob.get("stats") if isinstance(blob.get("stats"), dict) else {}
     for key in ("success", "fail", "streak", "best_streak", "hard_success",
                 "gamble_played", "gamble_won", "gamble_wagered", "gamble_net", "jackpot", "broke",
-                "attendance",
+                "attendance", "parttime_total",                       # ← /아르바이트 누적 횟수 (칭호용)
                 "fight_wins", "named_kills", "boss_kills",            # ← 업적용 카운터
                 "duel_wins", "raid_clears", "raid_king_clears", "war_wins", "war_conquests",
                 "police_arrests", "police_big_arrests", "police_patrols", "police_interrogations",   # ← 경찰 업적용 카운터
@@ -1122,12 +1123,11 @@ class TitleView(discord.ui.View):
         super().__init__(timeout=180)
         self.add_item(TitleSelect(owner=owner, blob=blob))
 
-@bot.tree.command(name="칭호", description="[마피아 GM] 획득한 칭호를 확인하고 장착합니다.")
+@bot.tree.command(name="칭호", description="[시민/공용] 획득한 칭호를 확인하고 장착합니다.")
 async def titles_command(interaction: discord.Interaction):
     global npc_cooldowns
 
     if not await check_maintenance(interaction): return
-    if not await check_membership(interaction): return
     if await check_jail(interaction): return
 
     user = interaction.user
@@ -3818,7 +3818,9 @@ async def part_time_job(interaction: discord.Interaction):
     daily_msg = ""
     try:
         daily_blob = get_title_blob(user_stats)
+        daily_blob["stats"]["parttime_total"] += 1                      # 누적 횟수 (100회 달성 시 특수 칭호)
         daily_msg = daily_record(daily_blob, "parttime", user_stats)
+        daily_msg += format_new_titles(evaluate_new_titles(daily_blob, user_stats))
         save_title_blob(user.id, daily_blob)
     except Exception as e:
         print(f"DB Error (parttime daily quest): {e}")
@@ -3834,6 +3836,265 @@ async def part_time_job(interaction: discord.Interaction):
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
 
+    await interaction.followup.send(embed=embed)
+
+# ==========================================================================
+# [시민 생활 명령어]  /낚시  /배달  /제보  /복권   (/아르바이트 와 함께 시민이 할 수 있는 활동)
+#   • 전부 자금만 다루고 명예는 주지 않습니다. (명예 페이스에는 영향이 없습니다)
+#   • 마피아·경찰도 쓸 수 있는 공용 명령어이고, /제보 만 시민 전용입니다.
+#   • 수치를 바꾸고 싶으면 아래 상수만 고치면 됩니다.
+# ==========================================================================
+FISH_COOLDOWN_SEC = 60
+# (이름, 가중치, 판매가)  → 1회 기대 수입 약 $220 (아르바이트와 비슷한 시간당 수입)
+FISH_TABLE = [
+    ("빈 낚싯줄", 12, 0), ("낡은 장화", 10, 20), ("작은 붕어", 28, 100), ("농어", 22, 180),
+    ("광어", 14, 300), ("참치", 8, 500), ("황금 잉어", 3, 1200), ("가라앉은 보물 상자", 1, 3000),
+]
+
+DELIVERY_COOLDOWN_SEC = 60
+DELIVERY_NORMAL_REWARD = (150, 300)         # 일반 배송: 항상 성공
+DELIVERY_EXPRESS_SUCCESS = 0.60             # 특급 배송: 성공 확률
+DELIVERY_EXPRESS_REWARD = (300, 600)
+DELIVERY_EXPRESS_FINE = 100                 # 특급 배송 실패 시 배상금
+
+TIP_REWARD = 400                # 제보 성공 사례금
+TIP_FALSE_FINE = 150            # 허위 제보 벌금
+TIP_COOLDOWN_SEC = 90           # 제보자 쿨타임
+TIP_TARGET_COOLDOWN_SEC = 120   # 같은 대상에게 들어올 수 있는 제보 간격
+TIP_DAILY_MAX = 10              # 한 사람이 24시간 동안 받을 수 있는 사례금 횟수
+TIP_WANTED_EXTEND_SEC = 60      # 제보가 접수되면 수배 시간이 늘어나는 양
+TIP_WANTED_CAP_SEC = 180        # 수배 남은 시간이 이 값을 넘도록 늘어나지는 않음
+
+LOTTERY_PRICE = 500
+LOTTERY_MAX_TICKETS = 10
+LOTTERY_COOLDOWN_SEC = 5
+# (등수, 확률, 상금)  → 환급률 약 84%
+LOTTERY_PRIZES = [("1등", 0.005, 25000), ("2등", 0.02, 3000), ("3등", 0.08, 750), ("4등", 0.25, 500), ("5등", 0.20, 250)]
+
+fish_cooldowns = {}
+delivery_cooldowns = {}
+tip_user_cooldowns = {}
+tip_target_cooldowns = {}
+tip_history = {}
+lottery_cooldowns = {}
+
+def _cd_left(table: dict, key) -> int:
+    """남은 쿨타임(초). 없으면 0"""
+    return max(0, int(table.get(key, 0) - time.time() + 0.999))
+
+@bot.tree.command(name="낚시", description="[시민/공용] 항구에서 낚시를 하고 잡은 것을 팔아 자금을 벌어요. (쿨타임 60초)")
+async def fishing_command(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+    left = _cd_left(fish_cooldowns, user.id)
+    if left > 0:
+        await interaction.response.send_message(f"낚싯대를 정리하는 중입니다. **{left}초** 뒤에 다시 던질 수 있습니다.", ephemeral=True)
+        return
+    fish_cooldowns[user.id] = time.time() + FISH_COOLDOWN_SEC
+    await interaction.response.defer()
+
+    name, _, price = random.choices(FISH_TABLE, weights=[f[1] for f in FISH_TABLE])[0]
+    try:
+        if price:
+            update_user_stats(user.id, price, 0)
+        money = int(get_user_data(user.id).get("money", 0))
+    except Exception as e:
+        print(f"DB Error (fishing): {e}")
+        fish_cooldowns.pop(user.id, None)
+        await interaction.followup.send("정산 중 오류가 발생했습니다. 잠시 뒤 다시 시도해 주세요.", ephemeral=True)
+        return
+
+    if price == 0:
+        msg, color = f"**{name}** 만 걸렸습니다. 오늘은 허탕이네요.", discord.Color.dark_grey()
+    elif price >= 1200:
+        msg, color = f"**{name}** 을(를) 건져 올렸습니다! 대어입니다!", discord.Color.gold()
+    else:
+        msg, color = f"**{name}** 을(를) 낚아 시장에 팔았습니다.", discord.Color.blue()
+    embed = discord.Embed(
+        title="[항구 낚시] 결과",
+        description=f"**{user.mention}** 님이 낚싯줄을 던졌습니다.\n\n{msg}\n"
+                    f"**판매 금액:** `${price:,}`\n**현재 보유 자금:** `${money:,}`",
+        color=color)
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    await interaction.followup.send(embed=embed)
+
+@bot.tree.command(name="배달", description="[시민/공용] 도시 곳곳으로 짐을 배달하고 배송료를 받아요. (쿨타임 60초)")
+@app_commands.describe(방식="일반 배송은 안전하게 소액, 특급 배송은 실패하면 배상금을 물지만 배송료가 큽니다.")
+@app_commands.choices(방식=[
+    app_commands.Choice(name="일반 배송 (안전)", value="normal"),
+    app_commands.Choice(name="특급 배송 (위험)", value="express"),
+])
+async def delivery_command(interaction: discord.Interaction, 방식: app_commands.Choice[str]):
+    if not await check_maintenance(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+    left = _cd_left(delivery_cooldowns, user.id)
+    if left > 0:
+        await interaction.response.send_message(f"배달 가방을 다시 싸는 중입니다. **{left}초** 뒤에 출발할 수 있습니다.", ephemeral=True)
+        return
+    delivery_cooldowns[user.id] = time.time() + DELIVERY_COOLDOWN_SEC
+    await interaction.response.defer()
+
+    dest = random.choice(list(LOCATIONS.keys()))
+    express = (방식.value == "express")
+    fine = 0
+    try:
+        if not express:
+            pay = random.randint(*DELIVERY_NORMAL_REWARD)
+            update_user_stats(user.id, pay, 0)
+            title, color = "[일반 배송] 완료", discord.Color.blue()
+            msg = f"**{dest}** 까지 짐을 무사히 전달했습니다."
+        elif random.random() < DELIVERY_EXPRESS_SUCCESS:
+            pay = random.randint(*DELIVERY_EXPRESS_REWARD)
+            update_user_stats(user.id, pay, 0)
+            title, color = "[특급 배송] 성공", discord.Color.green()
+            msg = f"**{dest}** 까지 제시간에 도착했습니다. 특급 배송료를 받았습니다!"
+        else:
+            pay = 0
+            fine = min(int(get_user_data(user.id).get("money", 0)), DELIVERY_EXPRESS_FINE)
+            if fine:
+                update_user_stats(user.id, -fine, 0)
+            title, color = "[특급 배송] 지연", discord.Color.red()
+            msg = f"**{dest}** 로 가던 중 길이 막혀 약속 시간을 놓쳤습니다. 배상금을 물었습니다."
+        money = int(get_user_data(user.id).get("money", 0))
+    except Exception as e:
+        print(f"DB Error (delivery): {e}")
+        delivery_cooldowns.pop(user.id, None)
+        await interaction.followup.send("정산 중 오류가 발생했습니다. 잠시 뒤 다시 시도해 주세요.", ephemeral=True)
+        return
+
+    result = f"**배송료:** `${pay:,}`" if pay else f"**배상금:** `-${fine:,}`"
+    embed = discord.Embed(title=title, description=f"**{user.mention}** 님의 배달 결과입니다.\n\n{msg}\n{result}\n**현재 보유 자금:** `${money:,}`", color=color)
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    await interaction.followup.send(embed=embed)
+
+@bot.tree.command(name="제보", description="[시민 전용] 지명수배 중인 마피아를 경찰에 익명으로 제보하고 사례금을 받아요.")
+@app_commands.describe(대상="제보할 지명수배 중인 마피아")
+async def tip_command(interaction: discord.Interaction, 대상: discord.Member):
+    if not await check_maintenance(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+    if _is_mafia(user) or _is_police(user):
+        await interaction.response.send_message("제보는 마피아·경찰이 아닌 **시민**만 할 수 있습니다.", ephemeral=True)
+        return
+    if 대상.bot or 대상.id == user.id:
+        await interaction.response.send_message("제보할 수 없는 대상입니다.", ephemeral=True)
+        return
+
+    now_ts, now_dt = time.time(), datetime.now()
+    left = _cd_left(tip_user_cooldowns, user.id)
+    if left > 0:
+        await interaction.response.send_message(f"방금 제보하셨습니다. **{left}초** 뒤에 다시 제보할 수 있습니다.", ephemeral=True)
+        return
+    history = [t for t in tip_history.get(user.id, []) if now_ts - t < 86400]
+    if len(history) >= TIP_DAILY_MAX:
+        await interaction.response.send_message(f"오늘은 더 이상 사례금을 받을 수 없습니다. (24시간 최대 {TIP_DAILY_MAX}회)", ephemeral=True)
+        return
+    tip_user_cooldowns[user.id] = now_ts + TIP_COOLDOWN_SEC
+
+    expiry = wanted_list.get(대상.id)
+    if expiry is None or now_dt >= expiry:
+        # 허위 제보 → 벌금
+        try:
+            fine = min(int(get_user_data(user.id).get("money", 0)), TIP_FALSE_FINE)
+            if fine:
+                update_user_stats(user.id, -fine, 0)
+        except Exception as e:
+            print(f"DB Error (tip fine): {e}")
+            fine = 0
+        await interaction.response.send_message(
+            f"**{대상.display_name}** 님은 지금 수배 중이 아닙니다. 허위 제보로 처리되어 벌금 `${fine:,}` 이(가) 부과되었습니다.", ephemeral=True)
+        return
+    if _cd_left(tip_target_cooldowns, 대상.id) > 0:
+        await interaction.response.send_message("이미 다른 시민의 제보가 접수된 상태입니다. 잠시 뒤에 다시 시도해 주세요.", ephemeral=True)
+        return
+
+    try:
+        update_user_stats(user.id, TIP_REWARD, 0)
+    except Exception as e:
+        print(f"DB Error (tip reward): {e}")
+        tip_user_cooldowns.pop(user.id, None)
+        await interaction.response.send_message("사례금 지급 중 오류가 발생했습니다. 잠시 뒤 다시 시도해 주세요.", ephemeral=True)
+        return
+
+    tip_target_cooldowns[대상.id] = now_ts + TIP_TARGET_COOLDOWN_SEC
+    history.append(now_ts)
+    tip_history[user.id] = history
+    extended = min(expiry + timedelta(seconds=TIP_WANTED_EXTEND_SEC), now_dt + timedelta(seconds=TIP_WANTED_CAP_SEC))
+    wanted_list[대상.id] = max(expiry, extended)
+    save_status(대상.id)
+
+    await interaction.response.send_message(f"제보가 접수되었습니다. 사례금 `${TIP_REWARD:,}` 이(가) 지급되었습니다. (제보자는 공개되지 않습니다)", ephemeral=True)
+    try:
+        embed = discord.Embed(
+            title="[시민 제보 접수]",
+            description=f"익명의 시민이 **{대상.mention}** 의 행방을 치안국에 제보했습니다!\n"
+                        f"수배 상태가 늘어났습니다. 경찰은 서둘러 `/검거` 하세요.",
+            color=discord.Color.dark_blue())
+        await interaction.channel.send(embed=embed)
+    except Exception as e:
+        print(f"[제보 공지 실패] {type(e).__name__}: {e}")
+
+@bot.tree.command(name="복권", description=f"[시민/공용] 복권을 사서 한 방을 노려요. (1장 ${LOTTERY_PRICE:,} / 최대 {LOTTERY_MAX_TICKETS}장)")
+@app_commands.describe(수량=f"구매할 복권 장수 (1~{LOTTERY_MAX_TICKETS})")
+async def lottery_command(interaction: discord.Interaction, 수량: app_commands.Range[int, 1, LOTTERY_MAX_TICKETS] = 1):
+    if not await check_maintenance(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+    left = _cd_left(lottery_cooldowns, user.id)
+    if left > 0:
+        await interaction.response.send_message(f"복권 가게가 정리 중입니다. **{left}초** 뒤에 다시 구매할 수 있습니다.", ephemeral=True)
+        return
+    cost = 수량 * LOTTERY_PRICE
+    try:
+        money = int(get_user_data(user.id).get("money", 0))
+    except Exception as e:
+        print(f"DB Error (lottery check): {e}")
+        await interaction.response.send_message("잠시 뒤 다시 시도해 주세요.", ephemeral=True)
+        return
+    if money < cost:
+        await interaction.response.send_message(f"자금이 부족합니다. (필요 `${cost:,}` / 보유 `${money:,}`)", ephemeral=True)
+        return
+    lottery_cooldowns[user.id] = time.time() + LOTTERY_COOLDOWN_SEC
+    await interaction.response.defer()
+
+    wins = {}
+    total = 0
+    for _ in range(수량):
+        roll, acc = random.random(), 0.0
+        for rank, chance, prize in LOTTERY_PRIZES:
+            acc += chance
+            if roll < acc:
+                wins[rank] = wins.get(rank, 0) + 1
+                total += prize
+                break
+    try:
+        update_user_stats(user.id, total - cost, 0)
+        money = int(get_user_data(user.id).get("money", 0))
+    except Exception as e:
+        print(f"DB Error (lottery settle): {e}")
+        lottery_cooldowns.pop(user.id, None)
+        await interaction.followup.send("정산 중 오류가 발생했습니다. 자금은 변동되지 않았을 수 있으니 확인해 주세요.", ephemeral=True)
+        return
+
+    lines = [f"• **{rank}** x{wins[rank]} → `${wins[rank] * prize:,}`" for rank, _, prize in LOTTERY_PRIZES if rank in wins]
+    body = "\n".join(lines) if lines else "당첨된 복권이 없습니다."
+    net = total - cost
+    color = discord.Color.gold() if "1등" in wins else (discord.Color.green() if net > 0 else discord.Color.dark_grey())
+    embed = discord.Embed(
+        title="[도시 복권] 추첨 결과",
+        description=f"**{user.mention}** 님이 복권 **{수량}장** (`${cost:,}`) 을 긁었습니다.\n\n{body}\n\n"
+                    f"**당첨금 합계:** `${total:,}`\n**손익:** `{'+' if net >= 0 else '-'}${abs(net):,}`\n**현재 보유 자금:** `${money:,}`",
+        color=color)
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
     await interaction.followup.send(embed=embed)
 
 # ==========================================
@@ -4716,6 +4977,8 @@ class LeaveConfirmView(discord.ui.View):
 
         mission_cooldowns.pop(member.id, None)
         parttime_cooldowns.pop(member.id, None)
+        for _t in (fish_cooldowns, delivery_cooldowns, tip_user_cooldowns, lottery_cooldowns):
+            _t.pop(member.id, None)
         gamble_cooldowns.pop(member.id, None)
         open_table = active_blackjack.pop(member.id, None)
         if open_table:
@@ -5976,6 +6239,7 @@ async def kick_member(interaction: discord.Interaction, member: discord.Member, 
     app_commands.Choice(name="밀수 거래 (/밀수)", value="밀수"),
     app_commands.Choice(name="조직(패밀리) (/조직)", value="조직"),
     app_commands.Choice(name="조직 레이드 (/레이드)", value="레이드"),
+    app_commands.Choice(name="시민 활동 (/낚시 /배달 /제보 /복권)", value="시민"),
     app_commands.Choice(name="Utopia Of Eden (세계관)", value="유토피아 오브 에덴")
 ])
 async def info_command(interaction: discord.Interaction, keyword: str):
@@ -6036,7 +6300,19 @@ async def info_command(interaction: discord.Interaction, keyword: str):
         },
         "아르바이트": {
             "title": "시스템: /아르바이트",
-            "desc": "시민/공용 전용 안전 자금 수급처입니다. 위험 부담 없이 정직한 노동으로 소량의 돈을 획득합니다.",
+            "desc": "시민/공용 전용 안전 자금 수급처입니다. 위험 부담 없이 정직한 노동으로 소량의 돈을 획득합니다.\n"
+                    "• 누적 100회를 완료하면 특수 칭호 **도시의 일꾼** 을 얻습니다. (`/칭호` 에서 장착)",
+        },
+        "시민": {
+            "title": "시스템: 시민 활동 (/아르바이트 /낚시 /배달 /제보 /복권)",
+            "desc": f"가입 전의 시민도 할 수 있는 활동입니다. (마피아·경찰도 /제보 를 뺀 나머지는 쓸 수 있습니다)\n"
+                    f"• **/아르바이트:** 안전한 소액 수입. 100회 달성 시 칭호 **도시의 일꾼**\n"
+                    f"• **/낚시:** {FISH_COOLDOWN_SEC}초마다 낚시. 운이 좋으면 대어나 보물 상자가 걸립니다.\n"
+                    f"• **/배달:** 일반 배송(안전) 또는 특급 배송(성공 {int(DELIVERY_EXPRESS_SUCCESS * 100)}% / 실패 시 배상금 ${DELIVERY_EXPRESS_FINE:,})\n"
+                    f"• **/제보 [대상]:** 지명수배 중인 마피아를 익명으로 제보하면 사례금 ${TIP_REWARD:,}, 대상의 수배 시간이 늘어납니다. "
+                    f"수배 중이 아니면 허위 제보로 벌금 ${TIP_FALSE_FINE:,}\n"
+                    f"• **/복권:** 1장 ${LOTTERY_PRICE:,}, 최대 {LOTTERY_MAX_TICKETS}장. 1등 ${LOTTERY_PRIZES[0][2]:,}\n"
+                    "• 자금만 다루며 명예는 주지 않습니다.",
         },
         "송금": {
             "title": "명령어: /송금 [대상] [금액]",
@@ -9434,7 +9710,9 @@ HELP_CATEGORIES = [
     ("start",   "시작 · 정보",          "가입과 내 정보 확인, 설정, 랭킹 등 기본이 되는 명령어입니다.",
      ["도움말", "가입", "탈퇴", "프로필", "정보", "설정", "일퀘", "칭호", "업적", "랭킹"]),
     ("economy", "이동 · 상점 · 경제",   "거점 이동, 장비 구매, 자금 이체, 제작 등 돈과 장비에 관한 명령어입니다.",
-     ["이동", "암시장", "무기상점", "인벤토리", "송금", "아르바이트", "제작", "경매"]),
+     ["이동", "암시장", "무기상점", "인벤토리", "송금", "제작", "경매"]),
+    ("citizen", "시민 생활",         "가입하지 않은 시민도 할 수 있는 활동입니다. (명예는 주지 않고 자금만 다룹니다)",
+     ["아르바이트", "낚시", "배달", "제보", "복권"]),
     ("mafia",   "마피아 활동",          "비밀 임무 수행, 경찰 매수, 탈옥 등 조직원의 범죄 활동입니다.",
      ["임무", "밀수", "탈옥"]),
     ("battle",  "전투 · 능력치",        "NPC·네임드·보스 토벌과 결투, 전투 능력치 확인입니다.",
@@ -9495,7 +9773,7 @@ def help_overview_embed(pages: list) -> discord.Embed:
     )
     embed.add_field(
         name="처음이라면",
-        value=("`/가입` 으로 조직원 또는 경찰이 되세요.\n"
+        value=("`/가입` 으로 조직원 또는 경찰이 되세요. 가입 전에는 시민으로 `/아르바이트` · `/낚시` · `/배달` · `/복권` · `/제보` 를 할 수 있어요.\n"
                "조직원은 `/임무` · `/전투` 로 자금과 명예를 모으고, `/무기상점` · `/암시장` · `/제작` 으로 장비를 갖춥니다.\n"
                f"명예 {FAMILY_CREATE_MIN_HONOR}pt 이상이면 `/조직 생성` 으로 조직을 만들어 `/레이드` 와 `/구역` 에 도전할 수 있습니다.\n"
                f"경찰은 `/순찰` · `/검거` 로 활동하고, 명예 {POLICE_UNIT_CREATE_MIN_HONOR}pt 이상이면 `/수사팀 생성` 으로 수사팀을 만들어 `/수사팀 작전` 에 도전할 수 있습니다."),
