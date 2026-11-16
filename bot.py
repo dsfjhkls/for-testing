@@ -463,12 +463,14 @@ NO_COOLDOWN_ITEM = "시간 정지 회중시계"   # 보유 시 임무 쿨타임 
 
 # === 임무 목록 (드롭다운 표시와 실제 판정이 같은 표를 쓰도록 통합) ===
 # success_rate(%) / reward(최소, 최대 $) / honor(pt) / fine(실패 시 벌금 $)
+# success_rate 100 = 확정 성공 (순찰 패널티·보너스 상한과 무관하게 항상 성공)
+# hc_rate = 하드코어 모드 난이도 계산에만 쓰는 값 (일반 성공률을 올려도 하드코어가 쉬워지지 않도록 기존 값 유지)
 MISSIONS = {
-    "mission_1": {"title": "타 조직 구역 비밀 조사",   "label": "타 조직 구역 비밀 조사", "diff": "하",   "success_rate": 85, "reward": (150, 350),   "honor": 6,  "fine": 80},
-    "mission_2": {"title": "밀수품 비밀 운송 작업",     "label": "밀수품 비밀 운송 작업", "diff": "중",   "success_rate": 60, "reward": (350, 800),   "honor": 12,  "fine": 200},
-    "mission_3": {"title": "라이벌 보스의 장부 탈취",   "label": "라이벌 보스의 장부 탈취", "diff": "상",   "success_rate": 40, "reward": (900, 1900),  "honor": 16,  "fine": 500},
-    "mission_4": {"title": "기밀 문서 야간 밀반출",     "label": "기밀 문서 야간 밀반출", "diff": "중상", "success_rate": 50, "reward": (650, 1400),  "honor": 14,  "fine": 350},
-    "mission_5": {"title": "중앙 은행 호송 차량 습격",  "label": "중앙 은행 호송 차량 습격", "diff": "최상", "success_rate": 20, "reward": (2500, 5000), "honor": 36, "fine": 1200},
+    "mission_1": {"title": "타 조직 구역 비밀 조사",   "label": "타 조직 구역 비밀 조사", "diff": "하",   "success_rate": 100, "hc_rate": 85, "reward": (150, 350),   "honor": 6,  "fine": 80},
+    "mission_2": {"title": "밀수품 비밀 운송 작업",     "label": "밀수품 비밀 운송 작업", "diff": "중",   "success_rate": 75, "hc_rate": 60, "reward": (350, 800),   "honor": 12,  "fine": 200},
+    "mission_3": {"title": "라이벌 보스의 장부 탈취",   "label": "라이벌 보스의 장부 탈취", "diff": "상",   "success_rate": 55, "hc_rate": 40, "reward": (900, 1900),  "honor": 16,  "fine": 500},
+    "mission_4": {"title": "기밀 문서 야간 밀반출",     "label": "기밀 문서 야간 밀반출", "diff": "중상", "success_rate": 65, "hc_rate": 50, "reward": (650, 1400),  "honor": 14,  "fine": 350},
+    "mission_5": {"title": "중앙 은행 호송 차량 습격",  "label": "중앙 은행 호송 차량 습격", "diff": "최상", "success_rate": 35, "hc_rate": 20, "reward": (2500, 5000), "honor": 36, "fine": 1200},
 }
 
 # === 무기 상점 아이템 목록 ===
@@ -2519,11 +2521,11 @@ POLICE_RADIO_OP_BONUS = 5            # 기동타격대 무전기: 성공률 +5%
 
 # success_rate(%) / reward(최소, 최대 $) / honor(pt) / fine(실패 시 벌금 $) / shift_bonus(/월급 실적 추가 점수)
 POLICE_OPERATIONS = {
-    "op_1": {"title": "불법 노점·소매치기 단속",     "diff": "하",   "success_rate": 85, "reward": (150, 350),   "honor": 6,  "fine": 80,   "shift_bonus": 0},
-    "op_2": {"title": "밀수 의심 화물 검문",         "diff": "중",   "success_rate": 60, "reward": (350, 800),   "honor": 12,  "fine": 200,  "shift_bonus": 2},
-    "op_3": {"title": "마약 조직 정보원 접선",       "diff": "상",   "success_rate": 40, "reward": (900, 1900),  "honor": 16,  "fine": 500,  "shift_bonus": 4},
-    "op_4": {"title": "조직 아지트 잠복 수사",       "diff": "중상", "success_rate": 50, "reward": (650, 1400),  "honor": 14,  "fine": 350,  "shift_bonus": 3},
-    "op_5": {"title": "거물 마피아 보스 소탕 작전",  "diff": "최상", "success_rate": 20, "reward": (2500, 5000), "honor": 36, "fine": 1200, "shift_bonus": 12},
+    "op_1": {"title": "불법 노점·소매치기 단속",     "diff": "하",   "success_rate": 100, "hc_rate": 85, "reward": (150, 350),   "honor": 6,  "fine": 80,   "shift_bonus": 0},
+    "op_2": {"title": "밀수 의심 화물 검문",         "diff": "중",   "success_rate": 75, "hc_rate": 60, "reward": (350, 800),   "honor": 12,  "fine": 200,  "shift_bonus": 2},
+    "op_3": {"title": "마약 조직 정보원 접선",       "diff": "상",   "success_rate": 55, "hc_rate": 40, "reward": (900, 1900),  "honor": 16,  "fine": 500,  "shift_bonus": 4},
+    "op_4": {"title": "조직 아지트 잠복 수사",       "diff": "중상", "success_rate": 65, "hc_rate": 50, "reward": (650, 1400),  "honor": 14,  "fine": 350,  "shift_bonus": 3},
+    "op_5": {"title": "거물 마피아 보스 소탕 작전",  "diff": "최상", "success_rate": 35, "hc_rate": 20, "reward": (2500, 5000), "honor": 36, "fine": 1200, "shift_bonus": 12},
 }
 operation_cooldowns = {}   # {user_id: 다음 작전 가능 시각(time.time 기준)}
 
@@ -2546,6 +2548,8 @@ def operation_success_rate(op: dict, inventory: dict, in_patrol: bool, wanted_n:
     """(최종 성공률, 적용된 보너스 문구 목록)"""
     rate = op["success_rate"]
     labels = []
+    if rate >= 100:
+        return 100, labels   # 확정 성공 작전: 보너스 상한(98%)과 무관하게 항상 성공
     for pct, label in operation_bonus_preview(in_patrol, wanted_n):
         rate += pct
         labels.append(label)
@@ -4985,7 +4989,8 @@ async def run_hardcore_mission(interaction: discord.Interaction, user: discord.a
     """하드코어 작전 진행. 반환: (성공 여부, 작전 기록 문구)
     stage_bonus: 아이템 성공률 보너스 - 순찰 페널티 (상황 판단 단계의 성공 확률에 반영)"""
     th = HC_THEMES[theme]
-    pen = hc_difficulty_penalty(selected["success_rate"])
+    hc_rate = selected.get("hc_rate", selected["success_rate"])
+    pen = hc_difficulty_penalty(hc_rate)
     total = 5
     strikes = 0
     log = []
@@ -5063,7 +5068,7 @@ async def run_hardcore_mission(interaction: discord.Interaction, user: discord.a
                 view.stop()
 
             else:   # code
-                digits = 4 if selected["success_rate"] >= 60 else (5 if selected["success_rate"] >= 40 else 6)
+                digits = 4 if hc_rate >= 60 else (5 if hc_rate >= 40 else 6)
                 show_sec = 6 if digits <= 4 else (5 if digits == 5 else 4)
                 code = "".join(random.choice("0123456789") for _ in range(digits))
                 body = (f"{th['code_intro']} **{show_sec}초 안에 외우세요.**\n\n"
@@ -5200,9 +5205,10 @@ class MissionSelect(discord.ui.Select):
             patrol_expiry = active_patrols[guild_id].get(current_loc, 0)
             if time.time() < patrol_expiry:
                 patrol_penalty = 15  # 순찰 지역이면 성공률 15% 하락
-                active_buffs.append("경찰 순찰망 가동 (-15% 성공률)")    
+                if selected["success_rate"] < 100:   # 확정 성공 임무는 순찰 영향을 받지 않음
+                    active_buffs.append("경찰 순찰망 가동 (-15% 성공률)")    
 
-        final_success_rate = max(1, min(98, selected["success_rate"] + success_bonus - patrol_penalty))
+        final_success_rate = 100 if selected["success_rate"] >= 100 else max(1, min(98, selected["success_rate"] + success_bonus - patrol_penalty))
         hc_desc = ""
         if hardcore_on:
             # 하드코어: 5단계를 직접 수행 (2~3분). 끝나면 그동안 바뀐 자금·가방을 반영하도록 데이터를 다시 읽는다.
