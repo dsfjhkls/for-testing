@@ -395,10 +395,11 @@ LOCATIONS = {
 }
 
 # === 밸런스 상수 ===
-# 목표 페이스 (쉬지 않고 열심히 플레이했을 때 기준 / 가끔 접속하는 유저는 이것의 몇 배):
-#   행동대원(500pt) 약 1.5시간 → 솔다토(1,000) 약 3시간 → 카포(3,000) 약 7시간
-#   → 언더보스(5,000) 약 11시간 → 대부(10,000) 약 19시간
-# 페이스를 더 늘리고 싶으면 MISSIONS / NPC_DATA 의 명예(honor) 값을 줄이거나 쿨타임을 늘리면 됩니다.
+# 목표 페이스 (쉬지 않고 열심히, 아이템을 효율적으로 샀을 때 기준 / 가끔 접속하는 유저는 이것의 몇 배):
+#   행동대원(500pt) 약 0.5시간 → 솔다토(1,000) 약 1시간 → 카포(3,000) 약 2.5시간
+#   → 언더보스(5,000) 약 3.3시간 → 대부(10,000) 약 4~5시간
+# 명예 보상은 MISSIONS / NPC_DATA / NAMED_MONSTERS / 레이드·작전 표 / 경찰 활동 상수(PATROL_HONOR, ARREST_BASE_HONOR 등)에 있습니다.
+# 페이스를 조절하려면 이 값들을 같은 비율로 올리거나 내리고, 쿨타임(아래 *_COOLDOWN_SEC)을 함께 조절하세요.
 MISSION_COOLDOWN_SEC = 40        # 임무 기본 쿨타임
 MISSION_COOLDOWN_FAST_SEC = 30   # 크로노그래프 시계 / 특수 바이크 보유 시
 NPC_COOLDOWN_SEC = 45            # /전투 쿨타임
@@ -457,11 +458,11 @@ NO_COOLDOWN_ITEM = "시간 정지 회중시계"   # 보유 시 임무 쿨타임 
 # === 임무 목록 (드롭다운 표시와 실제 판정이 같은 표를 쓰도록 통합) ===
 # success_rate(%) / reward(최소, 최대 $) / honor(pt) / fine(실패 시 벌금 $)
 MISSIONS = {
-    "mission_1": {"title": "타 조직 구역 비밀 조사",   "label": "타 조직 구역 비밀 조사", "diff": "하",   "success_rate": 85, "reward": (150, 350),   "honor": 3,  "fine": 80},
-    "mission_2": {"title": "밀수품 비밀 운송 작업",     "label": "밀수품 비밀 운송 작업", "diff": "중",   "success_rate": 60, "reward": (350, 800),   "honor": 6,  "fine": 200},
-    "mission_3": {"title": "라이벌 보스의 장부 탈취",   "label": "라이벌 보스의 장부 탈취", "diff": "상",   "success_rate": 40, "reward": (900, 1900),  "honor": 8,  "fine": 500},
-    "mission_4": {"title": "기밀 문서 야간 밀반출",     "label": "기밀 문서 야간 밀반출", "diff": "중상", "success_rate": 50, "reward": (650, 1400),  "honor": 7,  "fine": 350},
-    "mission_5": {"title": "중앙 은행 호송 차량 습격",  "label": "중앙 은행 호송 차량 습격", "diff": "최상", "success_rate": 20, "reward": (2500, 5000), "honor": 18, "fine": 1200},
+    "mission_1": {"title": "타 조직 구역 비밀 조사",   "label": "타 조직 구역 비밀 조사", "diff": "하",   "success_rate": 85, "reward": (150, 350),   "honor": 6,  "fine": 80},
+    "mission_2": {"title": "밀수품 비밀 운송 작업",     "label": "밀수품 비밀 운송 작업", "diff": "중",   "success_rate": 60, "reward": (350, 800),   "honor": 12,  "fine": 200},
+    "mission_3": {"title": "라이벌 보스의 장부 탈취",   "label": "라이벌 보스의 장부 탈취", "diff": "상",   "success_rate": 40, "reward": (900, 1900),  "honor": 16,  "fine": 500},
+    "mission_4": {"title": "기밀 문서 야간 밀반출",     "label": "기밀 문서 야간 밀반출", "diff": "중상", "success_rate": 50, "reward": (650, 1400),  "honor": 14,  "fine": 350},
+    "mission_5": {"title": "중앙 은행 호송 차량 습격",  "label": "중앙 은행 호송 차량 습격", "diff": "최상", "success_rate": 20, "reward": (2500, 5000), "honor": 36, "fine": 1200},
 }
 
 # === 무기 상점 아이템 목록 ===
@@ -2235,9 +2236,9 @@ SMUGGLE_TIMEOUT_SEC = 60           # 경찰이 응답할 수 있는 시간
 SMUGGLE_IMMUNITY_SEC = 600         # 수락 시 그 경찰이 해당 마피아를 검거할 수 없는 시간 (10분)
 SMUGGLE_REJECT_WANTED_SEC = 90     # 거절당했을 때 마피아에게 붙는 지명수배 시간
 SMUGGLE_REJECT_FINE = 300          # 거절당했을 때 마피아 벌금
-SMUGGLE_REJECT_HONOR_LOSS = 20     # 거절당했을 때 마피아 명예 감소
+SMUGGLE_REJECT_HONOR_LOSS = 40     # 거절당했을 때 마피아 명예 감소
 SMUGGLE_FINE_PER_MISSING_HONOR = 25  # 명예가 모자라 못 깎은 만큼 벌금으로 환산 ($/pt)
-SMUGGLE_REJECT_POLICE_HONOR = 10   # 제안을 거절한 청렴한 경찰의 명예 포상
+SMUGGLE_REJECT_POLICE_HONOR = 20   # 제안을 거절한 청렴한 경찰의 명예 포상
 
 smuggle_cooldowns = {}   # {mafia_id: datetime}
 smuggle_pending = set()  # 응답 대기 중인 마피아 id (동시에 한 건만)
@@ -2414,7 +2415,7 @@ async def smuggle_command(interaction: discord.Interaction, 경찰: discord.Memb
 
     # === [경찰 전용] `/순찰` 명령어 ===
 # 경찰 활동 명예 (이 값들을 조절해서 경찰 성장 속도를 맞추세요)
-PATROL_HONOR = 14                   # /순찰 1회 명예 (기존 10)
+PATROL_HONOR = 28                   # /순찰 1회 명예
 
 patrol_cooldowns = {}
 
@@ -2512,11 +2513,11 @@ POLICE_RADIO_OP_BONUS = 5            # 기동타격대 무전기: 성공률 +5%
 
 # success_rate(%) / reward(최소, 최대 $) / honor(pt) / fine(실패 시 벌금 $) / shift_bonus(/월급 실적 추가 점수)
 POLICE_OPERATIONS = {
-    "op_1": {"title": "불법 노점·소매치기 단속",     "diff": "하",   "success_rate": 85, "reward": (150, 350),   "honor": 3,  "fine": 80,   "shift_bonus": 0},
-    "op_2": {"title": "밀수 의심 화물 검문",         "diff": "중",   "success_rate": 60, "reward": (350, 800),   "honor": 6,  "fine": 200,  "shift_bonus": 2},
-    "op_3": {"title": "마약 조직 정보원 접선",       "diff": "상",   "success_rate": 40, "reward": (900, 1900),  "honor": 8,  "fine": 500,  "shift_bonus": 4},
-    "op_4": {"title": "조직 아지트 잠복 수사",       "diff": "중상", "success_rate": 50, "reward": (650, 1400),  "honor": 7,  "fine": 350,  "shift_bonus": 3},
-    "op_5": {"title": "거물 마피아 보스 소탕 작전",  "diff": "최상", "success_rate": 20, "reward": (2500, 5000), "honor": 18, "fine": 1200, "shift_bonus": 12},
+    "op_1": {"title": "불법 노점·소매치기 단속",     "diff": "하",   "success_rate": 85, "reward": (150, 350),   "honor": 6,  "fine": 80,   "shift_bonus": 0},
+    "op_2": {"title": "밀수 의심 화물 검문",         "diff": "중",   "success_rate": 60, "reward": (350, 800),   "honor": 12,  "fine": 200,  "shift_bonus": 2},
+    "op_3": {"title": "마약 조직 정보원 접선",       "diff": "상",   "success_rate": 40, "reward": (900, 1900),  "honor": 16,  "fine": 500,  "shift_bonus": 4},
+    "op_4": {"title": "조직 아지트 잠복 수사",       "diff": "중상", "success_rate": 50, "reward": (650, 1400),  "honor": 14,  "fine": 350,  "shift_bonus": 3},
+    "op_5": {"title": "거물 마피아 보스 소탕 작전",  "diff": "최상", "success_rate": 20, "reward": (2500, 5000), "honor": 36, "fine": 1200, "shift_bonus": 12},
 }
 operation_cooldowns = {}   # {user_id: 다음 작전 가능 시각(time.time 기준)}
 
@@ -2731,7 +2732,7 @@ INTERROGATE_MAX_JAIL_SEC = 600        # 가중되어도 남은 형기는 이 시
 INTERROGATE_DELTA_RANGE = (40, 90)    # 감형 / 가중 시간 범위 (초)
 INTERROGATE_DENY_MULT = 1.5           # 결백 주장은 도박수라 변동폭이 1.5배
 INTERROGATE_MATCH_REWARD_MONEY = 300  # 경찰 의견과 판결이 일치했을 때 수당
-INTERROGATE_MATCH_REWARD_HONOR = 15   # 경찰 의견과 판결이 일치했을 때 명예 (기존 10)
+INTERROGATE_MATCH_REWARD_HONOR = 30   # 경찰 의견과 판결이 일치했을 때 명예
 
 INTERROGATE_ANSWERS = {"confess": "자백 (협조)", "silent": "묵비권", "deny": "결백 주장"}
 INTERROGATE_OPINIONS = {"reduce": "감형 권고", "extend": "가중 권고"}
@@ -3033,7 +3034,7 @@ NPC_DATA = {
         "atk": 70,
         "def": 5,
         "reward_money": (60, 150),
-        "reward_honor": 1,
+        "reward_honor": 2,
         "desc": "칼렌데 뒷골목에서 서성이는 초보 깡패입니다."
     },
     "조직의 배신자": {
@@ -3042,7 +3043,7 @@ NPC_DATA = {
         "atk": 170,
         "def": 30,
         "reward_money": (200, 450),
-        "reward_honor": 1,
+        "reward_honor": 2,
         "desc": "패밀리의 기밀을 팔아넘기고 도망친 위험한 배신자입니다."
     },
     "암시장 악덕 거상": {
@@ -3051,7 +3052,7 @@ NPC_DATA = {
         "atk": 300,
         "def": 70,
         "reward_money": (450, 1000),
-        "reward_honor": 2,
+        "reward_honor": 4,
         "desc": "고용한 보디가드들을 대동하고 다니는 악명 높은 거상입니다."
     },
     "지명수배자 보스": {
@@ -3060,7 +3061,7 @@ NPC_DATA = {
         "atk": 520,
         "def": 130,
         "reward_money": (1000, 2000),
-        "reward_honor": 3,
+        "reward_honor": 6,
         "desc": "치안국에서도 손대지 못하는 강력한 수배범 보스입니다."
     },
     "칼렌데 암살자": {
@@ -3069,7 +3070,7 @@ NPC_DATA = {
         "atk": 800,
         "def": 220,
         "reward_money": (2000, 3600),
-        "reward_honor": 5,
+        "reward_honor": 10,
         "desc": "그림자처럼 움직이며 거물만 노리는 전설적인 청부 암살자입니다."
     }
 }
@@ -3202,14 +3203,14 @@ NAMED_MONSTERS = {
     "marco": {
         "name": "[네임드] 백정 마르코", "named": True, "min_honor": 500, "max_turns": 12,
         "hp": 4200, "atk": 330, "def": 55, "enrage": 1.5,
-        "reward_money": (900, 1800), "reward_honor": 2,
+        "reward_money": (900, 1800), "reward_honor": 4,
         "drop": "[전리품] 마르코의 정육 칼",
         "desc": "블랙워드 도살장을 지배하는 청부 해결사. 피를 보면 더 사나워집니다."
     },
     "bianca": {
         "name": "[네임드] 독사 비앙카", "named": True, "min_honor": 1500, "max_turns": 12,
         "hp": 8000, "atk": 520, "def": 100, "enrage": 1.5,
-        "reward_money": (1800, 3300), "reward_honor": 4,
+        "reward_money": (1800, 3300), "reward_honor": 8,
         "drop": "[전리품] 비앙카의 독니 반지",
         "image": "named_bianca.png",   # 전투 화면 그림 (assets 폴더). 파일이 없으면 그림 없이 진행됩니다.
         "desc": "로젠펠트 뒷무대의 독살 전문가. 체력이 줄면 맹독을 뿌리며 덤빕니다."
@@ -3217,14 +3218,14 @@ NAMED_MONSTERS = {
     "boronin": {
         "name": "[네임드] 철의 장군 보로닌", "named": True, "min_honor": 2500, "max_turns": 12,
         "hp": 14000, "atk": 800, "def": 170, "enrage": 1.5,
-        "reward_money": (3000, 5400), "reward_honor": 7,
+        "reward_money": (3000, 5400), "reward_honor": 14,
         "drop": "[전리품] 보로닌의 철 훈장",
         "desc": "퇴역 후 용병단을 이끄는 철벽의 장군. 방어가 매우 단단합니다."
     },
     "executioner": {
         "name": "[네임드] 붉은 달의 처형자", "named": True, "min_honor": 4000, "max_turns": 12,
         "hp": 22000, "atk": 1200, "def": 260, "enrage": 1.6,
-        "reward_money": (4800, 8400), "reward_honor": 12,
+        "reward_money": (4800, 8400), "reward_honor": 24,
         "drop": "[전리품] 처형자의 붉은 가면",
         "desc": "칼렌데 지하 세계가 두려워하는 전설의 처형자. 정상급 장비가 없으면 상대도 안 됩니다."
     },
@@ -5722,9 +5723,9 @@ POLICE_BADGE_NAME = "특급 수사관 황금 배지"
 POLICE_RADIO_ARREST_BONUS = 0.20    # 무전기: 검거 포상금 +20%
 POLICE_BADGE_HONOR_BONUS = 0.20     # 황금 배지: 명예 실적 +20%
 ARREST_BASE_REWARD = 500            # /검거 기본 포상금
-ARREST_BASE_HONOR = 30              # /검거 기본 명예 실적
-ARREST_HONOR_PER_POINT = 50         # 수배범 명예 50pt 당 검거 명예 +1  (거물 검거 보너스)
-ARREST_HONOR_BONUS_MAX = 100        # 거물 검거 보너스 상한  → 검거 1회 명예 30 ~ 130
+ARREST_BASE_HONOR = 60              # /검거 기본 명예 실적
+ARREST_HONOR_PER_POINT = 25         # 수배범 명예 25pt 당 검거 명예 +1  (거물 검거 보너스)
+ARREST_HONOR_BONUS_MAX = 200        # 거물 검거 보너스 상한  → 검거 1회 명예 60 ~ 260
 
 def police_bonuses(inventory) -> dict:
     inv = inventory or {}
@@ -6158,19 +6159,19 @@ RAID_TIERS = {
     "rat": {
         "name": "하수구의 쥐왕", "min_players": 2, "min_honor": 0, "cost": 1000,
         "hits": 38, "def_ratio": 0.25, "aoe": 0.07, "aoe_enrage": 0.10,
-        "money": 3000, "honor": 15, "points": 10,
+        "money": 3000, "honor": 30, "points": 10,
         "desc": "하수도를 지배하는 거대한 쥐떼의 왕. 입문자용 레이드입니다.",
     },
     "bull": {
         "name": "부두 항만의 폭군", "min_players": 3, "min_honor": 1500, "cost": 3000,
         "hits": 46, "def_ratio": 0.30, "aoe": 0.09, "aoe_enrage": 0.13,
-        "money": 7000, "honor": 30, "points": 25,
+        "money": 7000, "honor": 60, "points": 25,
         "desc": "에르느코항 부두를 장악한 괴력의 폭군. 응급처치 담당이 꼭 필요합니다.",
     },
     "king": {
         "name": "칼렌데 지하 황제", "min_players": 4, "min_honor": 4000, "cost": 8000,
         "hits": 54, "def_ratio": 0.35, "aoe": 0.09, "aoe_enrage": 0.13,
-        "money": 14000, "honor": 50, "points": 60,
+        "money": 14000, "honor": 100, "points": 60,
         "desc": "칼렌데 지하 세계의 진짜 주인. 정상급 조직만이 도전할 수 있습니다.",
     },
 }
@@ -7157,7 +7158,7 @@ WAR_FAMILY_COOLDOWN_SEC = 1800      # 선전포고한 조직의 재선포 대기
 WAR_PRIZE_HOURS = 4                 # 전리품 = 구역 시간당 수입 × 이 값 (승리 측이 나눠 가짐)
 WAR_BASE_SHARE = 0.6                # 전리품 중 '균등 분배' 비율 (나머지는 딜량 비례)
 WAR_LOSE_MONEY_RATIO = 0.15         # 패배 측 참전자(공격 1회 이상)에게 나눠주는 위로금 비율
-WAR_WIN_HONOR = 10                  # 승리 측 명예 (공격 1회 이상 한 사람만)
+WAR_WIN_HONOR = 20                  # 승리 측 명예 (공격 1회 이상 한 사람만)
 
 TERRITORY_DB_ERROR_MSG = "구역 DB 처리 중 오류가 발생했습니다. (관리자: `territories` 테이블이 만들어져 있는지 확인해 주세요 — territory.sql 참고)"
 
@@ -9550,19 +9551,19 @@ POLICE_OP_TIERS = {
     "smuggle": {
         "name": "밀수 조직 소탕", "min_players": 2, "min_honor": 0, "cost": 1000,
         "base": 0.65, "ref_atk": 300,
-        "money": 3000, "honor": 22, "points": 10,
+        "money": 3000, "honor": 44, "points": 10,
         "desc": "뒷골목 밀수 조직의 창고를 급습합니다. 입문자용 작전입니다.",
     },
     "cartel": {
         "name": "항만 카르텔 일망타진", "min_players": 3, "min_honor": 1500, "cost": 3000,
         "base": 0.55, "ref_atk": 1200,
-        "money": 7000, "honor": 45, "points": 25,
+        "money": 7000, "honor": 90, "points": 25,
         "desc": "에르느코항을 장악한 카르텔을 한 번에 소탕합니다. 화력과 인원이 필요합니다.",
     },
     "empire": {
         "name": "지하 범죄 제국 본거지 급습", "min_players": 4, "min_honor": 4000, "cost": 8000,
         "base": 0.50, "ref_atk": 3500,
-        "money": 14000, "honor": 75, "points": 60,
+        "money": 14000, "honor": 150, "points": 60,
         "desc": "칼렌데 지하 범죄 제국의 심장부. 정상급 수사팀만이 도전할 수 있습니다.",
     },
 }
@@ -10275,7 +10276,7 @@ POLICE_SALARY_SHIFT_SEC = 600          # 근무(추적) 시간
 POLICE_SALARY_FULL_SCORE = 100         # 이 점수에 도달하면 기본 월급의 100%
 POLICE_SALARY_MAX_RATIO = 1.5          # 월급 상한 (기본 월급의 150% = 150점)
 POLICE_SALARY_BASE_MONEY = 2000        # 100% 월급: 보상금
-POLICE_SALARY_BASE_HONOR = 22          # 100% 월급: 명예 (황금 배지 보너스 적용)
+POLICE_SALARY_BASE_HONOR = 44          # 100% 월급: 명예 (황금 배지 보너스 적용)
 POLICE_SALARY_ARREST_BONUS_PER = 100   # 거물 검거 보너스: 수배범 명예 100pt 당 +1점
 POLICE_SALARY_ARREST_BONUS_MAX = 50    # 거물 검거 보너스 상한 → 검거 1회 50 ~ 100점
 
