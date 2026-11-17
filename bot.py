@@ -188,14 +188,16 @@ wanted_list = {}
 #   "dark"     = [히든보스] 어둠의 지배자  (HIDDEN_BOSS)
 #   "eden"     = [테러보스] 에칼 데 페스토  (EDEN_BOSS)
 #   "ultimate" = [최강보스] 태초의 파괴자  (ULTIMATE_BOSS)
+#   "dark_x" / "eden_x" / "ultimate_x" = [강화보스] 위 보스들의 강화판 (ELITE_*_BOSS)
 active_boss_guilds = {}
 
 # 일반 /전투 승리 시 '보스마다 각각' 출현할 확률 (테스트할 때는 0.3 처럼 크게 바꾸세요)
 #   • 서버에 보스가 없을 때만 판정하고, 한 번에 보스 한 마리만 출현합니다.
-#   • 보스가 3종이라 '아무 보스나' 나올 확률은 합계 9% 입니다. (BOSS_SPAWN_TABLE 참고)
+#   • 보스 3종(각 3%) + 강화 보스 3종(각 0.3%)이라 '아무 보스나' 나올 확률은 합계 9.9% 입니다. (BOSS_SPAWN_TABLE 참고)
 BOSS_SPAWN_CHANCE = 0.03            # 3% (어둠의 지배자)
 EDEN_BOSS_SPAWN_CHANCE = 0.03       # 3% (에칼 데 페스토)
 ULTIMATE_BOSS_SPAWN_CHANCE = 0.03   # 3% (태초의 파괴자)
+ELITE_BOSS_SPAWN_CHANCE = 0.003     # 0.3% (강화 보스: 보스마다 각각 이 확률로 더 강한 강화판이 출현. 합계 0.9%)
 
 # {user_id: datetime (석방 예정 시간)}
 jail_list = {}
@@ -481,6 +483,13 @@ WEAPON_TIERS = [
     ("단검", 80, 0),
 ]
 
+# 강화 보스 전리품: 보유만 해도 능력치가 오릅니다 (모두 합산). {이름: (공격력, 체력, 방어력)}
+ELITE_TROPHY_STATS = {
+    "[강화보스 전리품] 심연의 왕관":        (150, 2500, 40),
+    "[강화보스 전리품] 대재앙의 붉은 깃발":  (250, 4000, 60),
+    "[강화보스 전리품] 종말의 심판 인장":    (400, 6000, 100),
+}
+
 def compute_combat_stats(honor: int, inventory: dict) -> dict:
     """/전투, /보스, /결투 가 모두 같은 공식을 쓰도록 한 곳으로 통합"""
     hp = 1000 + honor * 5
@@ -505,6 +514,11 @@ def compute_combat_stats(honor: int, inventory: dict) -> dict:
             atk += it.get("atk_bonus", 0)
             def_val += it.get("def_bonus", 0)
             hp += it.get("hp_bonus", 0)
+    for tname, (ta, th, td) in ELITE_TROPHY_STATS.items():   # 강화 보스 전리품
+        if tname in inventory:
+            atk += ta
+            hp += th
+            def_val += td
     return {"hp": hp, "atk": atk, "def": def_val}
 
 # === Supabase DB 연동 함수들 ===
@@ -652,9 +666,11 @@ TITLES = {
     "unlucky":      {"name": "불운한 쥐새끼",   "desc": "임무 5회 실패",                        "check": lambda s, i: s["fail"] >= 5},
     "rich":         {"name": "검은 돈의 주인",  "desc": "보유 자금 $100,000 이상",               "check": lambda s, i: (i.get("money") or 0) >= 100000},
     "respected":    {"name": "존경받는 자",     "desc": "조직 명예 300pt 이상 (솔다토 이상)",   "check": lambda s, i: (i.get("honor") or 0) >= 300},
-    "collector":    {"name": "장비 수집가",     "desc": "암시장 장비 10개 이상 보유",            "check": lambda s, i: len([k for k in (i.get("inventory") or {}) if not k.startswith(("[전리품]", "[재료]", "[제작]"))]) >= 10},
+    "collector":    {"name": "장비 수집가",     "desc": "암시장 장비 10개 이상 보유",            "check": lambda s, i: len([k for k in (i.get("inventory") or {}) if not k.startswith(("[전리품]", "[강화보스 전리품]", "[재료]", "[제작]"))]) >= 10},
     "named_hunter": {"name": "네임드 사냥꾼",   "desc": "네임드 몬스터 1종 처치",                "check": lambda s, i: any(k.startswith("[전리품]") for k in (i.get("inventory") or {}))},
     "named_slayer": {"name": "네임드 학살자",   "desc": "네임드 몬스터 4종 모두 처치",          "check": lambda s, i: sum(1 for k in (i.get("inventory") or {}) if k.startswith("[전리품]")) >= 4},
+    "elite_hunter": {"name": "강화 보스 사냥꾼",   "desc": "강화 보스 1회 처치",                    "check": lambda s, i: s["elite_boss_kills"] >= 1},
+    "elite_slayer": {"name": "재앙을 꺾은 자",     "desc": "강화 보스 3종의 전리품을 모두 획득",    "check": lambda s, i: all(t in (i.get("inventory") or {}) for t in ELITE_TROPHY_STATS)},
     "gambler":      {"name": "도박꾼",          "desc": "도박 10판 플레이",                     "check": lambda s, i: s["gamble_played"] >= 10},
     "jackpot":      {"name": "잭팟의 주인공",   "desc": "슬롯머신 잭팟(7⃣7⃣7⃣) 당첨",         "check": lambda s, i: s["jackpot"] >= 1},
     "high_roller":  {"name": "카지노의 큰손",   "desc": "도박 누적 베팅액 $100,000 이상",        "check": lambda s, i: s["gamble_wagered"] >= 100000},
@@ -668,7 +684,7 @@ def get_title_blob(user_info: dict) -> dict:
     for key in ("success", "fail", "streak", "best_streak", "hard_success",
                 "gamble_played", "gamble_won", "gamble_wagered", "gamble_net", "jackpot", "broke",
                 "attendance",
-                "fight_wins", "named_kills", "boss_kills",            # ← 업적용 카운터
+                "fight_wins", "named_kills", "boss_kills", "elite_boss_kills",            # ← 업적용 카운터
                 "duel_wins", "raid_clears", "raid_king_clears", "war_wins", "war_conquests",
                 "police_arrests", "police_big_arrests", "police_patrols", "police_interrogations",   # ← 경찰 업적용 카운터
                 "police_matches", "police_op_stages", "police_salary_s",
@@ -793,6 +809,8 @@ ACHIEVEMENTS = [
     _ach("a_jackpot",    "심화", "7이 세 번",            "슬롯머신 잭팟 당첨",                lambda s, i: s["jackpot"],              1,        hide="full"),
     _ach("a_broke",      "심화", "바닥을 본 자",         "도박으로 보유 자금이 $0이 됨",      lambda s, i: s["broke"],                1,        hide="full"),
     _ach("a_streak_10",  "심화", "신들린 손",            "비밀 임무 10연속 성공",             lambda s, i: s["best_streak"],          10,       hide="full"),
+    _ach("a_elite_1",    "심화", "전설을 넘어선 자",     "강화 보스 1회 처치",                lambda s, i: s["elite_boss_kills"],     1,        hide="name"),
+    _ach("a_elite_all",  "심화", "재앙의 지배자",        "강화 보스 3종의 전리품을 모두 획득", lambda s, i: sum(1 for t in ELITE_TROPHY_STATS if t in (i.get("inventory") or {})), 3, hide="full"),
     _ach("a_boss_5",     "심화", "종말의 사냥꾼",        "보스 5회 처치",                     lambda s, i: s["boss_kills"],           5,        hide="full"),
     _ach("a_craft_all",  "심화", "완전한 장인",          "/제작 장비를 전부 제작",            lambda s, i: _inv_count(i, "[제작]"),   _CRAFT_ALL_GOAL, hide="full"),
     _ach("a_raid_king",  "심화", "지하의 왕을 끌어내린 자", "'칼렌데 지하 황제' 레이드 클리어",   lambda s, i: s["raid_king_clears"],     1,        hide="name"),
@@ -832,7 +850,7 @@ ACHIEVEMENTS += _police_ach
 _MAFIA_ONLY_ACH = {
     "b_mission_1", "b_mission_10", "b_fight_5", "b_weapon_1", "b_duel_1", "b_raid_1", "b_attend_3",
     "s_mission_50", "s_streak_5", "s_hard_5", "s_fight_50", "s_named_2", "s_duel_10", "s_raid_10", "s_war_3",
-    "a_boss_1", "a_named_all", "a_mission_300", "a_attend_30", "a_streak_10", "a_boss_5", "a_raid_king", "a_duel_50", "a_war_conq_5",
+    "a_boss_1", "a_elite_1", "a_elite_all", "a_named_all", "a_mission_300", "a_attend_30", "a_streak_10", "a_boss_5", "a_raid_king", "a_duel_50", "a_war_conq_5",
 }
 for _a in ACHIEVEMENTS:
     _a.setdefault("role", "mafia" if _a["id"] in _MAFIA_ONLY_ACH else None)   # None = 공통
@@ -852,7 +870,10 @@ ACH_REWARDS = {
     "숙련": {"money": 5000,  "honor": 10},
     "심화": {"money": 30000, "honor": 50, "title": True},
 }
-ACH_REWARD_OVERRIDES = {}
+ACH_REWARD_OVERRIDES = {   # 강화 보스 업적은 일반 심화 업적보다 보상이 큽니다
+    "a_elite_1":   {"money": 100000, "honor": 150, "title": True},
+    "a_elite_all": {"money": 300000, "honor": 400, "title": True},
+}
 
 def ach_reward(a: dict) -> dict:
     return ACH_REWARD_OVERRIDES.get(a["id"]) or ACH_REWARDS[a["tier"]]
@@ -1611,9 +1632,9 @@ def _known_item_names() -> set:
         for d in table.values():
             if d.get("drop"):
                 names.add(d["drop"])
-    for d in (HIDDEN_BOSS, ULTIMATE_BOSS, EDEN_BOSS):
-        if d.get("drop"):
-            names.add(d["drop"])
+    for k in BOSS_KINDS.values():
+        if k["data"].get("drop"):
+            names.add(k["data"]["drop"])
     return names
 
 def admin_adjust_sync(user_id: int, money_delta: int = 0, honor_delta: int = 0):
@@ -3093,6 +3114,29 @@ EDEN_BOSS = {
     "desc": "모두가 평등한 세상을 외치며 칼렌데를 불바다로 만들려는 유토피아 오브 에덴의 창립자입니다. 15턴 안에 쓰러뜨리지 못하면 도시가 불탑니다."
 }
 
+# === 강화 보스 (각 보스의 강화판: 출현 확률 0.3% / 체력·공격력·방어력이 훨씬 높고 격노하지만 보상이 훨씬 큼) ===
+#   • 그림은 원래 보스와 같은 것을 씁니다. 이름이 "[강화보스]" 로 시작하면 강화 보스로 취급합니다. (칭호·업적 카운터)
+#   • 고유 전리품은 처음 처치할 때 1회 지급되며, 가지고만 있어도 능력치가 오릅니다. (ELITE_TROPHY_STATS)
+ELITE_PREFIX = "[강화보스]"
+ELITE_DARK_BOSS = {**HIDDEN_BOSS,
+    "name": "[강화보스] 심연을 삼킨 어둠의 지배자",
+    "hp": 140000, "atk": 4400, "def": 900, "enrage": 1.5,
+    "reward_money": (40000, 90000), "reward_honor": 300,
+    "drop": "[강화보스 전리품] 심연의 왕관",
+    "desc": "어둠의 지배자가 심연의 힘을 삼키고 다시 돌아왔습니다. 체력이 절반 아래로 떨어지면 격노합니다. 15턴 안에 쓰러뜨리지 못하면 제압당합니다."}
+ELITE_EDEN_BOSS = {**EDEN_BOSS,
+    "name": "[강화보스] 대재앙의 화신 에칼 데 페스토",
+    "hp": 175000, "atk": 6000, "def": 1100, "enrage": 1.5,
+    "reward_money": (70000, 150000), "reward_honor": 600,
+    "drop": "[강화보스 전리품] 대재앙의 붉은 깃발",
+    "desc": "평등의 이름으로 도시를 불태우려던 창립자가 스스로 재앙이 되었습니다. 체력이 절반 아래로 떨어지면 격노합니다. 15턴 안에 쓰러뜨리지 못하면 도시가 잿더미가 됩니다."}
+ELITE_ULTIMATE_BOSS = {**ULTIMATE_BOSS,
+    "name": "[강화보스] 종말을 선고하는 태초의 파괴자",
+    "hp": 240000, "atk": 9000, "def": 1400, "enrage": 1.5,
+    "reward_money": (120000, 250000), "reward_honor": 1200,
+    "drop": "[강화보스 전리품] 종말의 심판 인장",
+    "desc": "태초의 파괴자가 마침내 세계의 종말을 선고했습니다. 체력이 절반 아래로 떨어지면 격노합니다. 15턴 안에 쓰러뜨리지 못하면 모든 것이 사라집니다."}
+
 # === 보스 종류 표 (출현 판정 · 출현 공지 · /보스 전투가 모두 이 표를 사용합니다) ===
 #   보스를 더 추가하려면: 보스 데이터를 만들고 → 여기에 한 줄 추가 → BOSS_SPAWN_TABLE 에 확률 한 줄 추가
 BOSS_KINDS = {
@@ -3120,6 +3164,30 @@ BOSS_KINDS = {
                       "차원의 균열이 갈라지며 역대급 재앙의 기운이 감지되었습니다!\n"
                       "**[최강보스] 태초의 파괴자**가 강림했습니다! (`/보스` 명령어로 토벌 가능)"),
     },
+}
+BOSS_KINDS["dark_x"] = {
+    "data": ELITE_DARK_BOSS,
+    "title": "[강화보스] 심연을 삼킨 어둠의 지배자 토벌전",
+    "color": discord.Color.from_rgb(60, 0, 0),
+    "spawn_msg": ("**[최상위 긴급 경보]** \n"
+                  "지하 세계 전체가 비명을 지르듯 떨리고 있습니다! 어둠의 지배자가 심연의 힘을 삼키고 되돌아왔습니다!\n"
+                  "**[강화보스] 심연을 삼킨 어둠의 지배자**가 출현했습니다! 극도로 위험합니다! (`/보스` 명령어로 토벌 가능)"),
+}
+BOSS_KINDS["eden_x"] = {
+    "data": ELITE_EDEN_BOSS,
+    "title": "[강화보스] 대재앙의 화신 에칼 데 페스토 토벌전",
+    "color": discord.Color.from_rgb(255, 40, 0),
+    "spawn_msg": ("**[최상위 테러 경보]** \n"
+                  "하늘이 붉게 물들고 도시의 모든 종이 한꺼번에 울립니다! 에칼 데 페스토가 재앙 그 자체가 되어 나타났습니다!\n"
+                  "**[강화보스] 대재앙의 화신 에칼 데 페스토**가 출현했습니다! 극도로 위험합니다! (`/보스` 명령어로 토벌 가능)"),
+}
+BOSS_KINDS["ultimate_x"] = {
+    "data": ELITE_ULTIMATE_BOSS,
+    "title": "[강화보스] 종말을 선고하는 태초의 파괴자 토벌전",
+    "color": discord.Color.from_rgb(200, 0, 255),
+    "spawn_msg": ("**[종말 경보]** \n"
+                  "하늘이 갈라지고 시간이 멈췄습니다! 태초의 파괴자가 세계의 종말을 선고했습니다!\n"
+                  "**[강화보스] 종말을 선고하는 태초의 파괴자**가 강림했습니다! 극도로 위험합니다! (`/보스` 명령어로 토벌 가능)"),
 }
 BOSS_NAMES = tuple(k["data"]["name"] for k in BOSS_KINDS.values())
 
@@ -3156,14 +3224,19 @@ BOSS_SPAWN_TABLE = [
     ("dark", BOSS_SPAWN_CHANCE),
     ("eden", EDEN_BOSS_SPAWN_CHANCE),
     ("ultimate", ULTIMATE_BOSS_SPAWN_CHANCE),
+    ("dark_x", ELITE_BOSS_SPAWN_CHANCE),
+    ("eden_x", ELITE_BOSS_SPAWN_CHANCE),
+    ("ultimate_x", ELITE_BOSS_SPAWN_CHANCE),
 ]
 
 def boss_short_name(data: dict) -> str:
-    """'[히든보스] 어둠의 지배자' -> '어둠의 지배자'"""
+    """'[히든보스] 어둠의 지배자' -> '어둠의 지배자'  ('[강화보스] 심연을 삼킨 어둠의 지배자' -> '[강화] 심연을 삼킨 어둠의 지배자')"""
+    if data["name"].startswith(ELITE_PREFIX):
+        return "[강화] " + data["name"].split("] ", 1)[-1]
     return data["name"].split("] ", 1)[-1]
 
 def boss_chance_text() -> str:
-    """'어둠의 지배자 3% / 에칼 데 페스토 3% / 태초의 파괴자 3%'"""
+    """'어둠의 지배자 3% / 에칼 데 페스토 3% / 태초의 파괴자 3% / ... 강화 보스 각 0.3%'"""
     return " / ".join(f"{boss_short_name(BOSS_KINDS[kind]['data'])} {chance * 100:g}%" for kind, chance in BOSS_SPAWN_TABLE)
 
 def boss_reward_text() -> str:
@@ -3487,6 +3560,8 @@ class NPCBattleView(GuardedView):
                 ach_stats["named_kills"] += 1
             if self.npc_info["name"] in BOSS_NAMES:
                 ach_stats["boss_kills"] += 1
+            if self.npc_info["name"].startswith(ELITE_PREFIX):
+                ach_stats["elite_boss_kills"] += 1
             after_info = {
                 **user_data, "money": new_money, "honor": new_honor,
                 "inventory": update_payload.get("inventory", user_data.get("inventory"))
@@ -6581,6 +6656,8 @@ async def info_command(interaction: discord.Interaction, keyword: str):
             "desc": "전투 후 살기가 감지되었을 때 출현하는 최종 히든 보스전입니다.\n"
                     f"• **출현 조건:** 일반 `/전투` 승리 시 보스마다 각각 확률로 경보가 발생해야 입장 가능합니다. ({boss_chance_text()})\n"
                     f"• **보상:** 격퇴 성공 시 막대한 자금과 명예, 제작 재료를 획득!\n{boss_reward_text()}\n"
+                    "• **강화 보스:** 보스마다 0.3% 확률로 훨씬 강한 강화판이 출현합니다. 체력·공격력·방어력이 매우 높고 격노하지만, "
+                    "자금·명예·제작 재료가 크게 늘고 능력치가 오르는 전용 전리품과 칭호·업적을 얻습니다.\n"
                     "• **권장:** 명예 약 5,000pt + 수상한 주사기 / 슈퍼 울트라 주먹",
         },
         "도박": {
@@ -9219,6 +9296,10 @@ MATERIAL_DROPS = {
     "[히든보스] 어둠의 지배자":    [(M_DARK, 1.00, (2, 3)), (M_ALLOY, 1.00, (2, 4))],
     "[테러보스] 에칼 데 페스토":   [(M_EDEN, 1.00, (2, 3)), (M_ALLOY, 1.00, (3, 4))],
     "[최강보스] 태초의 파괴자":    [(M_ORIGIN, 1.00, (2, 3)), (M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (3, 5))],
+    # 강화 보스: 일반 보스보다 재료를 훨씬 많이, 특수 합금은 확정으로 줍니다
+    "[강화보스] 심연을 삼킨 어둠의 지배자":      [(M_DARK, 1.00, (5, 8)), (M_ALLOY, 1.00, (6, 10))],
+    "[강화보스] 대재앙의 화신 에칼 데 페스토":    [(M_EDEN, 1.00, (5, 8)), (M_ALLOY, 1.00, (7, 11))],
+    "[강화보스] 종말을 선고하는 태초의 파괴자":   [(M_ORIGIN, 1.00, (5, 8)), (M_DARK, 1.00, (3, 5)), (M_ALLOY, 1.00, (8, 12))],
     # /레이드 (RAID_TIERS 의 name)
     "하수구의 쥐왕":      [(M_RAT, 1.00, (1, 3)), (M_SCRAP, 1.00, (3, 5))],
     "부두 항만의 폭군":   [(M_BULL, 1.00, (1, 3)), (M_STEEL, 1.00, (2, 4))],
@@ -9536,6 +9617,7 @@ def combat_stats_breakdown(honor: int, inventory: dict) -> dict:
         "ticket": "임무 실패 방지권" in inventory,
         "police": [(it["name"], it.get("atk_bonus", 0), it.get("hp_bonus", 0), it.get("def_bonus", 0))
                    for it in POLICE_SHOP_ITEMS if it["name"] in inventory and (it.get("atk_bonus") or it.get("hp_bonus") or it.get("def_bonus"))],
+        "elite": [(n, a, h, d) for n, (a, h, d) in ELITE_TROPHY_STATS.items() if n in inventory],
         "unused": unused,
         "total": compute_combat_stats(honor, inventory),   # 실제 전투에서 쓰는 값
     }
@@ -9566,6 +9648,8 @@ def build_stats_embed(target: discord.abc.User, data: dict) -> discord.Embed:
         lines.append("• **방어구**: 없음 (`/제작`에서 만들 수 있습니다)")
     if b["ticket"]:
         lines.append("• **임무 실패 방지권**: 방어력 +20")
+    for ename, eatk, ehp, edef in b["elite"]:
+        lines.append(f"• **강화 보스 전리품** {ename.split('] ', 1)[-1]}: 공격력 +{eatk:,} / 방어력 +{edef:,} / 체력 +{ehp:,}")
     for pname, patk, php, pdef in b["police"]:
         parts = ([f"공격력 +{patk:,}"] if patk else []) + ([f"방어력 +{pdef:,}"] if pdef else []) + ([f"체력 +{php:,}"] if php else [])
         lines.append(f"• **치안국 보급품** {pname}: " + " / ".join(parts))
@@ -9633,8 +9717,8 @@ _auction_tasks = set()            # 진행 중인 asyncio 작업 (가비지 컬�
 
 def auction_blocked_reason(item: str):
     """거래 불가 아이템이면 사유를, 가능하면 None"""
-    if item.startswith("[전리품]"):
-        return "네임드 고유 전리품은 칭호·업적과 연결되어 있어 거래할 수 없습니다."
+    if item.startswith(("[전리품]", "[강화보스 전리품]")):
+        return "고유 전리품은 칭호·업적과 연결되어 있어 거래할 수 없습니다."
     if item in {it["name"] for it in POLICE_SHOP_ITEMS}:
         return "치안국 보급품은 거래할 수 없습니다."
     return None
