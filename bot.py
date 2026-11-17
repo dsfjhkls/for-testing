@@ -190,6 +190,66 @@ wanted_list = {}
 #   "ultimate" = [최강보스] 태초의 파괴자  (ULTIMATE_BOSS)
 #   "dark_x" / "eden_x" / "ultimate_x" = [강화보스] 위 보스들의 강화판 (ELITE_*_BOSS)
 active_boss_guilds = {}
+# {guild_id: NPCBattleView}  ← 지금 보스와 싸우는 도전자 (한 서버에서 보스전은 한 번에 한 명만)
+#   보스는 누군가 처치할 때까지 서버에 남아 있고, 도전에 실패(패배/시간 초과/자리 비움)해도 사라지지 않습니다.
+#   도전할 때마다 보스 체력은 가득 찬 상태로 새로 시작합니다.
+boss_challengers = {}
+
+# ── 보스 상태 DB 저장 ──
+#   서버에 떠 있는 보스는 Supabase `boss_state` 테이블(guild_id, kind)에도 저장되어, 봇을 재시작해도 처치될 때까지 남습니다.
+#   → boss_setup.sql 을 Supabase 에서 한 번 실행해 주세요. 테이블이 없어도 봇은 정상 동작하며, 그때는 메모리에만 저장됩니다.
+_boss_state_warned = False
+_boss_state_tasks = set()
+
+def _boss_state_warn(action: str, err):
+    global _boss_state_warned
+    if not _boss_state_warned:
+        _boss_state_warned = True
+        print(f"[경고] 보스 상태 DB {action} 실패: {err}\n"
+              f"       Supabase 에서 boss_setup.sql 을 실행했는지 확인해 주세요. (그동안은 메모리에만 저장됩니다)")
+
+def boss_state_save_sync(guild_id: int, kind):
+    if not supabase:
+        return
+    try:
+        if kind:
+            supabase.table("boss_state").upsert({"guild_id": str(guild_id), "kind": kind}, on_conflict="guild_id").execute()
+        else:
+            supabase.table("boss_state").delete().eq("guild_id", str(guild_id)).execute()
+    except Exception as e:
+        _boss_state_warn("저장", e)
+
+def set_active_boss(guild_id: int, kind):
+    """서버의 보스를 바꾸고(None = 보스 없음) DB 에도 저장합니다. 보스 상태는 반드시 이 함수로만 바꿉니다."""
+    active_boss_guilds[guild_id] = kind
+    if not supabase:
+        return
+    try:
+        task = asyncio.get_running_loop().create_task(asyncio.to_thread(boss_state_save_sync, guild_id, kind))
+        _boss_state_tasks.add(task)
+        task.add_done_callback(_boss_state_tasks.discard)
+    except RuntimeError:
+        boss_state_save_sync(guild_id, kind)
+
+def load_boss_state_sync() -> int:
+    """봇 시작 시 DB 에 저장된 보스를 메모리로 복구합니다. 반환: 복구한 보스 수"""
+    if not supabase:
+        return 0
+    try:
+        rows = supabase.table("boss_state").select("*").execute().data or []
+    except Exception as e:
+        _boss_state_warn("불러오기", e)
+        return 0
+    n = 0
+    for row in rows:
+        try:
+            gid, kind = int(row["guild_id"]), row.get("kind")
+        except (KeyError, ValueError, TypeError):
+            continue
+        if kind in BOSS_KINDS and not active_boss_guilds.get(gid):
+            active_boss_guilds[gid] = kind
+            n += 1
+    return n
 
 # 일반 /전투 승리 시 '보스마다 각각' 출현할 확률 (테스트할 때는 0.3 처럼 크게 바꾸세요)
 #   • 서버에 보스가 없을 때만 판정하고, 한 번에 보스 한 마리만 출현합니다.
@@ -1406,6 +1466,12 @@ async def on_ready():
         except Exception as e:
             print(f"감옥/수배 상태 복구 실패: {e}")
     try:
+        n_boss = await asyncio.to_thread(load_boss_state_sync)
+        if n_boss:
+            print(f"보스 상태 복구: {n_boss}개 서버에 보스가 남아 있습니다.")
+    except Exception as e:
+        print(f"보스 상태 복구 실패: {e}")
+    try:
         synced = await bot.tree.sync()
         print(f"총 {len(synced)}개의 슬래시 명령어가 동기화되었습니다.")
     except Exception as e:
@@ -1773,6 +1839,29 @@ async def admin_item(interaction: discord.Interaction, member: discord.Member, i
     old, new = result
     await admin_audit(interaction, "아이템 조정", member, f"{item}: {old} -> {new} ({amount:+d})")
     await interaction.followup.send(f"{member.mention} 님의 `{item}`: {old}개 -> {new}개", ephemeral=True)
+
+async def _admin_boss_autocomplete(interaction: discord.Interaction, current: str):
+    cur = (current or "").lower()
+    options = [("보스 없음 (제거)", "none")] + [(k["data"]["name"], key) for key, k in BOSS_KINDS.items()]
+    return [app_commands.Choice(name=n[:100], value=v) for n, v in options if cur in n.lower() or cur in v][:25]
+
+@admin_group.command(name="보스", description="이 서버의 보스를 직접 출현시키거나 없앱니다. (테스트·정리용)")
+@app_commands.describe(kind="출현시킬 보스 (목록에서 선택 / 보스 없음 = 현재 보스 제거)")
+@app_commands.autocomplete(kind=_admin_boss_autocomplete)
+async def admin_boss(interaction: discord.Interaction, kind: str):
+    if not await admin_only(interaction): return
+    if kind != "none" and kind not in BOSS_KINDS:
+        await interaction.response.send_message("목록에 없는 보스입니다. 자동완성 목록에서 선택해 주세요.", ephemeral=True)
+        return
+    gid = interaction.guild_id
+    cur = active_boss_guilds.get(gid)
+    new = None if kind == "none" else kind
+    set_active_boss(gid, new)
+    await admin_audit(interaction, "보스 조작", None, f"{cur or '없음'} -> {new or '없음'}")
+    if new:
+        await interaction.response.send_message(f"**{BOSS_KINDS[new]['data']['name']}** 을(를) 출현시켰습니다. (`/보스` 로 도전)", ephemeral=True)
+    else:
+        await interaction.response.send_message("이 서버의 보스를 제거했습니다.", ephemeral=True)
 
 @admin_group.command(name="점검", description="점검 모드를 켜거나 끕니다. (봇을 재시작하면 코드의 기본값으로 돌아갑니다)")
 @app_commands.describe(mode="점검 모드")
@@ -3578,13 +3667,17 @@ class NPCBattleView(GuardedView):
             # 보스 출현 판정 (서버에 보스가 없을 때만 / 보스·네임드 처치로는 출현하지 않음)
             guild_id = interaction.guild_id if interaction.guild else None
             is_boss_fight = self.npc_info["name"] in BOSS_NAMES
+            if guild_id and is_boss_fight:   # 보스는 처치된 순간에만 사라집니다
+                set_active_boss(guild_id, None)
+                if boss_challengers.get(guild_id) is self:
+                    boss_challengers.pop(guild_id, None)
             if guild_id and not is_boss_fight and not self.npc_info.get("named") and not active_boss_guilds.get(guild_id):
                 roll = random.random()
                 acc = 0.0
                 for kind, chance in BOSS_SPAWN_TABLE:   # 확률을 누적해서 한 번의 주사위로 어느 보스가 나올지 정함
                     acc += chance
                     if roll < acc:
-                        active_boss_guilds[guild_id] = kind
+                        set_active_boss(guild_id, kind)
                         boss_spawn_kind = kind
                         boss_spawn_msg = BOSS_KINDS[kind]["spawn_msg"]
                         break
@@ -3610,6 +3703,12 @@ class NPCBattleView(GuardedView):
             except Exception as e:
                 print(f"DB Error (NPC Battle Loss): {e}")
 
+            boss_left = ""
+            if self.npc_info["name"] in BOSS_NAMES:   # 보스전 패배: 보스는 남아 있고, 다음 도전자는 체력이 가득 찬 보스와 싸움
+                g = interaction.guild_id if interaction.guild else None
+                if g and boss_challengers.get(g) is self:
+                    boss_challengers.pop(g, None)
+                boss_left = "\n\n**보스는 아직 쓰러지지 않았습니다.** 누구든 다시 `/보스`로 도전할 수 있습니다. (도전할 때마다 보스 체력은 가득 찬 상태로 시작)"
             reason_title = "[시간 초과 패배]" if outcome == "turn_limit" else "[전투 패배]"
             reason_desc = f"지정된 **{self.max_turns}턴**이 지나 작전에 실패했습니다." if outcome == "turn_limit" else f"**{self.npc_info['name']}**에게 쓰러졌습니다."
 
@@ -3617,7 +3716,7 @@ class NPCBattleView(GuardedView):
                 title=f"{reason_title} {self.user.display_name} 패배...",
                 description=f"**{self.user.mention}** 님이 {reason_desc}\n\n"
                             f"**치료/패널티 지출:** `${penalty:,}`\n"
-                            f"**남은 자금:** `${new_money:,}`",
+                            f"**남은 자금:** `${new_money:,}`{boss_left}",
                 color=discord.Color.red()
             )
 
@@ -3655,7 +3754,7 @@ class NPCBattleView(GuardedView):
             except Exception as e:
                 print(f"[보스 공지 실패 → 출현 취소] {type(e).__name__}: {e}")
                 if active_boss_guilds.get(guild_id) == boss_spawn_kind:
-                    active_boss_guilds[guild_id] = None
+                    set_active_boss(guild_id, None)
 
         # 승패와 상관없이, 그리고 전투가 어떤 결과로 끝났든 무조건 쿨타임 즉시 초기화
         if self.user.id in npc_cooldowns:
@@ -3736,8 +3835,16 @@ async def fight_boss(interaction: discord.Interaction):
             )
             return
 
-    boss_kind = active_boss_guilds.get(guild_id)   # BOSS_KINDS 의 키 ("dark" / "eden" / "ultimate")
-    active_boss_guilds[guild_id] = None
+    boss_kind = active_boss_guilds.get(guild_id)   # BOSS_KINDS 의 키 ("dark" / "eden" / "ultimate" ...)
+
+    # 보스전은 서버에서 한 번에 한 명만 (보스는 처치될 때까지 남아 있으므로, 도전자가 끝난 뒤 다시 도전할 수 있음)
+    current = boss_challengers.get(guild_id)
+    if current is not None and not current.is_finished() and current.user.id != user.id:
+        await interaction.response.send_message(
+            f"지금 {current.user.mention} 님이 보스와 교전 중입니다. 전투가 끝난 뒤에 도전해 주세요. (보스는 처치될 때까지 사라지지 않습니다)",
+            ephemeral=True
+        )
+        return
     npc_cooldowns[user.id] = now + timedelta(seconds=BOSS_COOLDOWN_SEC)
 
     await interaction.response.defer()
@@ -3752,7 +3859,8 @@ async def fight_boss(interaction: discord.Interaction):
         # 서버에 떠 있는 보스 종류에 맞는 보스와 전투 (둘 다 15턴 제한)
         kind_info = BOSS_KINDS.get(boss_kind) or BOSS_KINDS["dark"]
         boss_info, boss_title = kind_info["data"], kind_info["title"]
-        view = NPCBattleView(user=user, user_stats_dict=user_combat_stats, npc_info=boss_info, max_turns=15)
+        view = NPCBattleView(user=user, user_stats_dict=user_combat_stats, npc_info=boss_info, max_turns=15)   # 보스 체력은 매번 가득 찬 상태
+        boss_challengers[guild_id] = view
         embed = view.get_embed()
         embed.title = boss_title
 
@@ -3764,9 +3872,9 @@ async def fight_boss(interaction: discord.Interaction):
             embed.set_image(url=None)   # 그림 파일이 없으면 깨진 이미지 표시를 막음
         view.message = await interaction.followup.send(**send_kwargs)
     except Exception as e:
-        print(f"Boss summon error: {e}")
-        active_boss_guilds[guild_id] = boss_kind   # 오류 시 보스를 원래 종류 그대로 복구
-        npc_cooldowns.pop(user.id, None)
+        await report_error("/보스 (전투 시작)", e, interaction)
+        boss_challengers.pop(guild_id, None)
+        npc_cooldowns.pop(user.id, None)   # 보스는 그대로 남아 있음
         await interaction.followup.send("보스전을 시작하는 중 오류가 발생했습니다. 보스는 그대로 남아 있으니 다시 시도해주세요.", ephemeral=True)
 
 # === [조직원 전용] `/네임드` 명령어 ===
@@ -6655,6 +6763,7 @@ async def info_command(interaction: discord.Interaction, keyword: str):
             "title": "시스템: /보스 (히든 보스 토벌)",
             "desc": "전투 후 살기가 감지되었을 때 출현하는 최종 히든 보스전입니다.\n"
                     f"• **출현 조건:** 일반 `/전투` 승리 시 보스마다 각각 확률로 경보가 발생해야 입장 가능합니다. ({boss_chance_text()})\n"
+                    "• **보스는 누군가 처치할 때까지 서버에 남습니다.** 도전에 실패해도 사라지지 않으며, 도전할 때마다 보스 체력은 가득 찬 상태로 시작합니다. 보스전은 한 번에 한 명만 도전할 수 있습니다.\n"
                     f"• **보상:** 격퇴 성공 시 막대한 자금과 명예, 제작 재료를 획득!\n{boss_reward_text()}\n"
                     "• **강화 보스:** 보스마다 0.3% 확률로 훨씬 강한 강화판이 출현합니다. 체력·공격력·방어력이 매우 높고 격노하지만, "
                     "자금·명예·제작 재료가 크게 늘고 능력치가 오르는 전용 전리품과 칭호·업적을 얻습니다.\n"
