@@ -337,16 +337,11 @@ async def check_jail(interaction: discord.Interaction) -> bool:
 
 # 쿨타임 관리를 위한 메모리 사전 (유저ID: 다음 수행 가능 시간)
 mission_cooldowns = {}
-mission_inflight = set()   # 지금 임무를 처리 중인 유저 (쿨타임은 결과가 나온 뒤에 걸리므로, 그 사이의 중복 실행 방지용)
 
 # === 명예 포인트 및 소속(마피아/경찰)에 따른 직급 계산 함수 ===
 def get_user_rank(honor: int, is_police: bool = False) -> str:
     if is_police:
-        if honor >= 50000:
-            return "FBI"
-        elif honor >= 20000:
-            return "CIA"
-        elif honor >= 10000:
+        if honor >= 10000:
             return "총경"
         elif honor >= 5000:
             return "경정"
@@ -359,10 +354,8 @@ def get_user_rank(honor: int, is_police: bool = False) -> str:
         else:
             return "신입 경찰"
     else:
-        if honor >= 50000:
-            return "한 지역을 지배하는 보스"
-        elif honor >= 20000:
-            return "한 나라를 지배하는 보스"
+        if honor >= 20000:
+            return "슈퍼 초 울트라 메가 하이퍼 개쩌는 대충 뭐 그런 직급"
         elif honor >= 10000:
             return "대부"
         elif honor >= 5000:
@@ -401,11 +394,10 @@ LOCATIONS = {
 }
 
 # === 밸런스 상수 ===
-# 목표 페이스 (쉬지 않고 열심히, 아이템을 효율적으로 샀을 때 기준 / 가끔 접속하는 유저는 이것의 몇 배):
-#   행동대원(500pt) 약 0.5시간 → 솔다토(1,000) 약 1시간 → 카포(3,000) 약 2.5시간
-#   → 언더보스(5,000) 약 3.3시간 → 대부(10,000) 약 4~5시간
-# 명예 보상은 MISSIONS / NPC_DATA / NAMED_MONSTERS / 레이드·작전 표 / 경찰 활동 상수(PATROL_HONOR, ARREST_BASE_HONOR 등)에 있습니다.
-# 페이스를 조절하려면 이 값들을 같은 비율로 올리거나 내리고, 쿨타임(아래 *_COOLDOWN_SEC)을 함께 조절하세요.
+# 목표 페이스 (쉬지 않고 열심히 플레이했을 때 기준 / 가끔 접속하는 유저는 이것의 몇 배):
+#   행동대원(500pt) 약 1.5시간 → 솔다토(1,000) 약 3시간 → 카포(3,000) 약 7시간
+#   → 언더보스(5,000) 약 11시간 → 대부(10,000) 약 19시간
+# 페이스를 더 늘리고 싶으면 MISSIONS / NPC_DATA 의 명예(honor) 값을 줄이거나 쿨타임을 늘리면 됩니다.
 MISSION_COOLDOWN_SEC = 40        # 임무 기본 쿨타임
 MISSION_COOLDOWN_FAST_SEC = 30   # 크로노그래프 시계 / 특수 바이크 보유 시
 NPC_COOLDOWN_SEC = 45            # /전투 쿨타임
@@ -463,14 +455,12 @@ NO_COOLDOWN_ITEM = "시간 정지 회중시계"   # 보유 시 임무 쿨타임 
 
 # === 임무 목록 (드롭다운 표시와 실제 판정이 같은 표를 쓰도록 통합) ===
 # success_rate(%) / reward(최소, 최대 $) / honor(pt) / fine(실패 시 벌금 $)
-# success_rate 100 = 확정 성공 (순찰 패널티·보너스 상한과 무관하게 항상 성공)
-# hc_rate = 하드코어 모드 난이도 계산에만 쓰는 값 (일반 성공률을 올려도 하드코어가 쉬워지지 않도록 기존 값 유지)
 MISSIONS = {
-    "mission_1": {"title": "타 조직 구역 비밀 조사",   "label": "타 조직 구역 비밀 조사", "diff": "하",   "success_rate": 100, "hc_rate": 85, "reward": (150, 350),   "honor": 6,  "fine": 80},
-    "mission_2": {"title": "밀수품 비밀 운송 작업",     "label": "밀수품 비밀 운송 작업", "diff": "중",   "success_rate": 75, "hc_rate": 60, "reward": (350, 800),   "honor": 12,  "fine": 200},
-    "mission_3": {"title": "라이벌 보스의 장부 탈취",   "label": "라이벌 보스의 장부 탈취", "diff": "상",   "success_rate": 55, "hc_rate": 40, "reward": (900, 1900),  "honor": 16,  "fine": 500},
-    "mission_4": {"title": "기밀 문서 야간 밀반출",     "label": "기밀 문서 야간 밀반출", "diff": "중상", "success_rate": 65, "hc_rate": 50, "reward": (650, 1400),  "honor": 14,  "fine": 350},
-    "mission_5": {"title": "중앙 은행 호송 차량 습격",  "label": "중앙 은행 호송 차량 습격", "diff": "최상", "success_rate": 35, "hc_rate": 20, "reward": (2500, 5000), "honor": 36, "fine": 1200},
+    "mission_1": {"title": "타 조직 구역 비밀 조사",   "label": "타 조직 구역 비밀 조사", "diff": "하",   "success_rate": 85, "reward": (150, 350),   "honor": 3,  "fine": 80},
+    "mission_2": {"title": "밀수품 비밀 운송 작업",     "label": "밀수품 비밀 운송 작업", "diff": "중",   "success_rate": 60, "reward": (350, 800),   "honor": 6,  "fine": 200},
+    "mission_3": {"title": "라이벌 보스의 장부 탈취",   "label": "라이벌 보스의 장부 탈취", "diff": "상",   "success_rate": 40, "reward": (900, 1900),  "honor": 8,  "fine": 500},
+    "mission_4": {"title": "기밀 문서 야간 밀반출",     "label": "기밀 문서 야간 밀반출", "diff": "중상", "success_rate": 50, "reward": (650, 1400),  "honor": 7,  "fine": 350},
+    "mission_5": {"title": "중앙 은행 호송 차량 습격",  "label": "중앙 은행 호송 차량 습격", "diff": "최상", "success_rate": 20, "reward": (2500, 5000), "honor": 18, "fine": 1200},
 }
 
 # === 무기 상점 아이템 목록 ===
@@ -510,9 +500,11 @@ def compute_combat_stats(honor: int, inventory: dict) -> dict:
         def_val += craft_a["def"]
         hp += craft_a["hp"]
     if "임무 실패 방지권" in inventory: def_val += 20
-    for it in POLICE_SHOP_ITEMS:   # 치안국 보급품(강화 방탄복·황금 배지)의 방어력
-        if it.get("def_bonus") and it["name"] in inventory:
-            def_val += it["def_bonus"]
+    for it in POLICE_SHOP_ITEMS:   # 치안국 보급품의 공격력·방어력·체력 (보유한 것은 모두 합산)
+        if it["name"] in inventory:
+            atk += it.get("atk_bonus", 0)
+            def_val += it.get("def_bonus", 0)
+            hp += it.get("hp_bonus", 0)
     return {"hp": hp, "atk": atk, "def": def_val}
 
 # === Supabase DB 연동 함수들 ===
@@ -564,8 +556,6 @@ def get_user_data(user_id: int) -> dict:
             user_info = response.data[0]
             if "inventory" not in user_info or user_info["inventory"] is None:
                 user_info["inventory"] = {}
-            if not isinstance(user_info.get("settings"), dict):   # DB 에 null 로 남은 옛 데이터 보정
-                user_info["settings"] = {}
             user_info["inventory"] = normalize_inventory(user_info["inventory"])
             user_info = _refund_removed_items(user_info)
             return user_info
@@ -652,7 +642,6 @@ ATTENDANCE_TITLE_STACKS = 30          # 출석 스택이 이 값에 도달하면
 # === 칭호 시스템 ===
 TITLES = {
     "attendance_month": {"name": "성실한 출석왕", "desc": f"일일 의뢰 출석 {ATTENDANCE_TITLE_STACKS}스택 달성 (한 달)", "check": lambda s, i: s["attendance"] >= ATTENDANCE_TITLE_STACKS},
-    "parttime_100": {"name": "도시의 일꾼",    "desc": "/아르바이트 100회 완료",               "check": lambda s, i: s["parttime_total"] >= 100},
     "first_step":   {"name": "첫 발걸음",       "desc": "임무 1회 성공",                        "check": lambda s, i: s["success"] >= 1},
     "veteran":      {"name": "노련한 청부꾼",   "desc": "임무 10회 성공",                       "check": lambda s, i: s["success"] >= 10},
     "legend":       {"name": "전설의 그림자",   "desc": "임무 50회 성공",                       "check": lambda s, i: s["success"] >= 50},
@@ -678,7 +667,7 @@ def get_title_blob(user_info: dict) -> dict:
     stats = blob.get("stats") if isinstance(blob.get("stats"), dict) else {}
     for key in ("success", "fail", "streak", "best_streak", "hard_success",
                 "gamble_played", "gamble_won", "gamble_wagered", "gamble_net", "jackpot", "broke",
-                "attendance", "parttime_total",                       # ← /아르바이트 누적 횟수 (칭호용)
+                "attendance",
                 "fight_wins", "named_kills", "boss_kills",            # ← 업적용 카운터
                 "duel_wins", "raid_clears", "raid_king_clears", "war_wins", "war_conquests",
                 "police_arrests", "police_big_arrests", "police_patrols", "police_interrogations",   # ← 경찰 업적용 카운터
@@ -1123,11 +1112,12 @@ class TitleView(discord.ui.View):
         super().__init__(timeout=180)
         self.add_item(TitleSelect(owner=owner, blob=blob))
 
-@bot.tree.command(name="칭호", description="[시민/공용] 획득한 칭호를 확인하고 장착합니다.")
+@bot.tree.command(name="칭호", description="[마피아 GM] 획득한 칭호를 확인하고 장착합니다.")
 async def titles_command(interaction: discord.Interaction):
     global npc_cooldowns
 
     if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
     if await check_jail(interaction): return
 
     user = interaction.user
@@ -1460,11 +1450,11 @@ ERROR_DEDUPE_SEC = 60        # 같은 오류는 이 시간 안에 다시 보내�
 ERROR_MAX_PER_MIN = 10       # 1분에 보낼 수 있는 오류 보고 상한
 
 # --- 송금 제한 설정 ---
-TRANSFER_MAX_PER_TX = 500000              # 1회 최대 송금액
-TRANSFER_DAILY_SEND_LIMIT = 500000        # 보내는 사람의 24시간 누적 송금 한도
-TRANSFER_DAILY_RECEIVE_LIMIT = 500000     # 받는 사람의 24시간 누적 수령 한도 (한 계정으로 몰아주기 방지)
-TRANSFER_COOLDOWN_SEC = 10               # 연속 송금 대기 시간
-TRANSFER_MIN_ACCOUNT_AGE_DAYS = 1        # 디스코드 계정을 만든 지 이만큼 지나야 송금 가능 (보내는 사람 / 받는 사람 모두)
+TRANSFER_MAX_PER_TX = 20000              # 1회 최대 송금액
+TRANSFER_DAILY_SEND_LIMIT = 30000        # 보내는 사람의 24시간 누적 송금 한도
+TRANSFER_DAILY_RECEIVE_LIMIT = 50000     # 받는 사람의 24시간 누적 수령 한도 (한 계정으로 몰아주기 방지)
+TRANSFER_COOLDOWN_SEC = 30               # 연속 송금 대기 시간
+TRANSFER_MIN_ACCOUNT_AGE_DAYS = 7        # 디스코드 계정을 만든 지 이만큼 지나야 송금 가능 (보내는 사람 / 받는 사람 모두)
 TRANSFER_MIN_SERVER_STAY_HOURS = 24      # 서버에 들어온 지 이만큼 지나야 송금 가능 (보내는 사람 / 받는 사람 모두)
 TRANSFER_ALERT_AMOUNT = 10000            # 이 금액 이상 송금은 관리자 기록 채널에 알림
 TRANSFER_WINDOW_SEC = 24 * 60 * 60
@@ -1940,13 +1930,13 @@ SETTINGS_DEFS = [
     },
     {
         "key": "hardcore_mission",
-        "category": "임무 진행 방식",
+        "category": "임무 난이도",
         "name": "임무(작전) 수행 하드코어",
-        "desc": "켜면 임무(작전)를 5단계로 나누어 세세히 직접 수행합니다.\n"
-                "임무 한 번에 2~3분이 걸리고 난이도가 높아 켜는 것을 추천하지 않습니다.\n"
-                "끄면 기존 방식의 간단한 임무로 진행됩니다.",
+        "desc": "임무(작전)를 여러 단계의 현장 작업(이동, 차단기, 전선 연결, 신호 기억, 금고 해제, 돌발 상황)으로 세세히 수행합니다.\n"
+                "임무 한 번에 2~3분이 걸리고 어려우므로 켜는 것을 추천하지 않습니다.\n"
+                "끄면 원래 방식(임무를 고르면 바로 결과 확인)으로 진행됩니다.",
         "on_text": "하드코어",
-        "off_text": "기본 방식",
+        "off_text": "일반",
         "default": False,
     },
     {
@@ -2244,9 +2234,9 @@ SMUGGLE_TIMEOUT_SEC = 60           # 경찰이 응답할 수 있는 시간
 SMUGGLE_IMMUNITY_SEC = 600         # 수락 시 그 경찰이 해당 마피아를 검거할 수 없는 시간 (10분)
 SMUGGLE_REJECT_WANTED_SEC = 90     # 거절당했을 때 마피아에게 붙는 지명수배 시간
 SMUGGLE_REJECT_FINE = 300          # 거절당했을 때 마피아 벌금
-SMUGGLE_REJECT_HONOR_LOSS = 40     # 거절당했을 때 마피아 명예 감소
+SMUGGLE_REJECT_HONOR_LOSS = 20     # 거절당했을 때 마피아 명예 감소
 SMUGGLE_FINE_PER_MISSING_HONOR = 25  # 명예가 모자라 못 깎은 만큼 벌금으로 환산 ($/pt)
-SMUGGLE_REJECT_POLICE_HONOR = 20   # 제안을 거절한 청렴한 경찰의 명예 포상
+SMUGGLE_REJECT_POLICE_HONOR = 10   # 제안을 거절한 청렴한 경찰의 명예 포상
 
 smuggle_cooldowns = {}   # {mafia_id: datetime}
 smuggle_pending = set()  # 응답 대기 중인 마피아 id (동시에 한 건만)
@@ -2423,7 +2413,7 @@ async def smuggle_command(interaction: discord.Interaction, 경찰: discord.Memb
 
     # === [경찰 전용] `/순찰` 명령어 ===
 # 경찰 활동 명예 (이 값들을 조절해서 경찰 성장 속도를 맞추세요)
-PATROL_HONOR = 28                   # /순찰 1회 명예
+PATROL_HONOR = 14                   # /순찰 1회 명예 (기존 10)
 
 patrol_cooldowns = {}
 
@@ -2521,11 +2511,11 @@ POLICE_RADIO_OP_BONUS = 5            # 기동타격대 무전기: 성공률 +5%
 
 # success_rate(%) / reward(최소, 최대 $) / honor(pt) / fine(실패 시 벌금 $) / shift_bonus(/월급 실적 추가 점수)
 POLICE_OPERATIONS = {
-    "op_1": {"title": "불법 노점·소매치기 단속",     "diff": "하",   "success_rate": 100, "hc_rate": 85, "reward": (150, 350),   "honor": 6,  "fine": 80,   "shift_bonus": 0},
-    "op_2": {"title": "밀수 의심 화물 검문",         "diff": "중",   "success_rate": 75, "hc_rate": 60, "reward": (350, 800),   "honor": 12,  "fine": 200,  "shift_bonus": 2},
-    "op_3": {"title": "마약 조직 정보원 접선",       "diff": "상",   "success_rate": 55, "hc_rate": 40, "reward": (900, 1900),  "honor": 16,  "fine": 500,  "shift_bonus": 4},
-    "op_4": {"title": "조직 아지트 잠복 수사",       "diff": "중상", "success_rate": 65, "hc_rate": 50, "reward": (650, 1400),  "honor": 14,  "fine": 350,  "shift_bonus": 3},
-    "op_5": {"title": "거물 마피아 보스 소탕 작전",  "diff": "최상", "success_rate": 35, "hc_rate": 20, "reward": (2500, 5000), "honor": 36, "fine": 1200, "shift_bonus": 12},
+    "op_1": {"title": "불법 노점·소매치기 단속",     "diff": "하",   "success_rate": 85, "reward": (150, 350),   "honor": 3,  "fine": 80,   "shift_bonus": 0},
+    "op_2": {"title": "밀수 의심 화물 검문",         "diff": "중",   "success_rate": 60, "reward": (350, 800),   "honor": 6,  "fine": 200,  "shift_bonus": 2},
+    "op_3": {"title": "마약 조직 정보원 접선",       "diff": "상",   "success_rate": 40, "reward": (900, 1900),  "honor": 8,  "fine": 500,  "shift_bonus": 4},
+    "op_4": {"title": "조직 아지트 잠복 수사",       "diff": "중상", "success_rate": 50, "reward": (650, 1400),  "honor": 7,  "fine": 350,  "shift_bonus": 3},
+    "op_5": {"title": "거물 마피아 보스 소탕 작전",  "diff": "최상", "success_rate": 20, "reward": (2500, 5000), "honor": 18, "fine": 1200, "shift_bonus": 12},
 }
 operation_cooldowns = {}   # {user_id: 다음 작전 가능 시각(time.time 기준)}
 
@@ -2548,17 +2538,15 @@ def operation_success_rate(op: dict, inventory: dict, in_patrol: bool, wanted_n:
     """(최종 성공률, 적용된 보너스 문구 목록)"""
     rate = op["success_rate"]
     labels = []
-    if rate >= 100:
-        return 100, labels   # 확정 성공 작전: 보너스 상한(98%)과 무관하게 항상 성공
     for pct, label in operation_bonus_preview(in_patrol, wanted_n):
         rate += pct
         labels.append(label)
-    for pct, label in police_equipment_op_bonuses(inventory):
-        rate += pct
-        labels.append(label)
+    if POLICE_RADIO_NAME in (inventory or {}):
+        rate += POLICE_RADIO_OP_BONUS
+        labels.append(f"기동타격대 무전기 (+{POLICE_RADIO_OP_BONUS}%)")
     return max(1, min(98, rate)), labels
 
-def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n: int, forced_success=None) -> dict:
+def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n: int) -> dict:
     """작전 판정 + 보상/벌금 + 업적 카운터를 한 번에 처리해 저장 (경매·업적 쓰기와 겹치지 않도록 잠금)"""
     _require_db()
     op = POLICE_OPERATIONS[op_key]
@@ -2567,7 +2555,7 @@ def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n:
         inv = info.get("inventory") or {}
         money, honor = int(info.get("money", 0) or 0), int(info.get("honor", 0) or 0)
         rate, labels = operation_success_rate(op, inv, in_patrol, wanted_n)
-        success = (random.randint(1, 100) <= rate) if forced_success is None else bool(forced_success)   # 하드코어는 단계 수행 결과를 그대로 사용
+        success = random.randint(1, 100) <= rate
         old_rank = get_user_rank(honor, is_police=True)
         blob = get_title_blob(info)
         s = blob["stats"]
@@ -2614,9 +2602,6 @@ class OperationSelect(discord.ui.Select):
         if not _is_police(user):
             await interaction.followup.send("치안국 경찰만 수사 작전을 수행할 수 있습니다!", ephemeral=True)
             return
-        if user.id in hardcore_active:
-            await interaction.followup.send("이미 하드코어 작전을 수행 중입니다.", ephemeral=True)
-            return
 
         now_ts = time.time()                       # 확인과 등록 사이에 await 가 없어 중복 클릭으로 쿨타임을 피할 수 없음
         remain = int(operation_cooldowns.get(user.id, 0) - now_ts + 0.999)
@@ -2628,31 +2613,17 @@ class OperationSelect(discord.ui.Select):
         key = self.values[0]
         op = POLICE_OPERATIONS[key]
         guild_id = interaction.guild_id
-        hc_desc = ""
         try:
-            info = await asyncio.to_thread(get_user_data, user.id)
-            loc = info.get("location", "레벤하임")
+            loc = (await asyncio.to_thread(get_user_data, user.id)).get("location", "레벤하임")
             in_patrol = bool(guild_id and active_patrols.get(guild_id, {}).get(loc, 0) > time.time())
-            wanted_n = _active_wanted_count()
-            forced = None
-            if get_setting(info, "hardcore_mission"):
-                # 하드코어: 5단계를 직접 수행 (2~3분). 순찰망·수배범 정보·무전기 보너스는 판단 단계 확률에 반영
-                rate_now, _ = operation_success_rate(op, info.get("inventory") or {}, in_patrol, wanted_n)
-                hardcore_active.add(user.id)
-                try:
-                    forced, hc_desc = await run_hardcore_mission(interaction, user, op, rate_now - op["success_rate"], theme="police")
-                finally:
-                    hardcore_active.discard(user.id)
-                now_ts = time.time()    # 쿨타임은 작전이 끝난 시점부터 시작
-                operation_cooldowns[user.id] = now_ts + OPERATION_COOLDOWN_SEC
-            res = await asyncio.to_thread(operation_resolve_sync, user.id, key, in_patrol, wanted_n, forced)
+            res = await asyncio.to_thread(operation_resolve_sync, user.id, key, in_patrol, _active_wanted_count())
         except Exception as e:
             print(f"DB Error (police operation): {e}")
             operation_cooldowns.pop(user.id, None)
             await interaction.followup.send("작전 결과를 저장하는 중 오류가 발생했습니다. 다시 시도해 주세요.", ephemeral=True)
             return
 
-        buff_desc = (f"\n**적용된 보너스:** {', '.join(res['labels'])}" if res["labels"] else "") + hc_desc
+        buff_desc = f"\n**적용된 보너스:** {', '.join(res['labels'])}" if res["labels"] else ""
         rank_up = ""
         if res["old_rank"] != res["new_rank"]:
             rank_up = f"\n\n**[승진 축하]** **{res['old_rank']}** → **{res['new_rank']}**(으)로 승진하셨습니다!"
@@ -2701,26 +2672,19 @@ async def police_operation_command(interaction: discord.Interaction):
     if not _is_police(user):
         await interaction.response.send_message("치안국 경찰만 수사 작전을 수행할 수 있습니다! (조직원은 `/임무` 를 이용하세요)", ephemeral=True)
         return
-    if user.id in hardcore_active:
-        await interaction.response.send_message("이미 하드코어 작전을 수행 중입니다.", ephemeral=True)
-        return
     remain = int(operation_cooldowns.get(user.id, 0) - time.time() + 0.999)
     if remain > 0:
         await interaction.response.send_message(f"작전 보고서를 작성 중입니다. **{remain}초** 뒤에 다시 작전을 수행할 수 있습니다.", ephemeral=True)
         return
     await interaction.response.defer()
 
-    inv = {}
     try:
-        _info = await asyncio.to_thread(get_user_data, user.id)
-        loc = _info.get("location", "레벤하임")
-        inv = _info.get("inventory") or {}
+        loc = (await asyncio.to_thread(get_user_data, user.id)).get("location", "레벤하임")
     except Exception:
         loc = "레벤하임"
     in_patrol = bool(interaction.guild_id and active_patrols.get(interaction.guild_id, {}).get(loc, 0) > time.time())
     wanted_n = _active_wanted_count()
     notes = [label for _, label in operation_bonus_preview(in_patrol, wanted_n)]
-    notes += [label for _, label in police_equipment_op_bonuses(inv)]
     if not in_patrol:
         notes.append(f"`/순찰` 로 순찰망을 가동하면 이 지역 작전 성공률 +{OPERATION_PATROL_BONUS}%")
     embed = discord.Embed(
@@ -2746,7 +2710,7 @@ INTERROGATE_MAX_JAIL_SEC = 600        # 가중되어도 남은 형기는 이 시
 INTERROGATE_DELTA_RANGE = (40, 90)    # 감형 / 가중 시간 범위 (초)
 INTERROGATE_DENY_MULT = 1.5           # 결백 주장은 도박수라 변동폭이 1.5배
 INTERROGATE_MATCH_REWARD_MONEY = 300  # 경찰 의견과 판결이 일치했을 때 수당
-INTERROGATE_MATCH_REWARD_HONOR = 30   # 경찰 의견과 판결이 일치했을 때 명예
+INTERROGATE_MATCH_REWARD_HONOR = 15   # 경찰 의견과 판결이 일치했을 때 명예 (기존 10)
 
 INTERROGATE_ANSWERS = {"confess": "자백 (협조)", "silent": "묵비권", "deny": "결백 주장"}
 INTERROGATE_OPINIONS = {"reduce": "감형 권고", "extend": "가중 권고"}
@@ -3048,7 +3012,7 @@ NPC_DATA = {
         "atk": 70,
         "def": 5,
         "reward_money": (60, 150),
-        "reward_honor": 2,
+        "reward_honor": 1,
         "desc": "칼렌데 뒷골목에서 서성이는 초보 깡패입니다."
     },
     "조직의 배신자": {
@@ -3057,7 +3021,7 @@ NPC_DATA = {
         "atk": 170,
         "def": 30,
         "reward_money": (200, 450),
-        "reward_honor": 2,
+        "reward_honor": 1,
         "desc": "패밀리의 기밀을 팔아넘기고 도망친 위험한 배신자입니다."
     },
     "암시장 악덕 거상": {
@@ -3066,7 +3030,7 @@ NPC_DATA = {
         "atk": 300,
         "def": 70,
         "reward_money": (450, 1000),
-        "reward_honor": 4,
+        "reward_honor": 2,
         "desc": "고용한 보디가드들을 대동하고 다니는 악명 높은 거상입니다."
     },
     "지명수배자 보스": {
@@ -3075,7 +3039,7 @@ NPC_DATA = {
         "atk": 520,
         "def": 130,
         "reward_money": (1000, 2000),
-        "reward_honor": 6,
+        "reward_honor": 3,
         "desc": "치안국에서도 손대지 못하는 강력한 수배범 보스입니다."
     },
     "칼렌데 암살자": {
@@ -3084,7 +3048,7 @@ NPC_DATA = {
         "atk": 800,
         "def": 220,
         "reward_money": (2000, 3600),
-        "reward_honor": 10,
+        "reward_honor": 5,
         "desc": "그림자처럼 움직이며 거물만 노리는 전설적인 청부 암살자입니다."
     }
 }
@@ -3217,14 +3181,14 @@ NAMED_MONSTERS = {
     "marco": {
         "name": "[네임드] 백정 마르코", "named": True, "min_honor": 500, "max_turns": 12,
         "hp": 4200, "atk": 330, "def": 55, "enrage": 1.5,
-        "reward_money": (900, 1800), "reward_honor": 4,
+        "reward_money": (900, 1800), "reward_honor": 2,
         "drop": "[전리품] 마르코의 정육 칼",
         "desc": "블랙워드 도살장을 지배하는 청부 해결사. 피를 보면 더 사나워집니다."
     },
     "bianca": {
         "name": "[네임드] 독사 비앙카", "named": True, "min_honor": 1500, "max_turns": 12,
         "hp": 8000, "atk": 520, "def": 100, "enrage": 1.5,
-        "reward_money": (1800, 3300), "reward_honor": 8,
+        "reward_money": (1800, 3300), "reward_honor": 4,
         "drop": "[전리품] 비앙카의 독니 반지",
         "image": "named_bianca.png",   # 전투 화면 그림 (assets 폴더). 파일이 없으면 그림 없이 진행됩니다.
         "desc": "로젠펠트 뒷무대의 독살 전문가. 체력이 줄면 맹독을 뿌리며 덤빕니다."
@@ -3232,14 +3196,14 @@ NAMED_MONSTERS = {
     "boronin": {
         "name": "[네임드] 철의 장군 보로닌", "named": True, "min_honor": 2500, "max_turns": 12,
         "hp": 14000, "atk": 800, "def": 170, "enrage": 1.5,
-        "reward_money": (3000, 5400), "reward_honor": 14,
+        "reward_money": (3000, 5400), "reward_honor": 7,
         "drop": "[전리품] 보로닌의 철 훈장",
         "desc": "퇴역 후 용병단을 이끄는 철벽의 장군. 방어가 매우 단단합니다."
     },
     "executioner": {
         "name": "[네임드] 붉은 달의 처형자", "named": True, "min_honor": 4000, "max_turns": 12,
         "hp": 22000, "atk": 1200, "def": 260, "enrage": 1.6,
-        "reward_money": (4800, 8400), "reward_honor": 24,
+        "reward_money": (4800, 8400), "reward_honor": 12,
         "drop": "[전리품] 처형자의 붉은 가면",
         "desc": "칼렌데 지하 세계가 두려워하는 전설의 처형자. 정상급 장비가 없으면 상대도 안 됩니다."
     },
@@ -3818,9 +3782,7 @@ async def part_time_job(interaction: discord.Interaction):
     daily_msg = ""
     try:
         daily_blob = get_title_blob(user_stats)
-        daily_blob["stats"]["parttime_total"] += 1                      # 누적 횟수 (100회 달성 시 특수 칭호)
         daily_msg = daily_record(daily_blob, "parttime", user_stats)
-        daily_msg += format_new_titles(evaluate_new_titles(daily_blob, user_stats))
         save_title_blob(user.id, daily_blob)
     except Exception as e:
         print(f"DB Error (parttime daily quest): {e}")
@@ -3836,265 +3798,6 @@ async def part_time_job(interaction: discord.Interaction):
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
 
-    await interaction.followup.send(embed=embed)
-
-# ==========================================================================
-# [시민 생활 명령어]  /낚시  /배달  /제보  /복권   (/아르바이트 와 함께 시민이 할 수 있는 활동)
-#   • 전부 자금만 다루고 명예는 주지 않습니다. (명예 페이스에는 영향이 없습니다)
-#   • 마피아·경찰도 쓸 수 있는 공용 명령어이고, /제보 만 시민 전용입니다.
-#   • 수치를 바꾸고 싶으면 아래 상수만 고치면 됩니다.
-# ==========================================================================
-FISH_COOLDOWN_SEC = 60
-# (이름, 가중치, 판매가)  → 1회 기대 수입 약 $220 (아르바이트와 비슷한 시간당 수입)
-FISH_TABLE = [
-    ("빈 낚싯줄", 12, 0), ("낡은 장화", 10, 20), ("작은 붕어", 28, 100), ("농어", 22, 180),
-    ("광어", 14, 300), ("참치", 8, 500), ("황금 잉어", 3, 1200), ("가라앉은 보물 상자", 1, 3000),
-]
-
-DELIVERY_COOLDOWN_SEC = 60
-DELIVERY_NORMAL_REWARD = (150, 300)         # 일반 배송: 항상 성공
-DELIVERY_EXPRESS_SUCCESS = 0.60             # 특급 배송: 성공 확률
-DELIVERY_EXPRESS_REWARD = (300, 600)
-DELIVERY_EXPRESS_FINE = 100                 # 특급 배송 실패 시 배상금
-
-TIP_REWARD = 400                # 제보 성공 사례금
-TIP_FALSE_FINE = 150            # 허위 제보 벌금
-TIP_COOLDOWN_SEC = 90           # 제보자 쿨타임
-TIP_TARGET_COOLDOWN_SEC = 120   # 같은 대상에게 들어올 수 있는 제보 간격
-TIP_DAILY_MAX = 10              # 한 사람이 24시간 동안 받을 수 있는 사례금 횟수
-TIP_WANTED_EXTEND_SEC = 60      # 제보가 접수되면 수배 시간이 늘어나는 양
-TIP_WANTED_CAP_SEC = 180        # 수배 남은 시간이 이 값을 넘도록 늘어나지는 않음
-
-LOTTERY_PRICE = 500
-LOTTERY_MAX_TICKETS = 10
-LOTTERY_COOLDOWN_SEC = 5
-# (등수, 확률, 상금)  → 환급률 약 84%
-LOTTERY_PRIZES = [("1등", 0.005, 25000), ("2등", 0.02, 3000), ("3등", 0.08, 750), ("4등", 0.25, 500), ("5등", 0.20, 250)]
-
-fish_cooldowns = {}
-delivery_cooldowns = {}
-tip_user_cooldowns = {}
-tip_target_cooldowns = {}
-tip_history = {}
-lottery_cooldowns = {}
-
-def _cd_left(table: dict, key) -> int:
-    """남은 쿨타임(초). 없으면 0"""
-    return max(0, int(table.get(key, 0) - time.time() + 0.999))
-
-@bot.tree.command(name="낚시", description="[시민/공용] 항구에서 낚시를 하고 잡은 것을 팔아 자금을 벌어요. (쿨타임 60초)")
-async def fishing_command(interaction: discord.Interaction):
-    if not await check_maintenance(interaction): return
-    if await check_jail(interaction): return
-
-    user = interaction.user
-    left = _cd_left(fish_cooldowns, user.id)
-    if left > 0:
-        await interaction.response.send_message(f"낚싯대를 정리하는 중입니다. **{left}초** 뒤에 다시 던질 수 있습니다.", ephemeral=True)
-        return
-    fish_cooldowns[user.id] = time.time() + FISH_COOLDOWN_SEC
-    await interaction.response.defer()
-
-    name, _, price = random.choices(FISH_TABLE, weights=[f[1] for f in FISH_TABLE])[0]
-    try:
-        if price:
-            update_user_stats(user.id, price, 0)
-        money = int(get_user_data(user.id).get("money", 0))
-    except Exception as e:
-        print(f"DB Error (fishing): {e}")
-        fish_cooldowns.pop(user.id, None)
-        await interaction.followup.send("정산 중 오류가 발생했습니다. 잠시 뒤 다시 시도해 주세요.", ephemeral=True)
-        return
-
-    if price == 0:
-        msg, color = f"**{name}** 만 걸렸습니다. 오늘은 허탕이네요.", discord.Color.dark_grey()
-    elif price >= 1200:
-        msg, color = f"**{name}** 을(를) 건져 올렸습니다! 대어입니다!", discord.Color.gold()
-    else:
-        msg, color = f"**{name}** 을(를) 낚아 시장에 팔았습니다.", discord.Color.blue()
-    embed = discord.Embed(
-        title="[항구 낚시] 결과",
-        description=f"**{user.mention}** 님이 낚싯줄을 던졌습니다.\n\n{msg}\n"
-                    f"**판매 금액:** `${price:,}`\n**현재 보유 자금:** `${money:,}`",
-        color=color)
-    if user.avatar:
-        embed.set_thumbnail(url=user.avatar.url)
-    await interaction.followup.send(embed=embed)
-
-@bot.tree.command(name="배달", description="[시민/공용] 도시 곳곳으로 짐을 배달하고 배송료를 받아요. (쿨타임 60초)")
-@app_commands.describe(방식="일반 배송은 안전하게 소액, 특급 배송은 실패하면 배상금을 물지만 배송료가 큽니다.")
-@app_commands.choices(방식=[
-    app_commands.Choice(name="일반 배송 (안전)", value="normal"),
-    app_commands.Choice(name="특급 배송 (위험)", value="express"),
-])
-async def delivery_command(interaction: discord.Interaction, 방식: app_commands.Choice[str]):
-    if not await check_maintenance(interaction): return
-    if await check_jail(interaction): return
-
-    user = interaction.user
-    left = _cd_left(delivery_cooldowns, user.id)
-    if left > 0:
-        await interaction.response.send_message(f"배달 가방을 다시 싸는 중입니다. **{left}초** 뒤에 출발할 수 있습니다.", ephemeral=True)
-        return
-    delivery_cooldowns[user.id] = time.time() + DELIVERY_COOLDOWN_SEC
-    await interaction.response.defer()
-
-    dest = random.choice(list(LOCATIONS.keys()))
-    express = (방식.value == "express")
-    fine = 0
-    try:
-        if not express:
-            pay = random.randint(*DELIVERY_NORMAL_REWARD)
-            update_user_stats(user.id, pay, 0)
-            title, color = "[일반 배송] 완료", discord.Color.blue()
-            msg = f"**{dest}** 까지 짐을 무사히 전달했습니다."
-        elif random.random() < DELIVERY_EXPRESS_SUCCESS:
-            pay = random.randint(*DELIVERY_EXPRESS_REWARD)
-            update_user_stats(user.id, pay, 0)
-            title, color = "[특급 배송] 성공", discord.Color.green()
-            msg = f"**{dest}** 까지 제시간에 도착했습니다. 특급 배송료를 받았습니다!"
-        else:
-            pay = 0
-            fine = min(int(get_user_data(user.id).get("money", 0)), DELIVERY_EXPRESS_FINE)
-            if fine:
-                update_user_stats(user.id, -fine, 0)
-            title, color = "[특급 배송] 지연", discord.Color.red()
-            msg = f"**{dest}** 로 가던 중 길이 막혀 약속 시간을 놓쳤습니다. 배상금을 물었습니다."
-        money = int(get_user_data(user.id).get("money", 0))
-    except Exception as e:
-        print(f"DB Error (delivery): {e}")
-        delivery_cooldowns.pop(user.id, None)
-        await interaction.followup.send("정산 중 오류가 발생했습니다. 잠시 뒤 다시 시도해 주세요.", ephemeral=True)
-        return
-
-    result = f"**배송료:** `${pay:,}`" if pay else f"**배상금:** `-${fine:,}`"
-    embed = discord.Embed(title=title, description=f"**{user.mention}** 님의 배달 결과입니다.\n\n{msg}\n{result}\n**현재 보유 자금:** `${money:,}`", color=color)
-    if user.avatar:
-        embed.set_thumbnail(url=user.avatar.url)
-    await interaction.followup.send(embed=embed)
-
-@bot.tree.command(name="제보", description="[시민 전용] 지명수배 중인 마피아를 경찰에 익명으로 제보하고 사례금을 받아요.")
-@app_commands.describe(대상="제보할 지명수배 중인 마피아")
-async def tip_command(interaction: discord.Interaction, 대상: discord.Member):
-    if not await check_maintenance(interaction): return
-    if await check_jail(interaction): return
-
-    user = interaction.user
-    if _is_mafia(user) or _is_police(user):
-        await interaction.response.send_message("제보는 마피아·경찰이 아닌 **시민**만 할 수 있습니다.", ephemeral=True)
-        return
-    if 대상.bot or 대상.id == user.id:
-        await interaction.response.send_message("제보할 수 없는 대상입니다.", ephemeral=True)
-        return
-
-    now_ts, now_dt = time.time(), datetime.now()
-    left = _cd_left(tip_user_cooldowns, user.id)
-    if left > 0:
-        await interaction.response.send_message(f"방금 제보하셨습니다. **{left}초** 뒤에 다시 제보할 수 있습니다.", ephemeral=True)
-        return
-    history = [t for t in tip_history.get(user.id, []) if now_ts - t < 86400]
-    if len(history) >= TIP_DAILY_MAX:
-        await interaction.response.send_message(f"오늘은 더 이상 사례금을 받을 수 없습니다. (24시간 최대 {TIP_DAILY_MAX}회)", ephemeral=True)
-        return
-    tip_user_cooldowns[user.id] = now_ts + TIP_COOLDOWN_SEC
-
-    expiry = wanted_list.get(대상.id)
-    if expiry is None or now_dt >= expiry:
-        # 허위 제보 → 벌금
-        try:
-            fine = min(int(get_user_data(user.id).get("money", 0)), TIP_FALSE_FINE)
-            if fine:
-                update_user_stats(user.id, -fine, 0)
-        except Exception as e:
-            print(f"DB Error (tip fine): {e}")
-            fine = 0
-        await interaction.response.send_message(
-            f"**{대상.display_name}** 님은 지금 수배 중이 아닙니다. 허위 제보로 처리되어 벌금 `${fine:,}` 이(가) 부과되었습니다.", ephemeral=True)
-        return
-    if _cd_left(tip_target_cooldowns, 대상.id) > 0:
-        await interaction.response.send_message("이미 다른 시민의 제보가 접수된 상태입니다. 잠시 뒤에 다시 시도해 주세요.", ephemeral=True)
-        return
-
-    try:
-        update_user_stats(user.id, TIP_REWARD, 0)
-    except Exception as e:
-        print(f"DB Error (tip reward): {e}")
-        tip_user_cooldowns.pop(user.id, None)
-        await interaction.response.send_message("사례금 지급 중 오류가 발생했습니다. 잠시 뒤 다시 시도해 주세요.", ephemeral=True)
-        return
-
-    tip_target_cooldowns[대상.id] = now_ts + TIP_TARGET_COOLDOWN_SEC
-    history.append(now_ts)
-    tip_history[user.id] = history
-    extended = min(expiry + timedelta(seconds=TIP_WANTED_EXTEND_SEC), now_dt + timedelta(seconds=TIP_WANTED_CAP_SEC))
-    wanted_list[대상.id] = max(expiry, extended)
-    save_status(대상.id)
-
-    await interaction.response.send_message(f"제보가 접수되었습니다. 사례금 `${TIP_REWARD:,}` 이(가) 지급되었습니다. (제보자는 공개되지 않습니다)", ephemeral=True)
-    try:
-        embed = discord.Embed(
-            title="[시민 제보 접수]",
-            description=f"익명의 시민이 **{대상.mention}** 의 행방을 치안국에 제보했습니다!\n"
-                        f"수배 상태가 늘어났습니다. 경찰은 서둘러 `/검거` 하세요.",
-            color=discord.Color.dark_blue())
-        await interaction.channel.send(embed=embed)
-    except Exception as e:
-        print(f"[제보 공지 실패] {type(e).__name__}: {e}")
-
-@bot.tree.command(name="복권", description=f"[시민/공용] 복권을 사서 한 방을 노려요. (1장 ${LOTTERY_PRICE:,} / 최대 {LOTTERY_MAX_TICKETS}장)")
-@app_commands.describe(수량=f"구매할 복권 장수 (1~{LOTTERY_MAX_TICKETS})")
-async def lottery_command(interaction: discord.Interaction, 수량: app_commands.Range[int, 1, LOTTERY_MAX_TICKETS] = 1):
-    if not await check_maintenance(interaction): return
-    if await check_jail(interaction): return
-
-    user = interaction.user
-    left = _cd_left(lottery_cooldowns, user.id)
-    if left > 0:
-        await interaction.response.send_message(f"복권 가게가 정리 중입니다. **{left}초** 뒤에 다시 구매할 수 있습니다.", ephemeral=True)
-        return
-    cost = 수량 * LOTTERY_PRICE
-    try:
-        money = int(get_user_data(user.id).get("money", 0))
-    except Exception as e:
-        print(f"DB Error (lottery check): {e}")
-        await interaction.response.send_message("잠시 뒤 다시 시도해 주세요.", ephemeral=True)
-        return
-    if money < cost:
-        await interaction.response.send_message(f"자금이 부족합니다. (필요 `${cost:,}` / 보유 `${money:,}`)", ephemeral=True)
-        return
-    lottery_cooldowns[user.id] = time.time() + LOTTERY_COOLDOWN_SEC
-    await interaction.response.defer()
-
-    wins = {}
-    total = 0
-    for _ in range(수량):
-        roll, acc = random.random(), 0.0
-        for rank, chance, prize in LOTTERY_PRIZES:
-            acc += chance
-            if roll < acc:
-                wins[rank] = wins.get(rank, 0) + 1
-                total += prize
-                break
-    try:
-        update_user_stats(user.id, total - cost, 0)
-        money = int(get_user_data(user.id).get("money", 0))
-    except Exception as e:
-        print(f"DB Error (lottery settle): {e}")
-        lottery_cooldowns.pop(user.id, None)
-        await interaction.followup.send("정산 중 오류가 발생했습니다. 자금은 변동되지 않았을 수 있으니 확인해 주세요.", ephemeral=True)
-        return
-
-    lines = [f"• **{rank}** x{wins[rank]} → `${wins[rank] * prize:,}`" for rank, _, prize in LOTTERY_PRIZES if rank in wins]
-    body = "\n".join(lines) if lines else "당첨된 복권이 없습니다."
-    net = total - cost
-    color = discord.Color.gold() if "1등" in wins else (discord.Color.green() if net > 0 else discord.Color.dark_grey())
-    embed = discord.Embed(
-        title="[도시 복권] 추첨 결과",
-        description=f"**{user.mention}** 님이 복권 **{수량}장** (`${cost:,}`) 을 긁었습니다.\n\n{body}\n\n"
-                    f"**당첨금 합계:** `${total:,}`\n**손익:** `{'+' if net >= 0 else '-'}${abs(net):,}`\n**현재 보유 자금:** `${money:,}`",
-        color=color)
-    if user.avatar:
-        embed.set_thumbnail(url=user.avatar.url)
     await interaction.followup.send(embed=embed)
 
 # ==========================================
@@ -4590,11 +4293,12 @@ npc_cooldowns = {}
 class DuelBattleView(GuardedView):
     holds_command_lock = True   # 결투가 끝날 때까지 (신청한 사람의) 다른 명령어 실행 차단
 
-    def __init__(self, challenger: discord.Member, target: discord.Member, bet: int, c_stats: dict, t_stats: dict):
+    def __init__(self, challenger: discord.Member, target: discord.Member, bet: int, c_stats: dict, t_stats: dict, cross: bool = False):
         super().__init__(timeout=30)
         self.challenger = challenger
         self.target = target
         self.bet = bet
+        self.cross = cross   # 조직원 vs 경찰 (진영이 다른 결투)
         
         # 스탯 및 전투 데이터 초기화
         self.players = {
@@ -4615,7 +4319,7 @@ class DuelBattleView(GuardedView):
         current_turn_user = self.players[self.current_turn_id]["member"]
 
         embed = discord.Embed(
-            title=f"[패밀리 결투 아레나] 턴 {self.turn_count}",
+            title=(f"[조직 vs 치안국 결투] 턴 {self.turn_count}" if self.cross else f"[패밀리 결투 아레나] 턴 {self.turn_count}"),
             description=f"현재 차례: **{current_turn_user.mention}** 님의 행동을 기다리는 중... (제한 시간 30초)",
             color=discord.Color.dark_red()
         )
@@ -4717,7 +4421,8 @@ class DuelBattleView(GuardedView):
 
         embed = discord.Embed(
             title="[결투 종료: 승패 결정]",
-            description=f"피비린내 나는 공방 끝에 **{self.winner.mention}** 님이 승리했습니다!\n\n"
+            description=(f"조직과 치안국의 자존심을 건 대결 끝에 **{self.winner.mention}** 님이 승리했습니다!\n\n" if self.cross
+                         else f"피비린내 나는 공방 끝에 **{self.winner.mention}** 님이 승리했습니다!\n\n") +
                         f"**명예 변동:**\n"
                         f"• {self.winner.mention} `+{self.bet} pt` (총 {new_w_honor} pt)\n"
                         f"• {loser.mention} `-{self.bet} pt` (총 {new_l_honor} pt)" + duel_ach,
@@ -4751,8 +4456,8 @@ class DuelBattleView(GuardedView):
 duel_cooldowns = {}
 npc_cooldowns = {}
 
-@bot.tree.command(name="결투", description="[조직원 전용] 버튼을 눌러 턴제로 진행하는 1:1 결투를 신청합니다.")
-@app_commands.describe(member="결투를 신청할 상대 조직원", 베팅명예=f"걸고 싸울 명예 포인트 (1~{DUEL_MAX_BET}pt, 기본 10pt)")
+@bot.tree.command(name="결투", description="[조직원/경찰] 버튼을 눌러 턴제로 진행하는 1:1 결투를 신청합니다. (조직원과 경찰끼리도 가능)")
+@app_commands.describe(member="결투를 신청할 상대 (조직원 또는 경찰)", 베팅명예=f"걸고 싸울 명예 포인트 (1~{DUEL_MAX_BET}pt, 기본 10pt)")
 async def duel_member(interaction: discord.Interaction, member: discord.Member, 베팅명예: app_commands.Range[int, 1, DUEL_MAX_BET] = 10):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
@@ -4774,12 +4479,15 @@ async def duel_member(interaction: discord.Interaction, member: discord.Member, 
             await interaction.response.send_message(f"결투 여파로 지쳐 있습니다. **{remaining}초** 뒤에 다시 도전할 수 있습니다.", ephemeral=True)
             return
 
-    duel_cooldowns[user.id] = now + timedelta(seconds=120)
-
     mafia_role = discord.utils.get(interaction.guild.roles, name="조직원")
-    if not mafia_role or mafia_role not in member.roles:
-        await interaction.response.send_message(f"{member.mention} 님은 조직원이 아니므로 결투할 수 없습니다.", ephemeral=True)
+    police_role = discord.utils.get(interaction.guild.roles, name="경찰")
+    target_mafia = bool(mafia_role and mafia_role in member.roles)
+    target_police = bool(police_role and police_role in member.roles)
+    if not target_mafia and not target_police:
+        await interaction.response.send_message(f"{member.mention} 님은 조직원도 경찰도 아니므로 결투할 수 없습니다.", ephemeral=True)
         return
+    user_police = bool(police_role and police_role in user.roles)
+    cross = user_police != target_police   # 한쪽은 경찰, 한쪽은 조직원
 
     if member.id in jail_list and now < jail_list[member.id]:
         await interaction.response.send_message(f"{member.mention} 님은 현재 감옥에 수감 중이어서 결투할 수 없습니다.", ephemeral=True)
@@ -4795,6 +4503,7 @@ async def duel_member(interaction: discord.Interaction, member: discord.Member, 
         await interaction.response.send_message(f"상대방의 명예 포인트가 부족하여 해당 금액으로 결투할 수 없습니다.", ephemeral=True)
         return
 
+    duel_cooldowns[user.id] = now + timedelta(seconds=120)   # 검사를 모두 통과한 뒤에만 쿨타임을 건다
     await interaction.response.defer()
 
     # 장비 스탯 계산 함수
@@ -4804,7 +4513,7 @@ async def duel_member(interaction: discord.Interaction, member: discord.Member, 
     c_stats = get_combat_stats(user_stats.get("inventory", {}), user_stats["honor"])
     t_stats = get_combat_stats(target_stats.get("inventory", {}), target_stats["honor"])
 
-    view = DuelBattleView(challenger=user, target=member, bet=베팅명예, c_stats=c_stats, t_stats=t_stats)
+    view = DuelBattleView(challenger=user, target=member, bet=베팅명예, c_stats=c_stats, t_stats=t_stats, cross=cross)
     embed = view.get_embed()
 
     msg = await interaction.followup.send(embed=embed, view=view)
@@ -4921,7 +4630,7 @@ class SelfJoinView(discord.ui.View):
         embed = discord.Embed(
             title=f"[{rank_title} 발령/입단]",
             description=f"**{user.mention}** 님이 시민의 삶을 마치고 **{target_role_name}**(으)로 새로운 활동을 시작합니다!\n\n"
-                        f"**신분 변화:** `시민` -> `{target_role_name}`",
+                        f"**신분 변화:** `시민` `{target_role_name}`",
             color=discord.Color.gold()
         )
         if user.avatar:
@@ -4977,8 +4686,6 @@ class LeaveConfirmView(discord.ui.View):
 
         mission_cooldowns.pop(member.id, None)
         parttime_cooldowns.pop(member.id, None)
-        for _t in (fish_cooldowns, delivery_cooldowns, tip_user_cooldowns, lottery_cooldowns):
-            _t.pop(member.id, None)
         gamble_cooldowns.pop(member.id, None)
         open_table = active_blackjack.pop(member.id, None)
         if open_table:
@@ -4993,7 +4700,7 @@ class LeaveConfirmView(discord.ui.View):
             description=(
                 f"**{member.mention}** 님이 소속을 최종 탈퇴하셨습니다.\n\n"
                 f"**초기화 완료:** 모든 보유 자금, 명예, 인벤토리 아이템 및 기록이 DB에서 완전히 삭제되었습니다.\n"
-                f"**신분 변화:** `마피아/경찰` -> `시민`"
+                f"**신분 변화:** `마피아/경찰` `시민`"
             ),
             color=discord.Color.dark_gray()
         )
@@ -5018,360 +4725,6 @@ class LeaveConfirmView(discord.ui.View):
         )
         await interaction.edit_original_response(embed=embed, view=self)
 
-# === 임무(작전) 수행 하드코어 ===
-# /설정 의 "임무(작전) 수행 하드코어" 를 켠 유저는 임무를 한 번에 판정하지 않고, 5단계를 직접 수행합니다.
-#   1) 정찰(상황 판단)  2) 침투(반응 속도)  3) 보안 해제(코드 암기)  4) 목표 확보(상황 판단)  5) 탈출(상황 판단)
-# 실수(경계도)가 HC_STRIKE_LIMIT 번 쌓이면 작전 실패, 5단계를 모두 넘기면 성공입니다. (보상·벌금은 기존 임무와 동일)
-hardcore_active = set()      # 하드코어 작전 수행 중인 유저 (동시에 두 번 시작하지 못하게)
-HC_STRIKE_LIMIT = 2          # 경계도가 이 값에 도달하면 작전 실패
-HC_INTRO_SEC = 6             # 작전 개시 안내 표시 시간
-HC_GAP_SEC = 7               # 단계 사이 정비 시간
-HC_CHOICE_SEC = 35           # 상황 판단 제한 시간
-HC_CODE_INPUT_SEC = 40       # 코드 입력 제한 시간
-HC_CHOICE_BASE = {2: 82, 1: 45, 0: 12}   # 선택지 품질(최선/무난/최악)별 기본 성공 확률(%)
-
-# 상황 판단 시나리오: 선택지는 (문구, 품질) — 품질 2 = 최선, 1 = 무난, 0 = 최악 (표시 순서는 매번 섞입니다)
-HC_SCENARIOS = {
-    "recon": [
-        {"title": "정문 경비 교대", "text": "목표 건물 정문에 경비 두 명이 서 있습니다. 곧 교대 시간이 되고, 건물 뒤편에는 낡은 환기구가 보입니다.",
-         "options": [("교대하며 경비가 자리를 비우는 틈에 정문을 통과한다", 2),
-                     ("뒤편 환기구로 돌아서 들어간다", 1),
-                     ("배달원인 척 경비에게 말을 걸어 정면으로 통과한다", 0)]},
-        {"title": "순찰 중인 경찰", "text": "골목 입구에 경찰 순찰차가 서 있고, 경관 한 명이 차에 기대어 통화 중입니다. 반대편에는 쓰레기 수거 골목이 있습니다.",
-         "options": [("순찰차 시야 밖인 수거 골목으로 우회한다", 2),
-                     ("순찰차 뒤편 그림자를 따라 몸을 낮추고 지나간다", 1),
-                     ("모자를 눌러쓰고 태연하게 앞을 지나간다", 0)]},
-        {"title": "경비견", "text": "건물 마당에 경비견이 풀려 있습니다. 바람은 건물 쪽에서 당신 쪽으로 불고 있습니다.",
-         "options": [("바람이 불어오는 반대편으로 돌아 접근하고 고기를 던져 시선을 돌린다", 2),
-                     ("개가 잠잠해질 때까지 기다렸다가 조용히 지나간다", 1),
-                     ("소리를 질러 개를 쫓아낸다", 0)]},
-    ],
-    "target": [
-        {"title": "잠긴 목표실", "text": "목표가 보관된 방의 문이 잠겨 있습니다. 문 옆에는 얇은 창문이, 복도 끝에는 경비실이 있습니다.",
-         "options": [("락픽으로 소리 없이 문을 연다", 2),
-                     ("창문으로 우회해 진입한다", 1),
-                     ("문을 걷어차 부순다", 0)]},
-        {"title": "감시 카메라", "text": "복도 천장의 카메라가 좌우로 천천히 회전하고 있습니다. 회전 끝점에서 카메라가 벽 쪽을 향하는 몇 초가 있습니다.",
-         "options": [("카메라가 벽 쪽을 향할 때 맞춰 벽을 따라 이동한다", 2),
-                     ("카메라 렌즈를 천으로 가리고 지나간다", 1),
-                     ("전속력으로 달려서 통과한다", 0)]},
-        {"title": "뜻밖의 목격자", "text": "목표실 앞 휴게 공간에 취한 직원이 앉아 있습니다. 아직 당신을 보지는 못했습니다.",
-         "options": [("모퉁이에서 기다리다 직원이 잠들거나 자리를 뜨면 이동한다", 2),
-                     ("술 취한 동료인 척 어깨를 두드리며 지나간다", 1),
-                     ("직원을 위협해 입을 막는다", 0)]},
-    ],
-    "escape": [
-        {"title": "탈출 경로 선택", "text": "목표를 확보했습니다. 건물 밖에서 경보 사이렌이 울리기 시작했습니다. 근처에는 붐비는 시장, 하수로 입구, 넓은 대로가 있습니다.",
-         "options": [("인파가 많은 시장으로 섞여 들어가 빠져나간다", 2),
-                     ("하수로를 통해 멀리 이동한다", 1),
-                     ("대로에서 차를 훔쳐 전속력으로 달린다", 0)]},
-        {"title": "남겨진 흔적", "text": "작전 현장에 발자국과 소지품 몇 가지가 남았습니다. 순찰 인원이 곧 도착할 것 같습니다.",
-         "options": [("흔적만 빠르게 정리하고 평소 걸음으로 현장을 떠난다", 2),
-                     ("흔적은 두고 최대한 빨리 현장을 벗어난다", 1),
-                     ("현장에 불을 질러 흔적을 없앤다", 0)]},
-        {"title": "경비 무전", "text": "경비의 무전기에서 이상 징후를 보고하는 소리가 들립니다. 당신은 아직 발견되지 않았습니다.",
-         "options": [("몸을 낮추고 정지해 교신이 끝나길 기다린 뒤 이동한다", 2),
-                     ("반대편 복도로 빠르게 이동한다", 1),
-                     ("무전기를 든 경비를 제압하려 달려든다", 0)]},
-    ],
-}
-
-# 경찰용 상황 판단 시나리오 (/작전 하드코어) — 형식은 HC_SCENARIOS 와 같음
-HC_POLICE_SCENARIOS = {
-    "recon": [
-        {"title": "정보원 접선", "text": "정보원이 폐창고 뒤편에서 접선하자고 합니다. 주변에서 감시하는 시선이 느껴지고, 근처 카페 창가에서는 접선 장소가 내려다보입니다.",
-         "options": [("카페 창가에서 먼저 주변을 살핀 뒤 접근한다", 2),
-                     ("사복으로 갈아입고 바로 접선 장소로 향한다", 1),
-                     ("제복 차림으로 순찰차를 몰고 접선 장소에 접근한다", 0)]},
-        {"title": "수배 차량 발견", "text": "수배 차량이 골목에 주차되어 있습니다. 운전자는 보이지 않고, 트렁크 쪽에서 소음이 납니다.",
-         "options": [("거리를 두고 지원을 요청하며 차량을 감시한다", 2),
-                     ("차량 뒤편으로 접근해 상황을 확인한다", 1),
-                     ("곧바로 차 문을 열어 내부를 확인한다", 0)]},
-        {"title": "잠복 위치 선정", "text": "아지트 맞은편 건물 두 곳이 후보입니다. 4층은 시야가 좋지만 창문이 눈에 띄고, 2층은 시야가 좁지만 어둡습니다.",
-         "options": [("2층에서 불을 끄고 망원경으로 드나드는 시간을 기록한다", 2),
-                     ("4층 창문의 커튼을 열고 관찰한다", 1),
-                     ("길가 차량 안에서 제복 차림으로 대기한다", 0)]},
-    ],
-    "target": [
-        {"title": "용의자 포위", "text": "용의자가 막다른 골목에 몰려 있습니다. 흉기를 소지했을 가능성이 있습니다.",
-         "options": [("지원 인력과 함께 퇴로를 막고 경고하며 거리를 좁힌다", 2),
-                     ("순찰차를 엄폐물 삼아 세워 두고 투항을 요구한다", 1),
-                     ("혼자 달려들어 곧바로 제압한다", 0)]},
-        {"title": "증거물 확보", "text": "현장에서 장부가 든 서류 가방을 발견했습니다. 가방에는 잠금장치가 걸려 있습니다.",
-         "options": [("장갑을 끼고 현장 사진을 남긴 뒤 증거 봉투에 밀봉한다", 2),
-                     ("그 자리에서 열어 내용을 확인한다", 1),
-                     ("가방을 통째로 챙겨 차에 던져 넣는다", 0)]},
-        {"title": "겁먹은 목격자", "text": "목격자가 보복이 두려워 진술을 꺼리고 있습니다. 주변에는 조직원으로 보이는 사람들이 오가고 있습니다.",
-         "options": [("안전한 장소로 이동시켜 신변 보호를 약속하고 진술을 받는다", 2),
-                     ("설득하며 현장에서 바로 진술을 받는다", 1),
-                     ("협조하지 않으면 처벌하겠다고 압박한다", 0)]},
-    ],
-    "escape": [
-        {"title": "증거물 호송", "text": "압수한 증거물을 치안국으로 옮겨야 합니다. 조직의 추격이 예상됩니다.",
-         "options": [("호송 차량을 두 대로 나누고 경로를 바꿔 이동한다", 2),
-                     ("가장 빠른 대로로 곧장 이동한다", 1),
-                     ("증거물을 혼자 들고 걸어서 이동한다", 0)]},
-        {"title": "몰려든 구경꾼", "text": "작전이 끝나갈 무렵 구경꾼이 몰려들었고, 일부는 사진을 찍고 있습니다.",
-         "options": [("통제선을 치고 구경꾼을 정리한 뒤 현장 보존 인력을 남긴다", 2),
-                     ("간단히 해산시키고 서둘러 철수한다", 1),
-                     ("구경꾼을 무시한 채 증거 수집을 이어간다", 0)]},
-        {"title": "무전 이상 징후", "text": "상황 보고 중 무전에 잡음이 끼며 우리 위치가 노출된 듯합니다.",
-         "options": [("주파수를 바꾸고 암호 교신으로 현재 위치를 이동한다", 2),
-                     ("같은 주파수로 지원을 계속 요청한다", 1),
-                     ("무전을 끄고 혼자 현장에 남는다", 0)]},
-    ],
-}
-
-# 하드코어 진행 문구 (조직원 / 경찰)
-HC_THEMES = {
-    "mafia": {
-        "scenarios": HC_SCENARIOS,
-        "honorific": "님",
-        "names": {"choice:recon": "정찰", "reaction": "침투", "code": "보안 해제", "choice:target": "목표 확보", "choice:escape": "탈출"},
-        "bonus_note": "아이템 보너스와 순찰 페널티는 상황 판단 단계의 성공 확률에 반영됩니다.",
-        "reaction_body": ("경비의 시선이 사각지대로 향하는 순간을 기다립니다.\n"
-                          "**버튼이 초록색으로 바뀌는 즉시** 누르세요. 신호 전에 누르면 들켜서 실수가 됩니다."),
-        "code_intro": "보안 단말의 코드가 잠깐 표시됩니다.",
-        "code_label": "보안 코드",
-    },
-    "police": {
-        "scenarios": HC_POLICE_SCENARIOS,
-        "honorific": "경관님",
-        "names": {"choice:recon": "정찰", "reaction": "진입", "code": "단말 해독", "choice:target": "용의자·증거 확보", "choice:escape": "철수"},
-        "bonus_note": "순찰망·수배범 정보·무전기 보너스는 상황 판단 단계의 성공 확률에 반영됩니다.",
-        "reaction_body": ("용의자가 등을 돌리는 순간을 기다립니다.\n"
-                          "**버튼이 초록색으로 바뀌는 즉시** 누르세요. 신호 전에 누르면 들켜서 실수가 됩니다."),
-        "code_intro": "압수한 단말의 잠금 코드가 잠깐 표시됩니다.",
-        "code_label": "잠금 코드",
-    },
-}
-
-class HCBaseView(discord.ui.View):
-    """하드코어 단계 화면의 공통 부분: 소유자 확인 + 완료 신호(asyncio.Event)"""
-    def __init__(self, owner: discord.abc.User):
-        super().__init__(timeout=None)
-        self.owner = owner
-        self.done = asyncio.Event()
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner.id:
-            await interaction.response.send_message("본인의 작전 창만 조작할 수 있습니다.", ephemeral=True)
-            return False
-        return True
-
-async def _hc_wait(view: HCBaseView, timeout: float) -> bool:
-    """단계 화면이 끝날 때까지 기다림. 제한 시간 안에 끝났으면 True, 시간 초과면 False"""
-    try:
-        await asyncio.wait_for(view.done.wait(), timeout=timeout)
-        return True
-    except asyncio.TimeoutError:
-        return False
-
-class HCChoiceView(HCBaseView):
-    def __init__(self, owner: discord.abc.User, count: int):
-        super().__init__(owner)
-        self.choice = None
-        for i in range(count):
-            btn = discord.ui.Button(label=f"{i + 1}번", style=discord.ButtonStyle.primary)
-            btn.callback = self._make_callback(i)
-            self.add_item(btn)
-
-    def _make_callback(self, idx: int):
-        async def cb(interaction: discord.Interaction):
-            await interaction.response.defer()
-            if self.choice is None:
-                self.choice = idx
-                self.done.set()
-        return cb
-
-class HCReactionView(HCBaseView):
-    def __init__(self, owner: discord.abc.User):
-        super().__init__(owner)
-        self.armed = False
-        self.armed_at = 0.0
-        self.result = None      # "early" / "hit"
-        self.reaction = 0.0
-        self.btn = discord.ui.Button(label="신호 대기 중", style=discord.ButtonStyle.secondary)
-        self.btn.callback = self._on_click
-        self.add_item(self.btn)
-
-    async def _on_click(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        if self.result is not None:
-            return
-        if not self.armed:
-            self.result = "early"
-        else:
-            self.result = "hit"
-            self.reaction = time.monotonic() - self.armed_at
-        self.done.set()
-
-class HCCodeModal(discord.ui.Modal, title="보안 해제"):
-    code = discord.ui.TextInput(label="암기한 코드를 입력하세요", min_length=1, max_length=10)
-
-    def __init__(self, hc_view: "HCCodeView"):
-        super().__init__()
-        self.hc_view = hc_view
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        if self.hc_view.answer is None:
-            self.hc_view.answer = str(self.code.value).strip()
-            self.hc_view.done.set()
-
-    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
-        print(f"HC modal error: {error}")
-
-class HCCodeView(HCBaseView):
-    def __init__(self, owner: discord.abc.User):
-        super().__init__(owner)
-        self.answer = None
-
-    @discord.ui.button(label="코드 입력", style=discord.ButtonStyle.success)
-    async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.answer is not None:
-            await interaction.response.send_message("이미 코드를 입력했습니다.", ephemeral=True)
-            return
-        await interaction.response.send_modal(HCCodeModal(self))
-
-def hc_difficulty_penalty(success_rate: int) -> float:
-    """원래 성공률이 낮은(어려운) 임무일수록 커지는 난이도 보정값"""
-    return max(0.0, (70 - success_rate) / 3)
-
-def hc_stage_embed(selected: dict, step: int, total: int, name: str, body: str, strikes: int, footer: str = "") -> discord.Embed:
-    embed = discord.Embed(
-        title=f"[하드코어 작전] {selected['title']} - {step}/{total}단계: {name}",
-        description=f"{body}\n\n**경계도:** `{strikes}/{HC_STRIKE_LIMIT}`",
-        color=discord.Color.dark_red()
-    )
-    if footer:
-        embed.set_footer(text=footer)
-    return embed
-
-async def run_hardcore_mission(interaction: discord.Interaction, user: discord.abc.User, selected: dict, stage_bonus: int, theme: str = "mafia"):
-    """하드코어 작전 진행. 반환: (성공 여부, 작전 기록 문구)
-    stage_bonus: 아이템 성공률 보너스 - 순찰 페널티 (상황 판단 단계의 성공 확률에 반영)"""
-    th = HC_THEMES[theme]
-    hc_rate = selected.get("hc_rate", selected["success_rate"])
-    pen = hc_difficulty_penalty(hc_rate)
-    total = 5
-    strikes = 0
-    log = []
-    edit = interaction.edit_original_response
-
-    def record(step_name: str, ok: bool, note: str):
-        log.append(f"{len(log) + 1}단계 {step_name}: {'성공' if ok else '실패'}{(' (' + note + ')') if note else ''}")
-
-    def log_text(aborted: bool = False) -> str:
-        text = "\n\n**[하드코어 작전 기록]**\n" + "\n".join(log)
-        if aborted:
-            text += "\n경계도 한계를 넘어 작전이 중단되었습니다."
-        return text
-
-    plan = ["choice:recon", "reaction", "code", "choice:target", "choice:escape"]
-    names = th["names"]
-    try:
-        intro = discord.Embed(
-            title=f"[하드코어 작전 개시] {selected['title']}",
-            description=(f"**{user.mention}** {th['honorific']}, 작전을 **{total}단계**로 나누어 직접 수행합니다.\n\n"
-                         f"• 각 단계에는 제한 시간이 있고, 시간 초과는 실수로 처리됩니다.\n"
-                         f"• 실수가 **{HC_STRIKE_LIMIT}회** 쌓이면(경계도 {HC_STRIKE_LIMIT}/{HC_STRIKE_LIMIT}) 작전은 실패합니다.\n"
-                         f"• {th['bonus_note']}\n\n"
-                         f"잠시 후 1단계({names[plan[0]]})가 시작됩니다."),
-            color=discord.Color.dark_red()
-        )
-        await edit(embed=intro, view=None)
-        await asyncio.sleep(HC_INTRO_SEC)
-
-        step = 0
-
-        for kind in plan:
-            step += 1
-            name = names[kind]
-            ok = False
-            note = ""
-
-            if kind.startswith("choice:"):
-                sc = random.choice(th["scenarios"][kind.split(":")[1]])
-                opts = list(sc["options"])
-                random.shuffle(opts)
-                lines = "\n".join(f"**{i + 1}번.** {t}" for i, (t, _) in enumerate(opts))
-                body = f"**{sc['title']}**\n{sc['text']}\n\n{lines}"
-                view = HCChoiceView(user, len(opts))
-                await edit(embed=hc_stage_embed(selected, step, total, name, body, strikes, f"제한 시간 {HC_CHOICE_SEC}초"), view=view)
-                answered = await _hc_wait(view, HC_CHOICE_SEC)
-                view.stop()
-                if not answered or view.choice is None:
-                    note = "시간 초과"
-                else:
-                    quality = opts[view.choice][1]
-                    chance = max(5, min(97, int(HC_CHOICE_BASE[quality] - 3 * pen + stage_bonus)))
-                    ok = random.randint(1, 100) <= chance
-                    note = "" if ok else "판단이 어긋나 상황이 꼬였습니다"
-
-            elif kind == "reaction":
-                window = max(2.0, 3.5 - 0.1 * pen)
-                view = HCReactionView(user)
-                body = th["reaction_body"]
-                await edit(embed=hc_stage_embed(selected, step, total, name, body, strikes, "신호를 기다리는 중"), view=view)
-                early = await _hc_wait(view, random.uniform(3.0, 7.0))
-                if early and view.result == "early":
-                    note = "신호 전에 움직였습니다"
-                else:
-                    view.btn.label = "지금 돌파"
-                    view.btn.style = discord.ButtonStyle.success
-                    view.armed = True
-                    await edit(embed=hc_stage_embed(selected, step, total, name, "**지금입니다! 돌파하세요!**", strikes, f"제한 시간 {window:.1f}초"), view=view)
-                    view.armed_at = time.monotonic()
-                    hit = await _hc_wait(view, window)
-                    if hit and view.result == "hit":
-                        ok = True
-                    else:
-                        note = "반응이 늦었습니다"
-                view.stop()
-
-            else:   # code
-                digits = 4 if hc_rate >= 60 else (5 if hc_rate >= 40 else 6)
-                show_sec = 6 if digits <= 4 else (5 if digits == 5 else 4)
-                code = "".join(random.choice("0123456789") for _ in range(digits))
-                body = (f"{th['code_intro']} **{show_sec}초 안에 외우세요.**\n\n"
-                        f"**{th['code_label']}:** `{code}`")
-                await edit(embed=hc_stage_embed(selected, step, total, name, body, strikes, f"{show_sec}초 후 코드가 사라집니다"), view=None)
-                await asyncio.sleep(show_sec)
-                view = HCCodeView(user)
-                body = f"코드가 사라졌습니다. **{digits}자리** 코드를 입력하세요."
-                await edit(embed=hc_stage_embed(selected, step, total, name, body, strikes, f"제한 시간 {HC_CODE_INPUT_SEC}초"), view=view)
-                answered = await _hc_wait(view, HC_CODE_INPUT_SEC)
-                view.stop()
-                if not answered or view.answer is None:
-                    note = "시간 초과"
-                elif view.answer == code:
-                    ok = True
-                else:
-                    note = "코드가 틀렸습니다"
-
-            if not ok:
-                strikes += 1
-            record(name, ok, note if not ok else "")
-
-            result_body = f"**{name} 단계 {'성공' if ok else '실패'}**" + (f"\n{note}" if note and not ok else "")
-            if strikes >= HC_STRIKE_LIMIT:
-                await edit(embed=hc_stage_embed(selected, step, total, name, result_body + "\n\n경계도가 한계에 도달했습니다. 작전이 중단됩니다.", strikes), view=None)
-                await asyncio.sleep(3)
-                return False, log_text(aborted=True)
-            if step < total:
-                await edit(embed=hc_stage_embed(selected, step, total, name, result_body + f"\n\n다음 단계를 준비 중입니다... ({HC_GAP_SEC}초)", strikes), view=None)
-                await asyncio.sleep(HC_GAP_SEC)
-            else:
-                await edit(embed=hc_stage_embed(selected, step, total, name, result_body + "\n\n작전 결과를 정산 중입니다...", strikes), view=None)
-                await asyncio.sleep(2)
-
-        return True, log_text()
-    except discord.HTTPException as e:
-        print(f"Hardcore mission HTTP error: {e}")
-        log.append("통신 장애로 작전이 중단되었습니다.")
-        return False, log_text()
-
 # === 3. 임무 선택 뷰 ===
 class MissionSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
@@ -5393,38 +4746,9 @@ class MissionSelect(discord.ui.Select):
             return
 
         user = interaction.user
-        if user.id in hardcore_active:
-            await interaction.followup.send("이미 하드코어 작전을 수행 중입니다.", ephemeral=True)
-            return
-        if user.id in mission_inflight:
-            await interaction.followup.send("이미 임무를 처리 중입니다. 결과가 나올 때까지 잠시만 기다려 주세요.", ephemeral=True)
-            return
-
-        # [쿨타임 적용 순서]  임무 입력 → 결과 저장·출력 → 쿨타임 적용
-        #   중간에 오류가 나서 결과가 저장되지 못했다면 쿨타임도 수배도 걸리지 않고 처음으로 되돌아갑니다.
-        mission_inflight.add(user.id)
-        state = {"committed": False, "cd_sec": None, "set_wanted": False}
-        try:
-            await self._mission_flow(interaction, state)
-        except Exception as e:
-            await report_error("임무 수행", e, interaction)
-            if state["committed"]:
-                # 결과는 이미 저장됐고 화면 출력만 실패한 경우: 보상을 받았으므로 쿨타임은 그대로 적용된다
-                await interaction.followup.send("임무 결과는 저장되었지만 화면 표시 중 오류가 발생했습니다. `/프로필` 로 확인해 주세요.", ephemeral=True)
-            else:
-                try:
-                    await interaction.followup.send(f"임무 처리 중 오류가 발생했습니다. **쿨타임은 적용되지 않았으니** 다시 시도해 주세요. (오류 종류: `{type(e).__name__}`)", ephemeral=True)
-                except Exception:
-                    pass
-        finally:
-            mission_inflight.discard(user.id)
-
-    async def _mission_flow(self, interaction: discord.Interaction, state: dict):
-        user = interaction.user
         user_stats = get_user_data(user.id)
         old_rank = get_user_rank(user_stats.get("honor", 0))
         inventory = user_stats.get("inventory", {})
-        hardcore_on = get_setting(user_stats, "hardcore_mission")
 
         # 임무 쿨타임: 크로노그래프 시계/특수 바이크 보유 시 단축, 자양강장제는 1회 즉시 초기화(소모)
         drink_used = False
@@ -5441,11 +4765,11 @@ class MissionSelect(discord.ui.Select):
                 await interaction.followup.send(f"작전 준비 중입니다. **{remain}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
                 return
         has_fast = any(k in inventory for k in CHRONO_ITEMS)
-        # 쿨타임은 여기서 걸지 않는다. 임무 결과가 저장되고 출력된 뒤에 적용한다. (아래 맨 끝 참고)
-        state["cd_sec"] = None if no_cd else (MISSION_COOLDOWN_FAST_SEC if has_fast else MISSION_COOLDOWN_SEC)
+        if not no_cd:
+            mission_cooldowns[user.id] = now_ts + (MISSION_COOLDOWN_FAST_SEC if has_fast else MISSION_COOLDOWN_SEC)
 
         selected = MISSIONS[self.values[0]]
-        current_loc = user_stats.get("location") or "레벤하임"
+        current_loc = user_stats.get("location", "레벤하임")
 
         success_bonus = 0
         money_mult = 1.0
@@ -5468,31 +4792,14 @@ class MissionSelect(discord.ui.Select):
             patrol_expiry = active_patrols[guild_id].get(current_loc, 0)
             if time.time() < patrol_expiry:
                 patrol_penalty = 15  # 순찰 지역이면 성공률 15% 하락
-                if selected["success_rate"] < 100:   # 확정 성공 임무는 순찰 영향을 받지 않음
-                    active_buffs.append("경찰 순찰망 가동 (-15% 성공률)")    
+                active_buffs.append("경찰 순찰망 가동 (-15% 성공률)")    
 
-        final_success_rate = 100 if selected["success_rate"] >= 100 else max(1, min(98, selected["success_rate"] + success_bonus - patrol_penalty))
-        hc_desc = ""
-        if hardcore_on:
-            # 하드코어: 5단계를 직접 수행 (2~3분). 끝나면 그동안 바뀐 자금·가방을 반영하도록 데이터를 다시 읽는다.
-            hardcore_active.add(user.id)
-            try:
-                is_success, hc_desc = await run_hardcore_mission(interaction, user, selected, success_bonus - patrol_penalty)
-            finally:
-                hardcore_active.discard(user.id)
-            user_stats = get_user_data(user.id)
-            inventory = user_stats.get("inventory", {})
-            old_rank = get_user_rank(user_stats.get("honor", 0))
-            if drink_used and inventory.get(DRINK_ITEM, 0) > 0:
-                inventory[DRINK_ITEM] -= 1
-                if inventory[DRINK_ITEM] <= 0:
-                    del inventory[DRINK_ITEM]
-        else:
-            is_success = random.randint(1, 100) <= final_success_rate
-        buff_desc = (f"\n**적용된 보너스:** {', '.join(active_buffs)}" if active_buffs else "") + hc_desc
+        final_success_rate = max(1, min(98, selected["success_rate"] + success_bonus - patrol_penalty))
+        is_success = random.randint(1, 100) <= final_success_rate
+        buff_desc = f"\n**적용된 보너스:** {', '.join(active_buffs)}" if active_buffs else ""
 
-        current_money = int(user_stats.get("money") or 0)
-        current_honor = int(user_stats.get("honor") or 0)
+        current_money = user_stats.get("money", 0)
+        current_honor = user_stats.get("honor", 0)
         
         fail_msg = ""
         rank_up_msg = ""
@@ -5535,11 +4842,11 @@ class MissionSelect(discord.ui.Select):
                 color=discord.Color.green()
             )
         else:
-            # (예전에는 settings 가 DB 에 null 로 저장된 유저가 임무에 실패하면 여기서 오류가 났다 → get_setting 은 null 이어도 기본값을 돌려준다)
+            settings = user_stats.get("settings", {"auto_fail_guard": True})
             guard_item_key = "임무 실패 방지권"
             guard_used = False
 
-            if get_setting(user_stats, "auto_fail_guard") and inventory.get(guard_item_key, 0) > 0:
+            if settings.get("auto_fail_guard", True) and inventory.get(guard_item_key, 0) > 0:
                 inventory[guard_item_key] -= 1
                 if inventory[guard_item_key] <= 0:
                     del inventory[guard_item_key]
@@ -5550,7 +4857,8 @@ class MissionSelect(discord.ui.Select):
             else:
                 fine = min(current_money, selected["fine"])
                 current_money -= fine
-                state["set_wanted"] = True   # 수배는 결과가 DB 에 저장된 뒤에 건다 (저장 실패 시 수배도 없던 일로)
+                wanted_list[user.id] = datetime.now() + timedelta(seconds=60)
+                save_status(user.id)
                 fail_msg = f"**작전 실패!** 현장에 흔적이 남아 **1분간 경찰 지명수배 상태**가 됩니다! (벌금 `-${fine:,}`)"
 
             s["fail"] += 1
@@ -5579,29 +4887,1039 @@ class MissionSelect(discord.ui.Select):
             }).eq("user_id", str(user.id)).execute()
         except Exception as e:
             print(f"DB Error (mission update): {e}")
-            await interaction.followup.send("DB 저장 중 오류가 발생했습니다. **쿨타임은 적용되지 않았으니** 다시 시도해 주세요.", ephemeral=True)
-            return   # 저장에 실패했으면 쿨타임도 수배도 없이 그대로 되돌아간다
-
-        state["committed"] = True   # 여기부터는 결과가 확정됨
-
-        if state["set_wanted"]:
-            wanted_list[user.id] = datetime.now() + timedelta(seconds=60)
-            save_status(user.id)
+            await interaction.followup.send("DB 저장 중 오류가 발생했습니다.", ephemeral=True)
+            return
 
         if user.avatar:
             embed.set_thumbnail(url=user.avatar.url)
 
-        try:
-            await interaction.edit_original_response(embed=embed, view=None)
-        finally:
-            # 결과를 보여준 뒤에 쿨타임 적용 (화면 출력이 실패했더라도 이미 보상이 저장됐으므로 쿨타임은 건다)
-            if state["cd_sec"]:
-                mission_cooldowns[user.id] = time.time() + state["cd_sec"]
+        await interaction.edit_original_response(embed=embed, view=None)
 
 class MissionView(discord.ui.View):
     def __init__(self, owner: discord.Member):
         super().__init__(timeout=180)
         self.add_item(MissionSelect(owner=owner))
+
+# === 3. 비밀 임무 시스템 (여러 단계의 현장 작업을 직접 수행하는 방식) ===
+# 임무를 고르면 브리핑이 나오고, 작전을 개시하면 단계별 작업(이동 / 순서 누르기 / 전선 연결 / 신호 기억 /
+# 진행형 작업 / 금고 해제 / 돌발 상황)을 시간을 들여 하나씩 처리합니다.
+#
+# 성공 여부는 '경계도'로 결정됩니다.
+#   - 실수하거나 돌발 상황에 잘못 대처하면 경계도가 오르고, 100%가 되면 작전이 노출되어 실패합니다.
+#   - 장비 효과와 경찰 순찰이 반영된 임무 성공률(final_rate)은 '경계도 상승 배율'로 바뀝니다.
+#       배율 = 50 / max(10, 성공률)   (성공률 85% -> x0.59 / 50% -> x1.00 / 20% -> x2.50)
+#   - 중간에 포기하거나 오래 응답하지 않으면 실패로 처리됩니다. (벌금, 수배 등 기존 실패 처리와 동일)
+#
+# 튜닝용 상수
+MISSION_TIME_SCALE = 1.0          # 이동 / 진행 / 신호 재생 시간 배율 (0.5 = 절반으로 단축)
+MISSION_CHECK_WINDOW_SEC = 8      # 진행형 작업 중 '신호 유지' 버튼을 눌러야 하는 제한 시간
+MISSION_IDLE_TIMEOUT = 120        # 이 시간 동안 아무 조작이 없으면 작전 실패로 처리
+MISSION_SIGNALS = ("적색", "청색", "녹색", "황색")
+MISSION_WIRE_COLORS = ("빨강", "파랑", "노랑", "초록")
+MISSION_TERMINALS = ("가", "나", "다", "라")
+
+# 현장 돌발 상황 (한 임무에서 같은 상황이 두 번 나오지 않음)
+# alert: 경계도 상승치(배율 적용 전). 장면 설명 속 단서를 읽으면 가장 안전한 선택을 알 수 있습니다.
+MISSION_ENCOUNTERS = [
+    {
+        "title": "순찰 경비 접근",
+        "text": "복도 끝에서 손전등 불빛이 흔들리며 다가온다. 경비는 왼쪽 통로를 따라 걸어오고 있고, 오른쪽에는 문이 열린 청소 도구실이 있다.",
+        "options": [
+            {"label": "청소 도구실로 몸을 숨긴다", "alert": 0, "result": "경비는 도구실 앞을 그대로 지나쳤다. 숨을 죽이고 기다린 뒤 다시 움직였다."},
+            {"label": "태연한 척 정면으로 지나친다", "alert": 20, "result": "경비가 신분을 캐물었다. 가까스로 둘러댔지만 의심스러운 눈빛이 오래 남았다."},
+            {"label": "반대편 통로로 달려 도망친다", "alert": 35, "result": "급한 발소리가 복도에 크게 울렸다. 경비가 무전기를 꺼내 드는 소리가 들린다."},
+        ],
+    },
+    {
+        "title": "잠긴 문",
+        "text": "목표 지점으로 가는 문이 잠겨 있다. 문 옆 화분 아래에서 무언가 반짝이고, 천장의 환풍구는 사람이 지나가기엔 좁아 보인다.",
+        "options": [
+            {"label": "화분 아래를 뒤져 본다", "alert": 0, "result": "화분 밑에서 예비 열쇠가 나왔다. 소리 없이 문이 열렸다."},
+            {"label": "환풍구로 기어 들어간다", "alert": 15, "result": "좁은 틈에 몸이 걸려 한참을 버둥거렸다. 금속이 긁히는 소리가 났다."},
+            {"label": "문을 걷어차 연다", "alert": 40, "result": "굉음과 함께 문이 열렸다. 건물 전체가 그 소리를 들었을 것이다."},
+        ],
+    },
+    {
+        "title": "행인의 시선",
+        "text": "골목 가판대의 노인이 당신의 가방을 계속 쳐다본다. 노인은 말동무가 필요한 듯 연신 신문을 접었다 펴고 있다.",
+        "options": [
+            {"label": "신문을 사며 날씨 얘기를 건넨다", "alert": 0, "result": "노인은 신이 나서 이야기를 늘어놓았다. 시선은 더 이상 가방에 머물지 않았다."},
+            {"label": "못 본 척 빠르게 걸어간다", "alert": 15, "result": "노인이 고개를 갸웃하며 뒷모습을 오래 바라보았다."},
+            {"label": "돈을 쥐여주며 입을 막는다", "alert": 25, "result": "노인은 돈을 받았지만, 수상한 사람이 지나갔다는 말은 어딘가에서 흘러나갈 것이다."},
+        ],
+    },
+    {
+        "title": "순찰차 접근",
+        "text": "맞은편 도로에서 순찰차가 천천히 다가온다. 가까운 곳에 쓰레기 수거 트럭이 정차해 있고, 트럭 뒤편에는 짙은 그림자가 드리워져 있다.",
+        "options": [
+            {"label": "트럭 뒤 그림자에 몸을 붙인다", "alert": 0, "result": "순찰차의 헤드라이트가 트럭 앞을 훑고 지나갔다. 아무도 이쪽을 보지 않았다."},
+            {"label": "고개를 숙이고 태연히 걷는다", "alert": 20, "result": "순찰차가 속도를 줄여 한참을 따라붙다가 떠났다."},
+            {"label": "가방을 안고 골목으로 뛴다", "alert": 35, "result": "뛰는 모습이 순찰차의 사이드미러에 잡혔다. 차가 속도를 줄인다."},
+        ],
+    },
+    {
+        "title": "적외선 경보 센서",
+        "text": "바닥 가까이에서 붉은 적외선 줄기가 교차하고 있다. 벽 쪽에 손거울 조각이 떨어져 있고, 센서 전원 박스는 천장 가까이 달려 있다.",
+        "options": [
+            {"label": "거울 조각으로 빛줄기를 꺾어 우회한다", "alert": 0, "result": "빛줄기가 거울에 반사되어 벽을 비췄다. 센서는 아무것도 감지하지 못했다."},
+            {"label": "의자에 올라가 전원 박스를 연다", "alert": 15, "result": "전원을 내리는 순간 짧은 작동음이 울렸지만 경보로 이어지진 않았다."},
+            {"label": "빛줄기 사이로 몸을 접어 통과한다", "alert": 30, "result": "옷자락이 빛줄기를 스쳤다. 어딘가에서 낮은 경고음이 한 번 울렸다."},
+        ],
+    },
+    {
+        "title": "무전기 호출",
+        "text": "허리에 찬 경비 무전기에서 잡음 섞인 호출이 들린다. 상대는 당신의 존재를 모르는 눈치다. 근처 책상에 오늘자 경비 근무표가 놓여 있다.",
+        "options": [
+            {"label": "근무표를 보고 해당 근무자인 척 응답한다", "alert": 0, "result": "근무표의 이름으로 응답하자 상대는 별다른 의심 없이 교신을 끝냈다."},
+            {"label": "응답하지 않고 자리를 옮긴다", "alert": 15, "result": "호출이 두 번 더 이어졌다. 응답이 없다는 사실이 오히려 이상하게 들렸을 것이다."},
+            {"label": "무전기를 꺼 버린다", "alert": 25, "result": "갑자기 끊긴 교신에 상대가 확인하러 오겠다는 말이 마지막으로 들렸다."},
+        ],
+    },
+]
+
+# 임무별 시나리오 (briefing: 의뢰 내용 / steps: 수행할 작업 순서)
+MISSION_SCRIPTS = {
+    "mission_1": {
+        "briefing": "경쟁 조직이 드나드는 창고 골목을 은밀히 조사한다. 의뢰인이 원하는 것은 출입 인원과 화물 반입 시간이 적힌 장부 사진이다. 눈에 띄지 말고, 아무것도 건드리지 말고, 증거만 들고 돌아와라.",
+        "steps": [
+            {"type": "travel", "title": "잠입 경로 이동", "seconds": 6,
+             "text": "해가 진 직후라 골목에는 사람이 드물다. 낮은 담장을 따라 목표 창고 뒤편으로 접근한다.",
+             "lines": ["골목 입구에서 주변 시야를 확인한다.", "담장 그림자를 따라 천천히 이동한다.", "창고 뒷문이 보이는 위치에 도착했다."]},
+            {"type": "sequence", "title": "감시 카메라 차단", "count": 6,
+             "text": "벽면 배전함 안에 번호가 붙은 차단기 6개가 늘어서 있다. 1번부터 순서대로 내려야 카메라 전원이 안전하게 꺼진다. 순서가 틀리면 전원이 되돌아와 처음부터 다시 해야 한다."},
+            {"type": "encounter"},
+            {"type": "memory", "title": "신호등 암호 관찰", "length": 4,
+             "text": "창고 창문에서 색색의 불빛이 정해진 순서로 깜빡인다. 안에 있는 조직원들이 쓰는 확인 신호다. 순서를 기억했다가 그대로 재현해 문 앞 감시자를 속인다."},
+            {"type": "progress", "title": "출입 장부 촬영 및 전송", "seconds": 10, "checks": 1,
+             "text": "열린 창틈으로 출입 장부를 소형 카메라에 담고 의뢰인의 수신기로 전송한다. 전송 도중 신호가 불안정해지면 수동으로 연결을 유지해야 한다.",
+             "status": ["카메라 초점을 맞추는 중이다.", "장부 첫 장을 촬영했다.", "암호화하여 전송 중이다.", "수신 확인을 기다리는 중이다."]},
+        ],
+    },
+    "mission_2": {
+        "briefing": "항구 창고에 쌓인 밀수품을 검문 없이 도시 밖으로 빼내야 한다. 컨테이너 봉인을 풀고, 화물을 적재하고, 검문소를 통과할 서류를 맞춰야 한다. 한 군데라도 어긋나면 세관 조사가 들어온다.",
+        "steps": [
+            {"type": "travel", "title": "항구 창고 진입", "seconds": 8,
+             "text": "안개 낀 부두를 가로질러 목표 컨테이너가 있는 창고로 향한다. 하역 인부들의 교대 시간을 노려야 한다.",
+             "lines": ["부두 입구의 경비 초소를 우회한다.", "컨테이너 사이 좁은 통로를 따라 이동한다.", "교대 시간에 맞춰 창고 안으로 들어간다.", "목표 컨테이너 앞에 도착했다."]},
+            {"type": "wires", "title": "컨테이너 전자 봉인 해제", "count": 4, "rounds": 1,
+             "text": "컨테이너 문에 달린 전자 봉인 패널을 열자 색이 다른 전선 네 가닥이 드러났다. 같은 색의 전선과 단자를 연결해야 봉인이 풀린다."},
+            {"type": "encounter"},
+            {"type": "progress", "title": "화물 적재", "seconds": 14, "checks": 2,
+             "text": "지게차를 최소한의 소음으로 움직여 밀수품을 트럭에 옮겨 싣는다. 작업 중 무전 신호가 불안정해지면 망을 보는 동료와의 연결을 유지해야 한다.",
+             "status": ["첫 번째 팔레트를 들어 올렸다.", "트럭 적재함에 화물을 고정하는 중이다.", "두 번째 팔레트를 옮기는 중이다.", "마지막 상자를 싣고 있다."]},
+            {"type": "safe", "title": "화물칸 자물쇠 잠금", "digits": 3, "attempts": 6,
+             "text": "적재가 끝난 화물칸에는 3자리 숫자 자물쇠가 달려 있다. 운송 책임자만 알고 있는 번호이므로, 다이얼을 돌려 나오는 반응으로 번호를 추리해야 한다."},
+            {"type": "sequence", "title": "검문소 서류 정리", "count": 7,
+             "text": "검문소에 제출할 서류 7장에 번호표가 붙어 있다. 번호 순서가 뒤섞이면 서류가 위조임이 들통난다. 1번부터 차례대로 정렬해 제출 순서를 맞춘다."},
+        ],
+    },
+    "mission_3": {
+        "briefing": "라이벌 보스의 저택 지하 금고에는 상납 내역이 적힌 비밀 장부가 있다. 저택 경비망은 촘촘하며 경보 장치가 곳곳에 설치되어 있다. 장부를 복사하고 흔적 없이 빠져나오는 것이 목표다.",
+        "steps": [
+            {"type": "travel", "title": "저택 외곽 침투", "seconds": 8,
+             "text": "높은 담장 아래 배수로를 통해 저택 정원으로 들어간다. 정원에는 사냥개가 풀려 있다는 소문이 있다.",
+             "lines": ["배수로의 철망을 뜯고 정원으로 올라선다.", "분수대 뒤편에 몸을 붙이고 순찰 간격을 센다.", "별채 쪽 그림자로 이동한다.", "지하실로 이어지는 문 앞에 도착했다."]},
+            {"type": "sequence", "title": "경보 회로 차단", "count": 8,
+             "text": "지하 계단 입구의 제어함에 번호가 붙은 스위치 8개가 있다. 1번부터 순서대로 내려야 경보 회로가 차례로 꺼진다. 한 번이라도 순서가 틀리면 회로가 재가동된다."},
+            {"type": "wires", "title": "보안 패널 우회", "count": 4, "rounds": 1,
+             "text": "금고실 앞 보안 패널 뒤쪽 배선이 노출되어 있다. 전선과 단자의 색을 정확히 맞춰 패널이 경비실에 신호를 보내지 못하게 만든다."},
+            {"type": "encounter"},
+            {"type": "memory", "title": "경비 교대 신호 기억", "length": 5,
+             "text": "복도 끝 조명이 경비 교대를 알리는 신호를 보낸다. 조명 순서를 외워 두었다가 같은 순서로 응답해야 교대 경비가 이상을 느끼지 못한다."},
+            {"type": "safe", "title": "장부 금고 해제", "digits": 4, "attempts": 8,
+             "text": "보스가 아끼는 금고는 4자리 숫자 자물쇠다. 다이얼을 돌릴 때마다 손끝에 느껴지는 반응을 단서로 번호를 좁혀 나가야 한다. 시도 횟수가 다하면 자물쇠를 부수게 되고, 큰 소음이 난다."},
+            {"type": "progress", "title": "장부 복사 및 전송", "seconds": 18, "checks": 2,
+             "text": "휴대용 스캐너로 장부 전체를 복사해 외부로 전송한다. 양이 많아 시간이 걸린다. 지하라 신호가 약해 중간중간 수동으로 연결을 잡아줘야 한다.",
+             "status": ["장부 첫 묶음을 스캔하는 중이다.", "페이지를 넘기며 복사를 이어간다.", "복사본을 압축해 전송 준비를 한다.", "외부 수신기로 전송 중이다.", "마지막 페이지를 전송하고 있다."]},
+            {"type": "travel", "title": "탈출", "seconds": 8,
+             "text": "장부를 원래 자리에 돌려놓고 들어왔던 길로 빠져나간다. 마지막까지 긴장을 늦춰서는 안 된다.",
+             "lines": ["금고 문을 닫고 흔적을 지운다.", "계단을 올라 별채 그림자로 이동한다.", "배수로를 통해 담장 밖으로 나왔다."]},
+        ],
+    },
+    "mission_4": {
+        "briefing": "야간에 비어 있는 사무실에서 기밀 문서를 반출해야 한다. 건물에는 야간 순찰이 돌고 있고, 문서는 잠긴 서류함 안에 있다. 문서가 없어졌다는 사실을 아침까지 눈치채지 못하게 하는 것이 조건이다.",
+        "steps": [
+            {"type": "travel", "title": "야간 사무실 진입", "seconds": 7,
+             "text": "청소 업체 직원으로 위장해 뒷문으로 들어간다. 출입증은 미리 복제해 두었다.",
+             "lines": ["뒷문 출입 단말기에 복제한 출입증을 댄다.", "비상계단을 통해 목표 층으로 올라간다.", "불 꺼진 사무실 복도에 도착했다."]},
+            {"type": "memory", "title": "야간 순찰 경로 파악", "length": 5,
+             "text": "복도의 보안등이 순찰 경로를 따라 차례로 켜진다. 순찰이 지나가는 순서를 기억해 두어야 서류함까지 가는 안전한 타이밍을 계산할 수 있다."},
+            {"type": "encounter"},
+            {"type": "safe", "title": "기밀 서류함 개방", "digits": 3, "attempts": 6,
+             "text": "서류함은 3자리 숫자 자물쇠로 잠겨 있다. 다이얼 반응을 통해 번호를 추리한다. 시간이 오래 걸릴수록 순찰이 돌아올 가능성이 커진다."},
+            {"type": "wires", "title": "서류함 경보 배선 차단", "count": 4, "rounds": 1,
+             "text": "서류함 뒤판 아래에는 문이 열리면 울리는 경보 배선이 숨겨져 있다. 색을 맞춰 배선을 바이패스하지 않으면 문서를 꺼내는 순간 경보가 울린다."},
+            {"type": "progress", "title": "문서 사본 제작 및 원본 반출", "seconds": 16, "checks": 2,
+             "text": "원본을 가방에 넣고 같은 두께의 가짜 서류철로 빈자리를 채운다. 작업 중 경비실과 연결된 무전기를 계속 지켜보다가 신호가 올 때마다 응답해야 한다.",
+             "status": ["서류철을 분류하는 중이다.", "가짜 서류철의 두께를 맞추고 있다.", "원본을 가방 안쪽에 숨겼다.", "서류함을 원래 상태로 되돌리는 중이다."]},
+            {"type": "travel", "title": "건물 이탈", "seconds": 7,
+             "text": "들어올 때와 같은 경로로 조용히 건물을 빠져나간다.",
+             "lines": ["사무실 불을 끄고 복도로 나선다.", "비상계단을 내려가 뒷문 앞에 선다.", "새벽 공기 속으로 빠져나왔다."]},
+        ],
+    },
+    "mission_5": {
+        "briefing": "중앙 은행의 현금 호송 차량이 새벽에 외곽 도로를 지난다. 호송 차량은 장갑 처리되어 있고 무장 경호원이 동승한다. 정확한 시간에, 정확한 순서로 움직이지 못하면 이 작전은 곧바로 총격전이 된다.",
+        "steps": [
+            {"type": "travel", "title": "매복 지점 이동", "seconds": 10,
+             "text": "호송 경로 중 가장 좁은 고가도로 아래에 매복한다. 동료들과의 합류 시간이 촉박하다.",
+             "lines": ["새벽 도로를 가로질러 고가도로 아래로 이동한다.", "미리 준비한 차량 두 대를 도로 양쪽에 배치한다.", "무전기로 동료들의 위치를 확인한다.", "호송 차량의 접근 신호를 기다린다."]},
+            {"type": "memory", "title": "호송 차량 신호 해독", "length": 6,
+             "text": "호송 차량은 도로 신호등과 무선으로 통신하며 지나간다. 신호의 색 순서를 외워 두었다가 같은 순서로 재현해 신호 체계를 교란해야 한다."},
+            {"type": "encounter"},
+            {"type": "wires", "title": "차량 통신 장치 무력화", "count": 4, "rounds": 2,
+             "text": "차량 정차 직후 통신 장치 패널을 열고 전선을 정확히 연결해 위치 추적 신호를 끊어야 한다. 패널은 두 겹이라 두 번에 걸쳐 작업해야 한다."},
+            {"type": "sequence", "title": "후방 도어 잠금 해제", "count": 9,
+             "text": "후방 도어의 기계식 잠금장치에는 번호가 붙은 레버 9개가 있다. 1번부터 순서대로 당겨야 잠금이 풀린다. 순서가 틀리면 레버가 모두 원위치로 돌아간다."},
+            {"type": "encounter"},
+            {"type": "safe", "title": "현금 보관함 개방", "digits": 4, "attempts": 7,
+             "text": "차량 내부의 현금 보관함은 4자리 숫자 자물쇠로 잠겨 있다. 경호원이 곧 정신을 차릴 것이므로 시간이 많지 않다."},
+            {"type": "progress", "title": "현금 이송 및 도주", "seconds": 22, "checks": 3,
+             "text": "현금 가방을 도주 차량으로 옮겨 싣고 추격을 따돌려야 한다. 무전으로 연락하는 동료의 경고에 즉시 응답하지 않으면 추격을 막지 못한다.",
+             "status": ["첫 번째 가방을 도주 차량으로 옮기고 있다.", "두 번째 가방을 싣는 중이다.", "멀리서 사이렌 소리가 희미하게 들린다.", "차량이 도로를 벗어나 샛길로 접어들었다.", "추격 차량과의 거리가 벌어지고 있다."]},
+        ],
+    },
+}
+
+_MISSION_EST_SECONDS = {"sequence": 20, "wires": 25, "memory": 30, "safe": 45, "encounter": 15}
+
+def mission_estimate_text(key: str) -> str:
+    total = 0
+    for st in MISSION_SCRIPTS[key]["steps"]:
+        t = st["type"]
+        if t == "travel":
+            total += st["seconds"] + 3
+        elif t == "progress":
+            total += st["seconds"] + 10 + st.get("checks", 0) * 4
+        else:
+            total += _MISSION_EST_SECONDS.get(t, 20)
+    return f"약 {max(1, round(total / 60))}분"
+
+def mission_step_title(step: dict) -> str:
+    return step.get("title") or "현장 돌발 상황 대응"
+
+def _mission_bar(ratio: float, fill: str = "=", width: int = 20) -> str:
+    ratio = max(0.0, min(1.0, ratio))
+    filled = int(round(ratio * width))
+    return f"[{fill * filled}{'-' * (width - filled)}] {int(ratio * 100)}%"
+
+def _tail_lines(lines: list, limit: int = 950) -> str:
+    """최근 기록부터 거꾸로 담아 필드 글자 제한(1024자)을 넘지 않게 자름"""
+    picked, size = [], 0
+    for line in reversed(lines):
+        if size + len(line) + 1 > limit:
+            break
+        picked.append(line)
+        size += len(line) + 1
+    return "\n".join(reversed(picked)) if picked else "-"
+
+async def mission_sleep(seconds: float):
+    await asyncio.sleep(max(0.0, seconds * MISSION_TIME_SCALE))
+
+async def _ack(interaction: discord.Interaction):
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+    except discord.HTTPException:
+        pass
+
+# --- 화면 구성 요소 ---
+class MissionButton(discord.ui.Button):
+    def __init__(self, session, key: str, label: str, style, row: int = None, disabled: bool = False, lock_free: bool = False):
+        super().__init__(label=label, style=style, row=row, disabled=disabled)
+        self.session = session
+        self.key = key
+        self.lock_free = lock_free
+        self.step_id = session.step_id
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.session.dispatch(interaction, self.key, None, self.step_id, self.lock_free)
+
+class MissionSelectItem(discord.ui.Select):
+    def __init__(self, session, key: str, placeholder: str, options: list, row: int = None):
+        super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=options, row=row)
+        self.session = session
+        self.key = key
+        self.step_id = session.step_id
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.session.dispatch(interaction, self.key, list(self.values), self.step_id, False)
+
+class MissionCodeModal(discord.ui.Modal):
+    def __init__(self, task):
+        super().__init__(title="자물쇠 다이얼", timeout=MISSION_IDLE_TIMEOUT)
+        self.task = task
+        digits = task.digits
+        self.code_input = discord.ui.TextInput(
+            label=f"{digits}자리 숫자 (서로 다른 숫자)", placeholder="예: " + "".join(str(i) for i in range(digits)),
+            min_length=digits, max_length=digits, required=True
+        )
+        self.add_item(self.code_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        s = self.task.s
+        async with s.lock:
+            if s.phase != "step" or s.task is not self.task:
+                await _ack(interaction)
+                return
+            await self.task.submit(interaction, str(self.code_input.value).strip())
+
+# --- 작업(미니게임) 종류 ---
+class MissionTask:
+    def __init__(self, session, cfg: dict):
+        self.s = session
+        self.cfg = cfg
+        self.title = cfg.get("title", "")
+        self.text = cfg.get("text", "")
+        self.locked = False       # True 이면 자동 진행 중이라 포기 버튼을 누를 수 없음
+
+    def body(self) -> str:
+        return ""
+
+    def items(self) -> list:
+        return []
+
+    async def start(self, interaction: discord.Interaction):
+        pass
+
+    async def handle(self, interaction: discord.Interaction, key: str, values):
+        await _ack(interaction)
+
+    def btn(self, key, label, style=None, row=0, disabled=False, lock_free=False):
+        return MissionButton(self.s, key, label, style or discord.ButtonStyle.secondary, row, disabled, lock_free)
+
+class TravelTask(MissionTask):
+    """이동 / 잠입: 안내 문장이 시간에 따라 하나씩 나타남 (자동 진행)"""
+    def __init__(self, session, cfg):
+        super().__init__(session, cfg)
+        self.shown = 0
+        self.ratio = 0.0
+        self.locked = True
+
+    def body(self) -> str:
+        lines = "\n".join(f"- {line}" for line in self.cfg["lines"][:self.shown])
+        return f"{lines}\n\n진행 {_mission_bar(self.ratio)}"
+
+    async def start(self, interaction):
+        self.s.spawn(self.run(interaction))
+
+    async def run(self, interaction):
+        lines = self.cfg["lines"]
+        per = self.cfg["seconds"] / len(lines)
+        for i in range(len(lines)):
+            if self.s.phase != "step" or self.s.task is not self:
+                return
+            self.shown = i + 1
+            self.ratio = i / len(lines)
+            await self.s.push(interaction)
+            await mission_sleep(per)
+        self.ratio = 1.0
+        await self.s.locked_call(self.s.advance, interaction, f"{self.title}: 완료")
+
+class SequenceTask(MissionTask):
+    """번호 순서대로 누르기: 틀리면 처음부터 다시"""
+    def __init__(self, session, cfg):
+        super().__init__(session, cfg)
+        self.count = cfg["count"]
+        self.order = random.sample(range(1, self.count + 1), self.count)
+        self.next = 1
+
+    def body(self) -> str:
+        return f"1번부터 {self.count}번까지 순서대로 누르십시오.\n다음에 누를 번호: **{self.next}**"
+
+    def items(self) -> list:
+        return [
+            self.btn(f"seq:{num}", str(num),
+                     style=discord.ButtonStyle.success if num < self.next else discord.ButtonStyle.secondary,
+                     row=i // 5, disabled=num < self.next)
+            for i, num in enumerate(self.order)
+        ]
+
+    async def handle(self, interaction, key, values):
+        await _ack(interaction)
+        num = int(key.split(":", 1)[1])
+        if num == self.next:
+            self.next += 1
+            if self.next > self.count:
+                await self.s.advance(interaction, f"{self.title}: 완료")
+            else:
+                await self.s.push(interaction)
+        else:
+            self.next = 1
+            if await self.s.add_alert(interaction, 8, f"{self.title}: 순서 오류 (번호 {num}), 처음부터 다시"):
+                return
+            await self.s.push(interaction)
+
+class WiresTask(MissionTask):
+    """같은 색 전선과 단자 연결"""
+    def __init__(self, session, cfg):
+        super().__init__(session, cfg)
+        self.n = cfg.get("count", 4)
+        self.rounds = cfg.get("rounds", 1)
+        self.round = 1
+        self.new_round()
+
+    def new_round(self):
+        self.left = random.sample(MISSION_WIRE_COLORS, self.n)
+        self.right = random.sample(self.left, self.n)
+        self.choice = [None] * self.n
+
+    def body(self) -> str:
+        left = ", ".join(f"{i + 1}번 {c}" for i, c in enumerate(self.left))
+        right = ", ".join(f"{MISSION_TERMINALS[j]} {c}" for j, c in enumerate(self.right))
+        return (f"같은 색의 전선과 단자를 연결한 뒤 [연결 확인]을 누르십시오. (작업 {self.round}/{self.rounds})\n\n"
+                f"전선: {left}\n단자: {right}")
+
+    def items(self) -> list:
+        out = []
+        for i in range(self.n):
+            options = [
+                discord.SelectOption(label=f"{MISSION_TERMINALS[j]} 단자 ({self.right[j]})", value=str(j), default=(self.choice[i] == j))
+                for j in range(self.n)
+            ]
+            out.append(MissionSelectItem(self.s, f"wire:{i}", f"{i + 1}번 {self.left[i]} 전선을 연결할 단자", options, row=i))
+        out.append(self.btn("confirm", "연결 확인", discord.ButtonStyle.primary, row=4))
+        return out
+
+    async def handle(self, interaction, key, values):
+        await _ack(interaction)
+        if key.startswith("wire:"):
+            self.choice[int(key.split(":", 1)[1])] = int(values[0])
+            await self.s.push(interaction)
+            return
+        if None in self.choice:
+            try:
+                await interaction.followup.send("아직 연결하지 않은 전선이 있습니다.", ephemeral=True)
+            except discord.HTTPException:
+                pass
+            return
+        wrong = sum(1 for i in range(self.n) if self.right[self.choice[i]] != self.left[i])
+        if wrong == 0:
+            if self.round < self.rounds:
+                self.round += 1
+                self.s.log.append(f"{self.title}: {self.round - 1}차 연결 성공")
+                self.new_round()
+                await self.s.push(interaction)
+            else:
+                await self.s.advance(interaction, f"{self.title}: 완료")
+            return
+        self.choice = [None] * self.n
+        if await self.s.add_alert(interaction, 6 * wrong, f"{self.title}: 잘못 연결된 전선 {wrong}개, 합선 발생"):
+            return
+        await self.s.push(interaction)
+
+class MemoryTask(MissionTask):
+    """신호 기억하기: 화면에 나오는 색 신호 순서를 외웠다가 그대로 누름"""
+    def __init__(self, session, cfg):
+        super().__init__(session, cfg)
+        self.length = cfg.get("length", 4)
+        seq = []
+        while len(seq) < self.length:
+            c = random.choice(MISSION_SIGNALS)
+            if not seq or c != seq[-1]:      # 같은 신호가 연속되면 구분이 안 되므로 제외
+                seq.append(c)
+        self.seq = seq
+        self.pos = 0
+        self.showing = True
+        self.cur = None
+        self.cur_no = 0
+        self.plays = 0
+        self.locked = True
+
+    def body(self) -> str:
+        if self.showing:
+            text = "신호를 잘 보고 순서를 기억하십시오."
+            if self.plays > 1:
+                text += f" (재생 {self.plays}회차)"
+            if self.cur:
+                return f"{text}\n\n현재 신호 ({self.cur_no}/{self.length}): **{self.cur}**"
+            return f"{text}\n\n잠시 후 신호가 시작됩니다..."
+        return f"기억한 신호를 순서대로 누르십시오. ({self.pos}/{self.length})"
+
+    def items(self) -> list:
+        return [self.btn(f"sig:{c}", c, row=0, disabled=self.showing) for c in MISSION_SIGNALS]
+
+    async def start(self, interaction):
+        self.s.spawn(self.show(interaction))
+
+    async def show(self, interaction):
+        self.showing = True
+        self.locked = True
+        self.pos = 0
+        self.cur = None
+        self.plays += 1
+        await self.s.push(interaction)
+        await mission_sleep(1.5)
+        for i, c in enumerate(self.seq, 1):
+            if self.s.phase != "step" or self.s.task is not self:
+                return
+            self.cur, self.cur_no = c, i
+            await self.s.push(interaction)
+            await mission_sleep(1.4)
+        if self.s.phase != "step" or self.s.task is not self:
+            return
+        self.cur = None
+        self.showing = False
+        self.locked = False
+        await self.s.push(interaction)
+
+    async def handle(self, interaction, key, values):
+        await _ack(interaction)
+        if self.showing:
+            return
+        sym = key.split(":", 1)[1]
+        if sym == self.seq[self.pos]:
+            self.pos += 1
+            if self.pos >= self.length:
+                await self.s.advance(interaction, f"{self.title}: 완료")
+            else:
+                await self.s.push(interaction)
+        else:
+            if await self.s.add_alert(interaction, 10, f"{self.title}: 신호 순서 오류, 신호를 다시 재생"):
+                return
+            self.s.spawn(self.show(interaction))
+
+class ProgressTask(MissionTask):
+    """진행형 작업: 게이지가 차는 동안 기다리다가, 신호가 불안정해지면 제한 시간 안에 [신호 유지]를 눌러야 함"""
+    def __init__(self, session, cfg):
+        super().__init__(session, cfg)
+        self.state = "ready"
+        self.ratio = 0.0
+        self.status = "작업 준비를 마쳤다."
+        self.check_open = False
+        self.signal = asyncio.Event()
+
+    def body(self) -> str:
+        if self.state == "ready":
+            return (f"[작업 시작]을 누르면 작업이 진행됩니다. 작업에는 시간이 걸립니다.\n"
+                    f"진행 중 신호가 불안정해지면 **{MISSION_CHECK_WINDOW_SEC}초 안에** [신호 유지]를 눌러야 합니다.\n"
+                    f"신호를 놓치면 경계도가 오릅니다.")
+        warn = ""
+        if self.check_open:
+            warn = f"\n\n**경고: 신호가 불안정합니다! {MISSION_CHECK_WINDOW_SEC}초 안에 [신호 유지]를 누르십시오.**"
+        return f"진행 {_mission_bar(self.ratio)}\n{self.status}{warn}"
+
+    def items(self) -> list:
+        if self.state == "ready":
+            return [self.btn("go", "작업 시작", discord.ButtonStyle.primary, row=0)]
+        return [self.btn("signal", "신호 유지",
+                         discord.ButtonStyle.danger if self.check_open else discord.ButtonStyle.secondary,
+                         row=0, disabled=not self.check_open, lock_free=True)]
+
+    async def handle(self, interaction, key, values):
+        await _ack(interaction)
+        if key == "go" and self.state == "ready":
+            self.state = "running"
+            self.locked = True
+            self.s.spawn(self.run(interaction))
+        elif key == "signal" and self.check_open:
+            self.signal.set()
+
+    async def run(self, interaction):
+        total = self.cfg["seconds"]
+        ticks = max(2, int(round(total / 2.0)))
+        checks = {max(1, min(ticks - 1, round(ticks * (i + 1) / (self.cfg.get("checks", 0) + 1))))
+                  for i in range(self.cfg.get("checks", 0))}
+        statuses = self.cfg.get("status") or ["작업을 진행 중이다."]
+        await self.s.push(interaction)
+        for t in range(1, ticks + 1):
+            await mission_sleep(total / ticks)
+            if self.s.phase != "step" or self.s.task is not self:
+                return
+            self.ratio = t / ticks
+            self.status = statuses[min(len(statuses) - 1, int(self.ratio * len(statuses)))]
+            await self.s.push(interaction)
+            if t in checks:
+                self.check_open = True
+                self.signal.clear()
+                await self.s.push(interaction)
+                ok = True
+                try:
+                    await asyncio.wait_for(self.signal.wait(), timeout=MISSION_CHECK_WINDOW_SEC)
+                except asyncio.TimeoutError:
+                    ok = False
+                self.check_open = False
+                if not ok:
+                    self.status = "신호가 끊겨 연결을 다시 잡는 중이다."
+                    if await self.s.locked_call(self.s.add_alert, interaction, 10, f"{self.title}: 신호 유지 실패"):
+                        return
+                else:
+                    self.status = "신호를 안정시켰다."
+                if self.s.phase != "step" or self.s.task is not self:
+                    return
+                await self.s.push(interaction)
+        self.ratio = 1.0
+        await self.s.locked_call(self.s.advance, interaction, f"{self.title}: 완료")
+
+class SafeTask(MissionTask):
+    """금고 / 자물쇠 해제: 숫자 맞히기 (위치까지 일치 / 숫자만 일치 힌트)"""
+    def __init__(self, session, cfg):
+        super().__init__(session, cfg)
+        self.digits = cfg.get("digits", 3)
+        self.max_tries = cfg.get("attempts", 6)
+        self.code = "".join(random.sample("0123456789", self.digits))
+        self.history = []
+
+    def body(self) -> str:
+        left = self.max_tries - len(self.history)
+        text = (f"서로 다른 숫자 {self.digits}개로 이루어진 번호입니다. 남은 시도: **{left}회**\n"
+                f"[다이얼 돌리기]를 눌러 번호를 입력하면 다음 반응을 알려 줍니다.\n"
+                f"- 위치까지 일치: 숫자와 자리가 모두 맞음\n- 숫자만 일치: 숫자는 있지만 자리가 다름")
+        if self.history:
+            text += "\n\n" + "\n".join(self.history[-8:])
+        return text
+
+    def items(self) -> list:
+        return [self.btn("dial", "다이얼 돌리기", discord.ButtonStyle.primary, row=0)]
+
+    async def handle(self, interaction, key, values):
+        if key == "dial":
+            await interaction.response.send_modal(MissionCodeModal(self))
+        else:
+            await _ack(interaction)
+
+    async def submit(self, interaction, text: str):
+        if not re.fullmatch(r"[0-9]+", text) or len(text) != self.digits or len(set(text)) != self.digits:
+            await interaction.response.send_message(
+                f"서로 다른 숫자 {self.digits}개를 입력해야 합니다. (시도 횟수는 차감되지 않았습니다)", ephemeral=True)
+            return
+        await _ack(interaction)
+        strikes = sum(1 for a, b in zip(text, self.code) if a == b)
+        balls = sum(1 for ch in text if ch in self.code) - strikes
+        self.history.append(f"{len(self.history) + 1}회차  {text}  -  위치까지 일치 {strikes}, 숫자만 일치 {balls}")
+        if text == self.code:
+            await self.s.advance(interaction, f"{self.title}: {len(self.history)}번 만에 해제")
+        elif len(self.history) >= self.max_tries:
+            self.s.log.append(f"{self.title}: 시도 횟수 소진, 자물쇠를 부수고 열었다 (정답 {self.code})")
+            if await self.s.add_alert(interaction, 25, f"{self.title}: 자물쇠를 부수는 소음"):
+                return
+            await self.s.advance(interaction, None)
+        else:
+            await self.s.push(interaction)
+
+class EncounterTask(MissionTask):
+    """현장 돌발 상황: 장면 속 단서를 읽고 대처 방법을 선택"""
+    def __init__(self, session, cfg):
+        sc = session.pick_encounter()
+        super().__init__(session, {"title": sc["title"], "text": sc["text"]})
+        self.options = random.sample(sc["options"], len(sc["options"]))
+
+    def body(self) -> str:
+        return "어떻게 대처하시겠습니까?\n\n" + "\n".join(f"{chr(65 + i)}. {o['label']}" for i, o in enumerate(self.options))
+
+    def items(self) -> list:
+        return [self.btn(f"enc:{i}", f"{chr(65 + i)}. {o['label']}"[:80], row=i) for i, o in enumerate(self.options)]
+
+    async def handle(self, interaction, key, values):
+        await _ack(interaction)
+        opt = self.options[int(key.split(":", 1)[1])]
+        self.s.log.append(f"{self.title}: {opt['result']}")
+        if opt["alert"] and await self.s.add_alert(interaction, opt["alert"], f"{self.title}: {opt['label']}"):
+            return
+        await self.s.advance(interaction, None)
+
+MISSION_TASK_TYPES = {
+    "travel": TravelTask, "sequence": SequenceTask, "wires": WiresTask, "memory": MemoryTask,
+    "progress": ProgressTask, "safe": SafeTask, "encounter": EncounterTask,
+}
+
+# --- 임무 진행 화면 ---
+MISSION_GLOBAL_KEYS = {"pick", "start", "back", "cancel", "abandon"}
+
+class MissionSession(GuardedView):
+    holds_command_lock = True    # 임무가 끝날 때까지 다른 명령어 실행 차단
+
+    def __init__(self, owner: discord.Member, user_stats: dict, guild_id):
+        super().__init__(timeout=MISSION_IDLE_TIMEOUT)
+        self.owner = owner
+        self.location = user_stats.get("location", "레벤하임")
+        self.guild_id = guild_id
+        self.inventory_snapshot = dict(user_stats.get("inventory") or {})
+        self.phase = "select"           # select -> brief -> step -> done
+        self.mission_key = None
+        self.message = None
+        self.lock = asyncio.Lock()
+        self.step_id = 0
+        self.task = None
+        self.index = 0
+        self.steps = []
+        self.alert = 0.0
+        self.peak_alert = 0.0
+        self.alert_mult = 1.0
+        self.final_rate = 0
+        self.money_mult = 1.0
+        self.honor_mult = 1.0
+        self.buffs = []
+        self.log = []
+        self.used_encounters = set()
+        self.abandon_armed = False
+        self.drink_pending = False      # 쿨타임 중 시작했다면 자양강장제를 1회 소모 (결과 정산 때 차감)
+        self._bg = set()
+        self.rebuild()
+
+    # ----- 보정치 계산 (장비 효과 / 경찰 순찰) -----
+    def compute_modifiers(self):
+        m = MISSIONS[self.mission_key]
+        success_bonus, money_mult, honor_mult, buffs = 0, 1.0, 1.0, []
+        for item_key, s_bonus, m_bonus, h_bonus, label in MISSION_BUFFS:
+            if item_key in self.inventory_snapshot:
+                success_bonus += s_bonus
+                money_mult += m_bonus
+                honor_mult += h_bonus
+                buffs.append(label)
+        patrol_penalty = 0
+        if self.guild_id and self.guild_id in active_patrols:
+            if time.time() < active_patrols[self.guild_id].get(self.location, 0):
+                patrol_penalty = 15
+                buffs.append("경찰 순찰망 가동 (-15% 성공률)")
+        self.final_rate = max(1, min(98, m["success_rate"] + success_bonus - patrol_penalty))
+        self.alert_mult = 50.0 / max(10, self.final_rate)
+        self.money_mult, self.honor_mult, self.buffs = money_mult, honor_mult, buffs
+
+    def pick_encounter(self) -> dict:
+        pool = [i for i in range(len(MISSION_ENCOUNTERS)) if i not in self.used_encounters] or list(range(len(MISSION_ENCOUNTERS)))
+        idx = random.choice(pool)
+        self.used_encounters.add(idx)
+        return MISSION_ENCOUNTERS[idx]
+
+    # ----- 화면 -----
+    def rebuild(self):
+        self.clear_items()
+        if self.phase == "select":
+            options = [
+                discord.SelectOption(
+                    label=m["label"],
+                    description=(f"난이도 {m['diff']} | {len(MISSION_SCRIPTS[k]['steps'])}단계 | {mission_estimate_text(k)} | "
+                                 f"${m['reward'][0]:,}~${m['reward'][1]:,} / 명예 +{m['honor']} / 실패 -${m['fine']:,}"),
+                    value=k)
+                for k, m in MISSIONS.items()
+            ]
+            self.add_item(MissionSelectItem(self, "pick", "수행할 비밀 임무를 선택하세요...", options, row=0))
+            self.add_item(MissionButton(self, "cancel", "취소", discord.ButtonStyle.secondary, row=1))
+        elif self.phase == "brief":
+            self.add_item(MissionButton(self, "start", "작전 개시", discord.ButtonStyle.success, row=0))
+            self.add_item(MissionButton(self, "back", "다른 임무 선택", discord.ButtonStyle.secondary, row=0))
+            self.add_item(MissionButton(self, "cancel", "취소", discord.ButtonStyle.danger, row=0))
+        elif self.phase == "step" and self.task is not None:
+            for it in self.task.items():
+                self.add_item(it)
+            self.add_item(MissionButton(
+                self, "abandon", "포기 확정 (실패 처리)" if self.abandon_armed else "작전 포기",
+                discord.ButtonStyle.danger, row=4, disabled=self.task.locked))
+
+    def build_embed(self) -> discord.Embed:
+        if self.phase == "select":
+            embed = discord.Embed(
+                title=f"[{self.location}] 비밀 임무 작전 하달",
+                description=(f"**{self.owner.mention}** 님, 수행할 작전을 선택해 주십시오.\n\n"
+                             "임무는 여러 단계의 현장 작업으로 이루어져 있으며 끝까지 수행하려면 시간이 걸립니다.\n"
+                             "임무가 진행되는 동안에는 다른 명령어를 사용할 수 없습니다."),
+                color=discord.Color.dark_purple())
+        elif self.phase == "brief":
+            m, sc = MISSIONS[self.mission_key], MISSION_SCRIPTS[self.mission_key]
+            embed = discord.Embed(title=f"[{self.location}] 작전 브리핑 - {m['title']}", description=sc["briefing"],
+                                  color=discord.Color.dark_purple())
+            embed.add_field(name="작전 개요",
+                            value=f"난이도: {m['diff']}\n작업 수: {len(sc['steps'])}단계\n예상 소요 시간: {mission_estimate_text(self.mission_key)}",
+                            inline=True)
+            embed.add_field(name="보수",
+                            value=f"자금 ${m['reward'][0]:,} ~ ${m['reward'][1]:,}\n명예 +{m['honor']} pt\n실패 시 벌금 ${m['fine']:,}, 1분간 지명수배",
+                            inline=True)
+            embed.add_field(name="작업 순서",
+                            value="\n".join(f"{i + 1}. {mission_step_title(st)}" for i, st in enumerate(sc["steps"])), inline=False)
+            rules = ("실수하거나 돌발 상황에 잘못 대처하면 경계도가 오릅니다. 경계도가 100%가 되면 작전이 노출되어 실패합니다.\n"
+                     "작전 도중 포기하거나 오랫동안 응답하지 않아도 실패로 처리됩니다.\n"
+                     f"경계도 상승 배율: **x{self.alert_mult:.2f}** (장비 효과와 순찰 상황이 반영됨)")
+            if self.buffs:
+                rules += "\n적용 중인 효과: " + ", ".join(self.buffs)
+            embed.add_field(name="경계도 규칙", value=rules, inline=False)
+        else:
+            sc_title = MISSIONS[self.mission_key]["title"]
+            total = len(self.steps)
+            embed = discord.Embed(
+                title=f"{sc_title} - 단계 {self.index + 1}/{total}: {self.task.title}",
+                description=f"{self.task.text}\n\n{self.task.body()}",
+                color=(discord.Color.dark_purple() if self.alert < 40 else
+                       discord.Color.orange() if self.alert < 70 else discord.Color.red()))
+            embed.add_field(name="경계도", value=f"`{_mission_bar(self.alert / 100.0, '#')}`", inline=False)
+            embed.add_field(name="작전 기록", value=_tail_lines(self.log[-6:], 700), inline=False)
+        if self.owner.avatar:
+            embed.set_thumbnail(url=self.owner.avatar.url)
+        return embed
+
+    async def push(self, interaction: discord.Interaction):
+        if self.phase == "done":
+            return
+        self.rebuild()
+        try:
+            await interaction.edit_original_response(embed=self.build_embed(), view=self)
+        except discord.HTTPException as e:
+            print(f"Mission push error: {e}")
+
+    # ----- 진행 제어 -----
+    def spawn(self, coro):
+        t = asyncio.create_task(coro)
+        self._bg.add(t)
+        t.add_done_callback(self._bg_done)
+
+    def _bg_done(self, t):
+        self._bg.discard(t)
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            import traceback
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
+            asyncio.ensure_future(self._abort_no_penalty())
+
+    async def locked_call(self, fn, *args):
+        async with self.lock:
+            if self.phase != "step":
+                return False
+            return await fn(*args)
+
+    async def _abort_no_penalty(self):
+        """프로그램 오류로 중단된 경우: 보상도 벌금도 없이 종료"""
+        if self.phase == "done":
+            return
+        self.phase = "done"
+        self.stop()
+        try:
+            await self.message.edit(embed=discord.Embed(
+                title="[작전 중단]", description="시스템 오류로 작전이 중단되었습니다. 보상과 벌금은 적용되지 않았습니다.",
+                color=discord.Color.light_grey()), view=None)
+        except Exception:
+            pass
+
+    async def _begin_step(self, interaction):
+        cfg = self.steps[self.index]
+        self.step_id += 1
+        self.task = MISSION_TASK_TYPES[cfg["type"]](self, cfg)
+        await self.push(interaction)
+        await self.task.start(interaction)
+
+    async def advance(self, interaction, note):
+        if self.phase != "step":
+            return
+        if note:
+            self.log.append(note)
+        self.index += 1
+        if self.index >= len(self.steps):
+            await self._finalize(interaction, True, "모든 작업을 마쳤다.")
+        else:
+            await self._begin_step(interaction)
+
+    async def add_alert(self, interaction, base: float, reason: str) -> bool:
+        """경계도를 올림. 100%에 도달해 작전이 끝났으면 True"""
+        inc = base * self.alert_mult
+        self.alert = min(100.0, self.alert + inc)
+        self.peak_alert = max(self.peak_alert, self.alert)
+        self.log.append(f"경계도 +{inc:.0f}%  ({reason})")
+        if self.alert >= 100.0:
+            await self._finalize(interaction, False, "경계도가 한계에 도달해 작전이 노출되었다.")
+            return True
+        return False
+
+    async def _finalize(self, interaction, success: bool, reason: str):
+        self.phase = "done"
+        self.stop()
+        await finalize_mission(self, success, reason, interaction.edit_original_response)
+
+    # ----- 입력 처리 -----
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner.id:
+            await interaction.response.send_message("본인의 임무 창만 조작할 수 있습니다.", ephemeral=True)
+            return False
+        return True
+
+    async def dispatch(self, interaction, key, values, step_id, lock_free):
+        if self.phase == "done" or (key not in MISSION_GLOBAL_KEYS and step_id != self.step_id):
+            await _ack(interaction)          # 이미 끝났거나 이전 단계의 오래된 버튼
+            return
+        if lock_free:
+            await self.task.handle(interaction, key, values)
+            return
+        async with self.lock:
+            if self.phase == "done":
+                await _ack(interaction)
+                return
+            if key != "abandon":
+                self.abandon_armed = False
+            if key in MISSION_GLOBAL_KEYS:
+                await self.handle_global(interaction, key, values)
+            else:
+                await self.task.handle(interaction, key, values)
+
+    async def handle_global(self, interaction, key, values):
+        await _ack(interaction)
+        if key == "pick":
+            self.mission_key = values[0]
+            self.compute_modifiers()
+            self.phase = "brief"
+            await self.push(interaction)
+        elif key == "back":
+            self.phase = "select"
+            await self.push(interaction)
+        elif key == "cancel":
+            self.phase = "done"
+            self.stop()
+            await interaction.edit_original_response(embed=discord.Embed(
+                title="[작전 취소]", description="임무를 시작하지 않고 취소했습니다.", color=discord.Color.light_grey()), view=None)
+        elif key == "start":
+            self.compute_modifiers()
+            _inv = self.inventory_snapshot
+            if (mission_cooldowns.get(self.owner.id, 0) > time.time() and NO_COOLDOWN_ITEM not in _inv
+                    and _inv.get(DRINK_ITEM, 0) > 0):
+                self.drink_pending = True
+                self.buffs.append("자양강장제 (쿨타임 초기화·1회 소모)")
+            self.steps = MISSION_SCRIPTS[self.mission_key]["steps"]
+            self.index = 0
+            self.phase = "step"
+            self.log = [f"작전 개시: {MISSIONS[self.mission_key]['title']}"]
+            await self._begin_step(interaction)
+        elif key == "abandon":
+            if self.phase != "step":
+                return
+            if not self.abandon_armed:
+                self.abandon_armed = True
+                await self.push(interaction)
+            else:
+                await self._finalize(interaction, False, "작전을 포기하고 현장에서 철수했다.")
+
+    async def on_timeout(self):
+        if self.phase in ("select", "brief"):
+            self.phase = "done"
+            if self.message:
+                try:
+                    await self.message.edit(embed=discord.Embed(
+                        title="[작전 취소]", description="응답이 없어 임무 선택이 취소되었습니다.", color=discord.Color.light_grey()), view=None)
+                except discord.HTTPException:
+                    pass
+        elif self.phase == "step":
+            self.phase = "done"
+            if self.message:
+                await finalize_mission(self, False, "오랫동안 응답하지 않아 작전이 중단되었다.", self.message.edit)
+
+    async def on_error(self, interaction, error, item):
+        import traceback
+        traceback.print_exception(type(error), error, error.__traceback__)
+        await self._abort_no_penalty()
+
+async def finalize_mission(session: MissionSession, success: bool, reason: str, edit):
+    """임무 결과 정산 (보상 / 실패 처리 / 칭호 / 일일 의뢰). edit: 결과 화면을 표시할 함수"""
+    user = session.owner
+    selected = MISSIONS[session.mission_key]
+    user_stats = get_user_data(user.id)
+    old_rank = get_user_rank(user_stats.get("honor", 0))
+    inventory = user_stats.get("inventory", {})
+    if session.drink_pending and inventory.get(DRINK_ITEM, 0) > 0:   # 쿨타임 초기화 효과로 시작했다면 자양강장제 소모
+        inventory[DRINK_ITEM] -= 1
+        if inventory[DRINK_ITEM] <= 0:
+            del inventory[DRINK_ITEM]
+    if NO_COOLDOWN_ITEM not in inventory:   # 쿨타임은 임무가 끝난 시점부터 계산
+        fast = any(k in inventory for k in CHRONO_ITEMS)
+        mission_cooldowns[user.id] = time.time() + (MISSION_COOLDOWN_FAST_SEC if fast else MISSION_COOLDOWN_SEC)
+    current_loc = session.location
+    current_money = user_stats.get("money", 0)
+    current_honor = user_stats.get("honor", 0)
+
+    buff_desc = f"\n**적용된 효과:** {', '.join(session.buffs)}" if session.buffs else ""
+    record = f"\n\n**작전 기록**\n{_tail_lines(session.log, 800)}\n**최대 경계도:** `{int(session.peak_alert)}%`"
+    fail_msg = ""
+    rank_up_msg = ""
+
+    blob = get_title_blob(user_stats)
+    s = blob["stats"]
+
+    if success:
+        base_money = random.randint(*selected["reward"])
+        earned_money = int(base_money * session.money_mult)
+        earned_honor = int(selected["honor"] * session.honor_mult)
+
+        current_money += earned_money
+        current_honor += earned_honor
+
+        s["success"] += 1
+        s["streak"] += 1
+        s["best_streak"] = max(s["best_streak"], s["streak"])
+        if session.mission_key in ("mission_3", "mission_5"):
+            s["hard_success"] += 1
+
+        new_rank = get_user_rank(current_honor)
+        if old_rank != new_rank:
+            rank_up_msg = f"\n\n**[조직 승급 축하]** **{old_rank}** **{new_rank}**(으)로 승급하셨습니다!"
+
+        rank_up_msg += daily_record(blob, "mission", {**user_stats, "money": current_money, "honor": current_honor})
+
+        new_title_ids = evaluate_new_titles(blob, {**user_stats, "money": current_money, "honor": current_honor})
+        rank_up_msg += format_new_titles(new_title_ids)
+
+        embed = discord.Embed(
+            title=f"[{current_loc}] 임무 성공",
+            description=f"**{user.mention}** 님이 작전을 완수했습니다. {reason}{buff_desc}\n\n"
+                        f"**작전명:** {selected['title']}\n"
+                        f"**획득 보상금:** `${earned_money:,}`\n"
+                        f"**획득 명예:** `+{earned_honor} pt`\n\n"
+                        f"**현재 직급:** `{new_rank}`\n"
+                        f"**보유 자금:** `${current_money:,}`\n"
+                        f"**총 명예:** `{current_honor} pt`{record}{rank_up_msg}",
+            color=discord.Color.green()
+        )
+    else:
+        settings = user_stats.get("settings") or {}
+        guard_item_key = "임무 실패 방지권"
+        guard_used = False
+
+        if settings.get("auto_fail_guard", True) and inventory.get(guard_item_key, 0) > 0:
+            inventory[guard_item_key] -= 1
+            if inventory[guard_item_key] <= 0:
+                del inventory[guard_item_key]
+            guard_used = True
+
+        if guard_used:
+            fail_msg = "**[실패 방지권 발동]** 임무에 실패했으나, 가방에 있던 **임무 실패 방지권**이 소모되어 수배 및 벌금이 면제되었습니다!"
+        else:
+            fine = min(current_money, selected["fine"])
+            current_money -= fine
+            wanted_list[user.id] = datetime.now() + timedelta(seconds=60)
+            save_status(user.id)
+            fail_msg = f"**작전 실패!** 현장에 흔적이 남아 **1분간 경찰 지명수배 상태**가 됩니다! (벌금 `-${fine:,}`)"
+
+        s["fail"] += 1
+        s["streak"] = 0
+        new_title_ids = evaluate_new_titles(blob, user_stats)
+
+        current_rank = get_user_rank(current_honor)
+        embed = discord.Embed(
+            title=f"[{current_loc}] 임무 실패",
+            description=f"**{user.mention}** 님의 작전이 실패했습니다. {reason}{buff_desc}\n\n"
+                        f"**작전명:** {selected['title']}\n"
+                        f"{fail_msg}\n\n"
+                        f"**현재 직급:** `{current_rank}`\n"
+                        f"**보유 자금:** `${current_money:,}`\n"
+                        f"**총 명예:** `{current_honor} pt`{record}{format_new_titles(new_title_ids)}",
+            color=discord.Color.red()
+        )
+
+    try:
+        _require_db()
+        supabase.table("user_data").update({
+            "money": current_money,
+            "honor": current_honor,
+            "inventory": inventory,
+            "data": blob
+        }).eq("user_id", str(user.id)).execute()
+    except Exception as e:
+        print(f"DB Error (mission update): {e}")
+        embed = discord.Embed(title="[저장 오류]", description="DB 저장 중 오류가 발생해 임무 결과를 반영하지 못했습니다.",
+                              color=discord.Color.dark_grey())
+
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+
+    try:
+        await edit(embed=embed, view=None)
+    except discord.HTTPException as e:
+        print(f"Mission result edit error: {e}")
 
 # === 4. 암시장 드롭다운 뷰 ===
 class MarketSelect(discord.ui.Select):
@@ -5689,28 +6007,29 @@ async def execute_mission(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
-    await interaction.response.defer()
 
-    # [추가] 경찰은 조직원 임무를 수행할 수 없음
+    # [추가] 경찰은 조직원 임무를 수행할 수 없음 (공개 응답으로 바뀌지 않도록 defer 전에 안내)
     police_role = discord.utils.get(interaction.guild.roles, name="경찰")
     if police_role and police_role in interaction.user.roles:
-        await interaction.followup.send("치안국 경찰은 범죄 조직의 비밀 임무를 수행할 수 없습니다!", ephemeral=True)
+        await interaction.response.send_message("치안국 경찰은 범죄 조직의 비밀 임무를 수행할 수 없습니다!", ephemeral=True)
         return
 
     user = interaction.user
-    user_stats = get_user_data(user.id)
+    user_stats = await asyncio.to_thread(get_user_data, user.id)
     current_loc = user_stats.get("location", "레벤하임")
-
-    if user.id in hardcore_active:
-        await interaction.followup.send("이미 하드코어 작전을 수행 중입니다.", ephemeral=True)
-        return
 
     remain = int(mission_cooldowns.get(user.id, 0) - time.time() + 0.999)
     _inv = user_stats.get("inventory") or {}
     if remain > 0 and NO_COOLDOWN_ITEM not in _inv and _inv.get(DRINK_ITEM, 0) <= 0:
-        await interaction.followup.send(f"작전 준비 중입니다. **{remain}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
+        await interaction.response.send_message(f"작전 준비 중입니다. **{remain}초** 뒤에 다시 임무를 수행할 수 있습니다.", ephemeral=True)
         return
+    await interaction.response.defer()
 
+    # 설정(/설정)의 '하드코어'가 켜져 있으면 여러 단계의 현장 작업으로 진행
+    if get_setting(user_stats, "hardcore_mission"):
+        session = MissionSession(user, user_stats, interaction.guild_id)
+        session.message = await interaction.followup.send(embed=session.build_embed(), view=session, wait=True)
+        return
 
     embed = discord.Embed(
         title=f"[{current_loc}] 비밀 임무 작전 하달",
@@ -5991,44 +6310,39 @@ POLICE_SHOP_ITEMS = [
     {"id": "police_shield", "name": "치안국 강화 방탄복", "price": 4000, "desc": "경찰의 방어력을 대폭 강화합니다 (방어력 +35)", "def_bonus": 35},
     {"id": "police_radio", "name": "기동타격대 무전기", "price": 8000, "desc": "/검거 포상금 +20% · /작전 성공률 +5% (보유만 해도 자동 적용)", "bonus_type": "radio"},
     {"id": "police_badge", "name": "특급 수사관 황금 배지", "price": 20000, "desc": "방어력 +50 / 검거·순찰·심문·작전 명예 실적 +20%", "def_bonus": 50},
-    # --- /작전 성공률 장비 (보유만 해도 자동 적용, 전부 모으면 +20%) ---
-    {"id": "police_flashlight", "name": "전술 손전등", "price": 3000, "desc": "/작전 성공률 +2% (보유만 해도 자동 적용)", "op_bonus": 2},
-    {"id": "police_evidence_kit", "name": "현장 증거 채취 키트", "price": 6000, "desc": "/작전 성공률 +3% (보유만 해도 자동 적용)", "op_bonus": 3},
-    {"id": "police_profiling", "name": "범죄 프로파일링 자료집", "price": 10000, "desc": "/작전 성공률 +4% (보유만 해도 자동 적용)", "op_bonus": 4},
-    {"id": "police_informant", "name": "정보원 연락망 명부", "price": 15000, "desc": "/작전 성공률 +5% (보유만 해도 자동 적용)", "op_bonus": 5},
-    {"id": "police_command", "name": "작전 지휘 단말기", "price": 25000, "desc": "/작전 성공률 +6% (보유만 해도 자동 적용)", "op_bonus": 6},
+    # --- 고급 장비 (비싼 만큼 강력합니다. 공격력·방어력·체력은 모든 전투 콘텐츠에 반영되고, 서로 겹쳐서 적용됩니다) ---
+    {"id": "police_helmet", "name": "전술 방탄 헬멧", "price": 30000, "desc": "방어력 +25 / 체력 +1,500", "def_bonus": 25, "hp_bonus": 1500},
+    {"id": "police_rifle", "name": "치안국 제식 돌격소총", "price": 60000, "desc": "공격력 +200", "atk_bonus": 200},
+    {"id": "police_swat", "name": "특수작전 중장갑 전투복", "price": 90000, "desc": "방어력 +90 / 체력 +3,000", "def_bonus": 90, "hp_bonus": 3000},
+    {"id": "police_terminal", "name": "광역 수사망 단말기", "price": 120000, "desc": "구역 탈환 포상금 +25% / 탈환 비용 50% 할인", "bonus_type": "terminal"},
+    {"id": "police_sniper", "name": "대테러 저격 소총", "price": 150000, "desc": "공격력 +350", "atk_bonus": 350},
+    {"id": "police_insignia", "name": "치안총감 지휘 휘장", "price": 250000, "desc": "방어력 +60 / 체력 +2,000 / 명예 실적 +15%", "def_bonus": 60, "hp_bonus": 2000, "bonus_type": "insignia"},
 ]
 
 # --- 치안국 보급품 효과 ---
 #   • 강화 방탄복 / 황금 배지 : 방어력 (compute_combat_stats 가 전투·결투·레이드·점령전에 모두 반영)
 #   • 기동타격대 무전기       : /검거 포상금 배율, /작전 성공률 +5%
-#   • 작전 성공률 장비 5종    : 전술 손전등 +2 / 증거 채취 키트 +3 / 프로파일링 자료집 +4 / 정보원 명부 +5 / 지휘 단말기 +6 (%)
 #   • 황금 배지               : /검거 · /순찰 · /심문(의견 일치) · /작전 명예 실적 배율
 POLICE_RADIO_NAME = "기동타격대 무전기"
 POLICE_BADGE_NAME = "특급 수사관 황금 배지"
+POLICE_INSIGNIA_NAME = "치안총감 지휘 휘장"
+POLICE_TERMINAL_NAME = "광역 수사망 단말기"
+POLICE_INSIGNIA_HONOR_BONUS = 0.15   # 지휘 휘장: 명예 실적 +15% (황금 배지와 합산)
+POLICE_TERMINAL_PRIZE_BONUS = 0.25   # 수사망 단말기: 구역 탈환 포상금 +25%
+POLICE_TERMINAL_COST_DISCOUNT = 0.50 # 수사망 단말기: 구역 탈환 비용 할인
 POLICE_RADIO_ARREST_BONUS = 0.20    # 무전기: 검거 포상금 +20%
 POLICE_BADGE_HONOR_BONUS = 0.20     # 황금 배지: 명예 실적 +20%
 ARREST_BASE_REWARD = 500            # /검거 기본 포상금
-ARREST_BASE_HONOR = 60              # /검거 기본 명예 실적
-ARREST_HONOR_PER_POINT = 25         # 수배범 명예 25pt 당 검거 명예 +1  (거물 검거 보너스)
-ARREST_HONOR_BONUS_MAX = 200        # 거물 검거 보너스 상한  → 검거 1회 명예 60 ~ 260
-
-def police_equipment_op_bonuses(inventory) -> list:
-    """보유 중인 치안국 보급품이 주는 /작전 성공률 보너스 (성공률 %, 표시 문구) 목록"""
-    inv = inventory or {}
-    out = []
-    if POLICE_RADIO_NAME in inv:
-        out.append((POLICE_RADIO_OP_BONUS, f"기동타격대 무전기 (+{POLICE_RADIO_OP_BONUS}%)"))
-    for it in POLICE_SHOP_ITEMS:
-        if it.get("op_bonus") and it["name"] in inv:
-            out.append((it["op_bonus"], f"{it['name']} (+{it['op_bonus']}%)"))
-    return out
+ARREST_BASE_HONOR = 30              # /검거 기본 명예 실적
+ARREST_HONOR_PER_POINT = 50         # 수배범 명예 50pt 당 검거 명예 +1  (거물 검거 보너스)
+ARREST_HONOR_BONUS_MAX = 100        # 거물 검거 보너스 상한  → 검거 1회 명예 30 ~ 130
 
 def police_bonuses(inventory) -> dict:
     inv = inventory or {}
     return {
         "money_mult": 1.0 + (POLICE_RADIO_ARREST_BONUS if POLICE_RADIO_NAME in inv else 0.0),
-        "honor_mult": 1.0 + (POLICE_BADGE_HONOR_BONUS if POLICE_BADGE_NAME in inv else 0.0),
+        "honor_mult": 1.0 + (POLICE_BADGE_HONOR_BONUS if POLICE_BADGE_NAME in inv else 0.0)
+                          + (POLICE_INSIGNIA_HONOR_BONUS if POLICE_INSIGNIA_NAME in inv else 0.0),
     }
 
 class PoliceShopSelect(discord.ui.Select):
@@ -6239,7 +6553,6 @@ async def kick_member(interaction: discord.Interaction, member: discord.Member, 
     app_commands.Choice(name="밀수 거래 (/밀수)", value="밀수"),
     app_commands.Choice(name="조직(패밀리) (/조직)", value="조직"),
     app_commands.Choice(name="조직 레이드 (/레이드)", value="레이드"),
-    app_commands.Choice(name="시민 활동 (/낚시 /배달 /제보 /복권)", value="시민"),
     app_commands.Choice(name="Utopia Of Eden (세계관)", value="유토피아 오브 에덴")
 ])
 async def info_command(interaction: discord.Interaction, keyword: str):
@@ -6291,7 +6604,7 @@ async def info_command(interaction: discord.Interaction, keyword: str):
         },
         "설정": {
             "title": "시스템: /설정",
-            "desc": "임무 실패 방지권 자동 사용 여부, 임무(작전) 수행 하드코어(5단계 직접 수행, 2~3분 소요), 이벤트 긴급 알림 등 내 플레이 환경을 직접 커스텀할 수 있는 설정 창입니다.",
+            "desc": "임무 실패 방지권 자동 사용 여부, 이벤트 긴급 알림 등 내 플레이 환경을 직접 커스텀할 수 있는 설정 창입니다.",
         },
         "이동": {
             "title": "시스템: /이동 [지역명]",
@@ -6300,19 +6613,7 @@ async def info_command(interaction: discord.Interaction, keyword: str):
         },
         "아르바이트": {
             "title": "시스템: /아르바이트",
-            "desc": "시민/공용 전용 안전 자금 수급처입니다. 위험 부담 없이 정직한 노동으로 소량의 돈을 획득합니다.\n"
-                    "• 누적 100회를 완료하면 특수 칭호 **도시의 일꾼** 을 얻습니다. (`/칭호` 에서 장착)",
-        },
-        "시민": {
-            "title": "시스템: 시민 활동 (/아르바이트 /낚시 /배달 /제보 /복권)",
-            "desc": f"가입 전의 시민도 할 수 있는 활동입니다. (마피아·경찰도 /제보 를 뺀 나머지는 쓸 수 있습니다)\n"
-                    f"• **/아르바이트:** 안전한 소액 수입. 100회 달성 시 칭호 **도시의 일꾼**\n"
-                    f"• **/낚시:** {FISH_COOLDOWN_SEC}초마다 낚시. 운이 좋으면 대어나 보물 상자가 걸립니다.\n"
-                    f"• **/배달:** 일반 배송(안전) 또는 특급 배송(성공 {int(DELIVERY_EXPRESS_SUCCESS * 100)}% / 실패 시 배상금 ${DELIVERY_EXPRESS_FINE:,})\n"
-                    f"• **/제보 [대상]:** 지명수배 중인 마피아를 익명으로 제보하면 사례금 ${TIP_REWARD:,}, 대상의 수배 시간이 늘어납니다. "
-                    f"수배 중이 아니면 허위 제보로 벌금 ${TIP_FALSE_FINE:,}\n"
-                    f"• **/복권:** 1장 ${LOTTERY_PRICE:,}, 최대 {LOTTERY_MAX_TICKETS}장. 1등 ${LOTTERY_PRIZES[0][2]:,}\n"
-                    "• 자금만 다루며 명예는 주지 않습니다.",
+            "desc": "시민/공용 전용 안전 자금 수급처입니다. 위험 부담 없이 정직한 노동으로 소량의 돈을 획득합니다.",
         },
         "송금": {
             "title": "명령어: /송금 [대상] [금액]",
@@ -6346,8 +6647,13 @@ async def info_command(interaction: discord.Interaction, keyword: str):
                     "• **치안국 강화 방탄복:** 방어력 +35\n"
                     "• **기동타격대 무전기:** `/검거` 포상금 +20% / `/작전` 성공률 +5%\n"
                     "• **특급 수사관 황금 배지:** 방어력 +50 / `/검거`·`/순찰`·`/심문`·`/작전` 명예 실적 +20%\n"
-                    "• **작전 성공률 장비:** 전술 손전등 +2% / 현장 증거 채취 키트 +3% / 범죄 프로파일링 자료집 +4% / 정보원 연락망 명부 +5% / 작전 지휘 단말기 +6% (`/작전` 성공률, 전부 모으면 +20%)\n"
-                    "방어력은 `/능력치`에서 확인할 수 있습니다.",
+                    "• **전술 방탄 헬멧:** 방어력 +25 / 체력 +1,500\n"
+                    "• **치안국 제식 돌격소총:** 공격력 +200\n"
+                    "• **특수작전 중장갑 전투복:** 방어력 +90 / 체력 +3,000\n"
+                    "• **광역 수사망 단말기:** `/구역 탈환` 포상금 +25% / 비용 50% 할인\n"
+                    "• **대테러 저격 소총:** 공격력 +350\n"
+                    "• **치안총감 지휘 휘장:** 방어력 +60 / 체력 +2,000 / 명예 실적 +15%\n"
+                    "능력치는 `/능력치`에서 확인할 수 있습니다.",
         },
         "무기상점": {
             "title": "명령어: /무기상점",
@@ -6470,19 +6776,19 @@ RAID_TIERS = {
     "rat": {
         "name": "하수구의 쥐왕", "min_players": 2, "min_honor": 0, "cost": 1000,
         "hits": 38, "def_ratio": 0.25, "aoe": 0.07, "aoe_enrage": 0.10,
-        "money": 3000, "honor": 30, "points": 10,
+        "money": 3000, "honor": 15, "points": 10,
         "desc": "하수도를 지배하는 거대한 쥐떼의 왕. 입문자용 레이드입니다.",
     },
     "bull": {
         "name": "부두 항만의 폭군", "min_players": 3, "min_honor": 1500, "cost": 3000,
         "hits": 46, "def_ratio": 0.30, "aoe": 0.09, "aoe_enrage": 0.13,
-        "money": 7000, "honor": 60, "points": 25,
+        "money": 7000, "honor": 30, "points": 25,
         "desc": "에르느코항 부두를 장악한 괴력의 폭군. 응급처치 담당이 꼭 필요합니다.",
     },
     "king": {
         "name": "칼렌데 지하 황제", "min_players": 4, "min_honor": 4000, "cost": 8000,
         "hits": 54, "def_ratio": 0.35, "aoe": 0.09, "aoe_enrage": 0.13,
-        "money": 14000, "honor": 100, "points": 60,
+        "money": 14000, "honor": 50, "points": 60,
         "desc": "칼렌데 지하 세계의 진짜 주인. 정상급 조직만이 도전할 수 있습니다.",
     },
 }
@@ -7432,6 +7738,8 @@ async def raid_info_cmd(interaction: discord.Interaction):
 #       - 수비 조직원이 한 명도 참전하지 않으면 NPC 수비대가 구역을 지킵니다.
 #       - 점령에 성공하면 TERRITORY_PROTECT_SEC 동안 보호(공격 불가), 수비에 성공해도 짧게 보호됩니다.
 #       - 경찰이 /순찰 중인 지역에서는 점령/선전포고를 할 수 없습니다.
+#   • 경찰의 /구역 탈환 : 조직원이 점령한 구역을 치안국이 되찾는 작전 (공격=경찰 / 수비=구역 주인 조직원, 같은 점령전 방식)
+#       - 탈환에 성공하면 구역이 압수되어 주인 없는 구역이 됩니다. 비용·인원·보상은 RECAPTURE_* 상수로 조절합니다.
 #   • 구역 소유 정보는 Supabase `territories` 테이블(territory.sql)에 저장되어 봇을 재시작해도 유지됩니다.
 #     (진행 중인 점령전 자체는 레이드처럼 메모리에만 있어서, 재시작되면 사라집니다.)
 #   • 밸런스는 아래 상수만 바꾸면 됩니다.
@@ -7469,7 +7777,7 @@ WAR_FAMILY_COOLDOWN_SEC = 1800      # 선전포고한 조직의 재선포 대기
 WAR_PRIZE_HOURS = 4                 # 전리품 = 구역 시간당 수입 × 이 값 (승리 측이 나눠 가짐)
 WAR_BASE_SHARE = 0.6                # 전리품 중 '균등 분배' 비율 (나머지는 딜량 비례)
 WAR_LOSE_MONEY_RATIO = 0.15         # 패배 측 참전자(공격 1회 이상)에게 나눠주는 위로금 비율
-WAR_WIN_HONOR = 20                  # 승리 측 명예 (공격 1회 이상 한 사람만)
+WAR_WIN_HONOR = 10                  # 승리 측 명예 (공격 1회 이상 한 사람만)
 
 TERRITORY_DB_ERROR_MSG = "구역 DB 처리 중 오류가 발생했습니다. (관리자: `territories` 테이블이 만들어져 있는지 확인해 주세요 — territory.sql 참고)"
 
@@ -7477,6 +7785,13 @@ active_wars = {}             # {(guild_id, location): WarSession}
 war_family_map = {}          # {str(family_id): WarSession}  (공격·수비 양쪽 조직)
 war_user_map = {}            # {user_id: WarSession}
 war_family_cooldowns = {}    # {str(family_id): epoch}
+
+# --- 경찰의 구역 탈환 (조직원이 점령한 구역을 치안국이 되찾는 작전. 점령전 엔진을 그대로 씁니다) ---
+RECAPTURE_COST = 3000               # 탈환 비용 (작전 책임자 개인 자금 / 모집 실패·취소 시 환불)
+RECAPTURE_MIN_ATTACKERS = 2         # 경찰 최소 인원
+RECAPTURE_COOLDOWN_SEC = 1800       # 탈환 작전 재신청 대기시간 (작전 책임자 기준)
+RECAPTURE_WIN_HONOR = 15            # 탈환 성공 시 경찰 명예 (공격 1회 이상 한 사람만)
+recapture_cooldowns = {}            # {user_id: epoch}
 
 
 def _terr_info(loc: str) -> dict:
@@ -7550,7 +7865,12 @@ class WarPlayer:
 
 
 class WarSession:
-    def __init__(self, guild_id: int, location: str, atk_fam: dict, def_fam: dict, starter: discord.Member):
+    def __init__(self, guild_id: int, location: str, atk_fam: dict, def_fam: dict, starter: discord.Member,
+                 recapture: bool = False, cost: int = 0):
+        self.recapture = recapture        # True: 경찰이 공격 측인 '구역 탈환 작전'
+        self.cost = cost if recapture else WAR_COST
+        self.min_atk = RECAPTURE_MIN_ATTACKERS if recapture else WAR_MIN_ATTACKERS
+        self.label = "탈환전" if recapture else "점령전"
         self.guild_id = guild_id
         self.location = location
         self.aid = atk_fam["id"]
@@ -7608,10 +7928,13 @@ def war_lobby_embed(s: WarSession) -> discord.Embed:
         return "\n".join(f"• {p.member.mention} (HP {p.max_hp:,} / ATK {p.atk:,})" for p in ps) or "-"
     atk, dfn = s.side_players("A"), s.side_players("D")
     embed = discord.Embed(
-        title=f"[구역 선전포고] {s.location}",
-        description=(f"**「{s.atk_name}」** 이(가) **「{s.def_name}」** 의 구역을 노립니다!\n\n"
-                     f"**전리품(승리 측 분배):** `${s.prize:,}` / 명예 `+{WAR_WIN_HONOR}pt`\n"
-                     f"**공격 최소 인원:** {WAR_MIN_ATTACKERS}명 · 한쪽 최대 {WAR_MAX_PER_SIDE}명\n"
+        title=(f"[구역 탈환 작전] {s.location}" if s.recapture else f"[구역 선전포고] {s.location}"),
+        description=((f"**치안국** 이(가) **「{s.def_name}」** 이(가) 점령한 구역을 되찾으려 합니다!\n"
+                      f"경찰은 `공격 참전`, 해당 조직의 조직원은 `수비 참전` 을 눌러 주세요.\n\n" if s.recapture
+                      else f"**「{s.atk_name}」** 이(가) **「{s.def_name}」** 의 구역을 노립니다!\n\n") +
+                     f"**전리품(승리 측 분배):** `${s.prize:,}` / 명예 `+{RECAPTURE_WIN_HONOR if s.recapture else WAR_WIN_HONOR}pt`\n"
+                     + (f"**탈환에 성공하면 구역이 압수되어 주인 없는 구역이 됩니다.**\n" if s.recapture else "") +
+                     f"**공격 최소 인원:** {s.min_atk}명 · 한쪽 최대 {WAR_MAX_PER_SIDE}명\n"
                      f"**{WAR_LOBBY_SEC}초** 안에 참전해 주세요. 수비 조직원이 아무도 오지 않으면 **NPC 수비대**가 구역을 지킵니다."),
         color=discord.Color.dark_red()
     )
@@ -7625,7 +7948,7 @@ def war_fight_embed(s: WarSession) -> discord.Embed:
         return max(0, int(s.pool[side] * 100 / max(1, s.pool_max[side])))
     dname = "NPC 수비대" if s.npc else f"「{s.def_name}」"
     embed = discord.Embed(
-        title=f"[구역 점령전] {s.location}",
+        title=f"[구역 {s.label}] {s.location}",
         description=(f"공격 「{s.atk_name}」\n`{_bar(s.pool['A'], s.pool_max['A'], 16)}` **{pct('A')}%**\n"
                      f"수비 {dname}\n`{_bar(s.pool['D'], s.pool_max['D'], 16)}` **{pct('D')}%**\n"
                      f"종료 <t:{int(s.fight_end)}:R> (시간 종료 시 남은 병력 비율이 높은 쪽이 승리, 동률이면 수비 승리)"),
@@ -7658,7 +7981,12 @@ class WarLobbyView(discord.ui.View):
         if user.id in war_user_map or user.id in raid_user_map:
             await interaction.response.send_message("이미 다른 점령전/레이드에 참가 중입니다.", ephemeral=True)
             return
-        if not _is_mafia(user) or _is_jailed(user.id):
+        police_side = s.recapture and side == "A"   # 탈환 작전의 공격 측은 경찰
+        if police_side:
+            if not _is_police(user) or _is_jailed(user.id):
+                await interaction.response.send_message("탈환 작전의 공격은 경찰만(감옥 수감 중 제외) 참전할 수 있습니다.", ephemeral=True)
+                return
+        elif not _is_mafia(user) or _is_jailed(user.id):
             await interaction.response.send_message("마피아 조직원만(감옥 수감 중 제외) 참전할 수 있습니다.", ephemeral=True)
             return
         if len(s.side_players(side)) >= WAR_MAX_PER_SIDE:
@@ -7666,11 +7994,12 @@ class WarLobbyView(discord.ui.View):
             return
         fid = s.aid if side == "A" else s.did
         try:
-            fam = family_get_by_id(fid)
-            if not fam or str(user.id) not in (fam.get("member_ids") or []):
-                who = "공격" if side == "A" else "수비"
-                await interaction.response.send_message(f"**{who} 조직**의 조직원만 이 버튼으로 참전할 수 있습니다.", ephemeral=True)
-                return
+            if not police_side:
+                fam = family_get_by_id(fid)
+                if not fam or str(user.id) not in (fam.get("member_ids") or []):
+                    who = "공격" if side == "A" else "수비"
+                    await interaction.response.send_message(f"**{who} 조직**의 조직원만 이 버튼으로 참전할 수 있습니다.", ephemeral=True)
+                    return
             info = get_user_data(user.id)
         except Exception as e:
             print(f"War join error: {e}")
@@ -7698,8 +8027,8 @@ class WarLobbyView(discord.ui.View):
             await interaction.response.send_message("선전포고한 사람만 시작할 수 있습니다.", ephemeral=True)
             return
         n = len(s.side_players("A"))
-        if n < WAR_MIN_ATTACKERS:
-            await interaction.response.send_message(f"공격 인원이 최소 **{WAR_MIN_ATTACKERS}명** 필요합니다. (현재 {n}명)", ephemeral=True)
+        if n < s.min_atk:
+            await interaction.response.send_message(f"공격 인원이 최소 **{s.min_atk}명** 필요합니다. (현재 {n}명)", ephemeral=True)
             return
         await interaction.response.defer()
         s.start_event.set()
@@ -7786,6 +8115,9 @@ class WarFightView(discord.ui.View):
 
 # ---------------------------------------------------------------- 진행 / 정산
 def _war_refund_sync(s: WarSession):
+    if s.recapture:   # 탈환 비용은 작전 책임자 개인에게 돌려준다
+        update_user_stats(s.starter.id, s.cost, 0)
+        return
     fam = family_get_by_id(s.aid)
     if fam:
         family_update(s.aid, {"treasury": fam.get("treasury", 0) + WAR_COST})
@@ -7796,6 +8128,8 @@ def _war_still_valid_sync(s: WarSession) -> bool:
     row = terr_get(s.guild_id, s.location)
     if not row or row["family_id"] != str(s.did):
         return False
+    if s.recapture:
+        return True   # 경찰은 구역 보유 한도가 없다
     return len(terr_list_by_family(s.aid)) < TERRITORY_MAX_PER_FAMILY
 
 
@@ -7809,15 +8143,22 @@ def _war_settle_sync(s: WarSession, atk_win: bool):
     for p in winners:
         share = (p.dmg_done / win_dmg) if win_dmg > 0 else (1 / max(1, len(winners)))
         money = int(s.prize * (WAR_BASE_SHARE / max(1, len(winners)) + (1 - WAR_BASE_SHARE) * share))
-        honor = WAR_WIN_HONOR if p.hits > 0 else 0
+        police_atk = s.recapture and p.side == "A"
+        honor = (RECAPTURE_WIN_HONOR if police_atk else WAR_WIN_HONOR) if p.hits > 0 else 0
         if p.hits <= 0:
             money = 0   # 한 번도 공격하지 않으면 받을 수 없음
+        elif police_atk:   # 광역 수사망 단말기: 탈환 포상금 +25%
+            try:
+                if POLICE_TERMINAL_NAME in (get_user_data(p.uid).get("inventory") or {}):
+                    money = int(money * (1 + POLICE_TERMINAL_PRIZE_BONUS))
+            except Exception as e:
+                print(f"Recapture bonus error: {e}")
         try:
             update_user_stats(p.uid, money, honor)
         except Exception as e:
             print(f"War reward error: {e}")
         results.append((p, money, honor, True))
-        if p.hits > 0:   # 업적 카운터 (구역 점령전 승리 / 공격 측 승리 = 구역 점령)
+        if p.hits > 0 and not (s.recapture and p.side == "A"):   # 업적 카운터 (구역 점령전 승리 / 공격 측 승리 = 구역 점령)
             try:
                 incs = {"war_wins": 1}
                 if atk_win:
@@ -7838,7 +8179,11 @@ def _war_settle_sync(s: WarSession, atk_win: bool):
     note = ""
     row = terr_get(s.guild_id, s.location)
     if row and row["family_id"] == str(s.did):
-        if atk_win:
+        if atk_win and s.recapture:
+            terr_delete(row["id"])   # 경찰의 탈환 성공: 구역 압수 (미수금도 몰수)
+            note = (f"**{s.location}** 의 구역이 치안국에 **압수**되어 주인 없는 구역이 되었습니다! "
+                    f"(쌓여 있던 미수금도 몰수) `/구역 점령` 으로 다시 차지할 수 있습니다.")
+        elif atk_win:
             # 수비 조직이 아직 못 거둔 수입은 금고로 정산해 준다
             accrued = terr_accrued(row, now)
             try:
@@ -7859,9 +8204,12 @@ def _war_settle_sync(s: WarSession, atk_win: bool):
             note = f"**「{s.def_name}」** 이(가) 구역을 지켜냈습니다!"
     else:
         note = "구역 주인이 바뀌어 점령 결과가 반영되지 않았습니다."
-    win_fid, lose_fid = (s.aid, s.did) if atk_win else (s.did, s.aid)
-    family_stat_inc(win_fid, "war_wins")
-    family_stat_inc(lose_fid, "war_losses")
+    if s.recapture:   # 치안국은 조직이 아니므로 수비 조직의 기록만 갱신
+        family_stat_inc(s.did, "war_losses" if atk_win else "war_wins")
+    else:
+        win_fid, lose_fid = (s.aid, s.did) if atk_win else (s.did, s.aid)
+        family_stat_inc(win_fid, "war_wins")
+        family_stat_inc(lose_fid, "war_losses")
     return results, note
 
 
@@ -7875,9 +8223,9 @@ async def run_war(s: WarSession):
 
         n_atk = len(s.side_players("A"))
         valid = True
-        if not s.cancelled and n_atk >= WAR_MIN_ATTACKERS:
+        if not s.cancelled and n_atk >= s.min_atk:
             valid = await asyncio.to_thread(_war_still_valid_sync, s)
-        if s.cancelled or n_atk < WAR_MIN_ATTACKERS or not valid:
+        if s.cancelled or n_atk < s.min_atk or not valid:
             s.state = "done"
             try:
                 await asyncio.to_thread(_war_refund_sync, s)
@@ -7885,11 +8233,12 @@ async def run_war(s: WarSession):
                 print(f"War refund error: {e}")
             if s.cancelled:
                 reason = "선전포고한 사람이 점령전을 취소했습니다."
-            elif n_atk < WAR_MIN_ATTACKERS:
-                reason = f"공격 최소 인원({WAR_MIN_ATTACKERS}명)이 모이지 않았습니다."
+            elif n_atk < s.min_atk:
+                reason = f"공격 최소 인원({s.min_atk}명)이 모이지 않았습니다."
             else:
                 reason = "구역 상황이 바뀌어(주인 변경/보유 한도) 점령전을 진행할 수 없습니다."
-            embed = discord.Embed(title="[점령전 취소]", description=f"{reason}\n선전포고 비용 `${WAR_COST:,}` 은(는) 조직 금고로 반환되었습니다.", color=discord.Color.dark_grey())
+            refund_to = "작전 책임자에게" if s.recapture else "조직 금고로"
+            embed = discord.Embed(title=f"[{s.label} 취소]", description=f"{reason}\n{'탈환' if s.recapture else '선전포고'} 비용 `${s.cost:,}` 은(는) {refund_to} 반환되었습니다.", color=discord.Color.dark_grey())
             await _war_edit(s, embed=embed, view=None)
             return
 
@@ -7906,7 +8255,10 @@ async def run_war(s: WarSession):
         s.state = "fighting"
         s.fight_started = True
         s.fight_end = time.time() + WAR_DURATION_SEC
-        war_family_cooldowns[str(s.aid)] = time.time() + WAR_FAMILY_COOLDOWN_SEC
+        if s.recapture:
+            recapture_cooldowns[s.starter.id] = time.time() + RECAPTURE_COOLDOWN_SEC
+        else:
+            war_family_cooldowns[str(s.aid)] = time.time() + WAR_FAMILY_COOLDOWN_SEC
         s.log(f"점령전 시작! 공격 {len(atk_players)}명 vs " + ("NPC 수비대" if s.npc else f"수비 {len(def_players)}명"))
         await _war_edit(s, embed=war_fight_embed(s), view=WarFightView(s))
 
@@ -7940,7 +8292,10 @@ async def run_war(s: WarSession):
 
         # ── 4) 정산
         results, note = await asyncio.to_thread(_war_settle_sync, s, atk_win)
-        title, color = ("[점령전 - 공격 측 승리]", discord.Color.gold()) if atk_win else ("[점령전 - 수비 측 승리]", discord.Color.blue())
+        if s.recapture:
+            title, color = ("[탈환전 - 치안국 승리]", discord.Color.gold()) if atk_win else ("[탈환전 - 조직 수비 성공]", discord.Color.blue())
+        else:
+            title, color = ("[점령전 - 공격 측 승리]", discord.Color.gold()) if atk_win else ("[점령전 - 수비 측 승리]", discord.Color.blue())
         lines = []
         for p, money, honor, won in sorted(results, key=lambda r: -r[0].dmg_done):
             side = "공격" if p.side == "A" else "수비"
@@ -7965,7 +8320,7 @@ async def run_war(s: WarSession):
 
 
 # ================================================================ /구역
-territory_group = app_commands.Group(name="구역", description="[패밀리] 구역을 점령하고 수익을 거둡니다.")
+territory_group = app_commands.Group(name="구역", description="[패밀리/경찰] 구역을 점령하고 수익을 거둡니다. (경찰은 /구역 탈환)")
 bot.tree.add_command(territory_group)
 
 _LOCATION_CHOICES = [app_commands.Choice(name=k, value=k) for k in LOCATIONS]
@@ -8139,6 +8494,74 @@ async def territory_war_cmd(interaction: discord.Interaction, 지역: app_comman
     ping = f"<@{session.def_owner_id}> " if session.def_owner_id else ""
     await interaction.response.send_message(
         content=f"{ping}**「{session.def_name}」** 의 **{loc}** 에 선전포고가 날아왔습니다! 조직원은 `수비 참전`을 눌러 구역을 지키세요!",
+        embed=war_lobby_embed(session), view=WarLobbyView(session))
+    session.message = await interaction.original_response()
+    asyncio.create_task(run_war(session))
+
+
+@territory_group.command(name="탈환", description=f"[경찰] 조직원이 점령한 구역을 되찾는 탈환 작전을 엽니다. (비용 ${RECAPTURE_COST:,} / 경찰 {RECAPTURE_MIN_ATTACKERS}명 이상)")
+@app_commands.describe(지역="되찾을 지역")
+@app_commands.choices(지역=_LOCATION_CHOICES)
+async def territory_recapture_cmd(interaction: discord.Interaction, 지역: app_commands.Choice[str]):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+    user = interaction.user
+    if not _is_police(user):
+        await interaction.response.send_message("구역 탈환 작전은 치안국 경찰만 열 수 있습니다.", ephemeral=True)
+        return
+    loc = 지역.value
+    guild_id = interaction.guild_id
+    try:
+        if user.id in war_user_map or user.id in raid_user_map:
+            await interaction.response.send_message("이미 점령전(또는 레이드)에 참여 중입니다.", ephemeral=True)
+            return
+        cd = recapture_cooldowns.get(user.id, 0)
+        if time.time() < cd:
+            await interaction.response.send_message(f"작전 정비 중입니다. **{_fmt_sec(cd - time.time())}** 뒤에 다시 탈환 작전을 열 수 있습니다.", ephemeral=True)
+            return
+        row = terr_get(guild_id, loc)
+        if not row:
+            await interaction.response.send_message("주인 없는 구역입니다. 탈환할 구역이 없습니다.", ephemeral=True)
+            return
+        prot = float(row.get("protected_until") or 0) - time.time()
+        if prot > 0:
+            await interaction.response.send_message(f"이 구역은 보호 중입니다. **{_fmt_sec(prot)}** 뒤에 탈환할 수 있습니다.", ephemeral=True)
+            return
+        if row["family_id"] in war_family_map or (guild_id, loc) in active_wars:
+            await interaction.response.send_message("해당 조직(또는 이 구역)이 이미 점령전·탈환전에 휘말려 있습니다.", ephemeral=True)
+            return
+        dfam = family_get_by_id(row["family_id"])
+        if not dfam:
+            await interaction.response.send_message("구역 주인 정보를 찾을 수 없습니다. 잠시 뒤 다시 시도해 주세요.", ephemeral=True)
+            return
+        info = get_user_data(user.id)
+        cost = RECAPTURE_COST
+        if POLICE_TERMINAL_NAME in (info.get("inventory") or {}):
+            cost = int(cost * (1 - POLICE_TERMINAL_COST_DISCOUNT))
+        if int(info.get("money") or 0) < cost:
+            await interaction.response.send_message(f"자금이 부족합니다. (탈환 비용 `${cost:,}` / 보유 `${int(info.get('money') or 0):,}`)", ephemeral=True)
+            return
+
+        # 자리 선점 (여기부터 await 전까지는 다른 명령어가 끼어들 수 없음)
+        session = WarSession(guild_id, loc, {"id": "POLICE", "name": "치안국"}, dfam, user, recapture=True, cost=cost)
+        session.players[user.id] = WarPlayer(user, "A", compute_combat_stats(info["honor"], info.get("inventory", {})))
+        active_wars[(guild_id, loc)] = session
+        war_family_map[str(dfam["id"])] = session
+        war_user_map[user.id] = session
+        try:
+            update_user_stats(user.id, -cost, 0)
+        except Exception:
+            war_release(session)
+            raise
+    except Exception as e:
+        await report_error("/구역 탈환", e, interaction)
+        await interaction.response.send_message(TERRITORY_DB_ERROR_MSG, ephemeral=True)
+        return
+
+    ping = f"<@{session.def_owner_id}> " if session.def_owner_id else ""
+    await interaction.response.send_message(
+        content=f"{ping}치안국이 **「{session.def_name}」** 의 **{loc}** 탈환 작전을 개시했습니다! 조직원은 `수비 참전`을 눌러 구역을 지키세요!",
         embed=war_lobby_embed(session), view=WarLobbyView(session))
     session.message = await interaction.original_response()
     asyncio.create_task(run_war(session))
@@ -9111,7 +9534,8 @@ def combat_stats_breakdown(honor: int, inventory: dict) -> dict:
         "weapon": weapon,
         "armor": armor,
         "ticket": "임무 실패 방지권" in inventory,
-        "police": [(it["name"], it["def_bonus"]) for it in POLICE_SHOP_ITEMS if it.get("def_bonus") and it["name"] in inventory],
+        "police": [(it["name"], it.get("atk_bonus", 0), it.get("hp_bonus", 0), it.get("def_bonus", 0))
+                   for it in POLICE_SHOP_ITEMS if it["name"] in inventory and (it.get("atk_bonus") or it.get("hp_bonus") or it.get("def_bonus"))],
         "unused": unused,
         "total": compute_combat_stats(honor, inventory),   # 실제 전투에서 쓰는 값
     }
@@ -9142,15 +9566,17 @@ def build_stats_embed(target: discord.abc.User, data: dict) -> discord.Embed:
         lines.append("• **방어구**: 없음 (`/제작`에서 만들 수 있습니다)")
     if b["ticket"]:
         lines.append("• **임무 실패 방지권**: 방어력 +20")
-    for pname, pdef in b["police"]:
-        lines.append(f"• **치안국 보급품** {pname}: 방어력 +{pdef}")
+    for pname, patk, php, pdef in b["police"]:
+        parts = ([f"공격력 +{patk:,}"] if patk else []) + ([f"방어력 +{pdef:,}"] if pdef else []) + ([f"체력 +{php:,}"] if php else [])
+        lines.append(f"• **치안국 보급품** {pname}: " + " / ".join(parts))
     if POLICE_RADIO_NAME in inv:
         lines.append(f"• **{POLICE_RADIO_NAME}**: /검거 포상금 +{round(POLICE_RADIO_ARREST_BONUS * 100)}% · /작전 성공률 +{POLICE_RADIO_OP_BONUS}%")
-    for it in POLICE_SHOP_ITEMS:
-        if it.get("op_bonus") and it["name"] in inv:
-            lines.append(f"• **{it['name']}**: /작전 성공률 +{it['op_bonus']}%")
     if POLICE_BADGE_NAME in inv:
         lines.append(f"• **{POLICE_BADGE_NAME}**: 검거·순찰·심문·작전 명예 실적 +{round(POLICE_BADGE_HONOR_BONUS * 100)}%")
+    if POLICE_INSIGNIA_NAME in inv:
+        lines.append(f"• **{POLICE_INSIGNIA_NAME}**: 명예 실적 +{round(POLICE_INSIGNIA_HONOR_BONUS * 100)}%")
+    if POLICE_TERMINAL_NAME in inv:
+        lines.append(f"• **{POLICE_TERMINAL_NAME}**: 구역 탈환 포상금 +{round(POLICE_TERMINAL_PRIZE_BONUS * 100)}% / 탈환 비용 {round(POLICE_TERMINAL_COST_DISCOUNT * 100)}% 할인")
     embed.add_field(name="능력치 구성", value="\n".join(lines), inline=False)
 
     if b["unused"]:
@@ -9710,9 +10136,7 @@ HELP_CATEGORIES = [
     ("start",   "시작 · 정보",          "가입과 내 정보 확인, 설정, 랭킹 등 기본이 되는 명령어입니다.",
      ["도움말", "가입", "탈퇴", "프로필", "정보", "설정", "일퀘", "칭호", "업적", "랭킹"]),
     ("economy", "이동 · 상점 · 경제",   "거점 이동, 장비 구매, 자금 이체, 제작 등 돈과 장비에 관한 명령어입니다.",
-     ["이동", "암시장", "무기상점", "인벤토리", "송금", "제작", "경매"]),
-    ("citizen", "시민 생활",         "가입하지 않은 시민도 할 수 있는 활동입니다. (명예는 주지 않고 자금만 다룹니다)",
-     ["아르바이트", "낚시", "배달", "제보", "복권"]),
+     ["이동", "암시장", "무기상점", "인벤토리", "송금", "아르바이트", "제작", "경매"]),
     ("mafia",   "마피아 활동",          "비밀 임무 수행, 경찰 매수, 탈옥 등 조직원의 범죄 활동입니다.",
      ["임무", "밀수", "탈옥"]),
     ("battle",  "전투 · 능력치",        "NPC·네임드·보스 토벌과 결투, 전투 능력치 확인입니다.",
@@ -9724,7 +10148,7 @@ HELP_CATEGORIES = [
     ("family",  "조직 · 레이드 · 구역", "조직(패밀리)을 만들어 함께하는 협동·점령 콘텐츠입니다.",
      ["조직", "레이드", "구역"]),
     ("admin",   "관리자",               "서버 관리자 전용 명령어입니다.",
-     ["추방"]),
+     ["추방", "관리"]),
 ]
 
 
@@ -9773,7 +10197,7 @@ def help_overview_embed(pages: list) -> discord.Embed:
     )
     embed.add_field(
         name="처음이라면",
-        value=("`/가입` 으로 조직원 또는 경찰이 되세요. 가입 전에는 시민으로 `/아르바이트` · `/낚시` · `/배달` · `/복권` · `/제보` 를 할 수 있어요.\n"
+        value=("`/가입` 으로 조직원 또는 경찰이 되세요.\n"
                "조직원은 `/임무` · `/전투` 로 자금과 명예를 모으고, `/무기상점` · `/암시장` · `/제작` 으로 장비를 갖춥니다.\n"
                f"명예 {FAMILY_CREATE_MIN_HONOR}pt 이상이면 `/조직 생성` 으로 조직을 만들어 `/레이드` 와 `/구역` 에 도전할 수 있습니다.\n"
                f"경찰은 `/순찰` · `/검거` 로 활동하고, 명예 {POLICE_UNIT_CREATE_MIN_HONOR}pt 이상이면 `/수사팀 생성` 으로 수사팀을 만들어 `/수사팀 작전` 에 도전할 수 있습니다."),
@@ -9867,19 +10291,19 @@ POLICE_OP_TIERS = {
     "smuggle": {
         "name": "밀수 조직 소탕", "min_players": 2, "min_honor": 0, "cost": 1000,
         "base": 0.65, "ref_atk": 300,
-        "money": 3000, "honor": 44, "points": 10,
+        "money": 3000, "honor": 22, "points": 10,
         "desc": "뒷골목 밀수 조직의 창고를 급습합니다. 입문자용 작전입니다.",
     },
     "cartel": {
         "name": "항만 카르텔 일망타진", "min_players": 3, "min_honor": 1500, "cost": 3000,
         "base": 0.55, "ref_atk": 1200,
-        "money": 7000, "honor": 90, "points": 25,
+        "money": 7000, "honor": 45, "points": 25,
         "desc": "에르느코항을 장악한 카르텔을 한 번에 소탕합니다. 화력과 인원이 필요합니다.",
     },
     "empire": {
         "name": "지하 범죄 제국 본거지 급습", "min_players": 4, "min_honor": 4000, "cost": 8000,
         "base": 0.50, "ref_atk": 3500,
-        "money": 14000, "honor": 150, "points": 60,
+        "money": 14000, "honor": 75, "points": 60,
         "desc": "칼렌데 지하 범죄 제국의 심장부. 정상급 수사팀만이 도전할 수 있습니다.",
     },
 }
@@ -10241,43 +10665,24 @@ async def unit_transfer_cmd(interaction: discord.Interaction, member: discord.Me
 async def unit_donate_cmd(interaction: discord.Interaction, 금액: app_commands.Range[int, POLICE_UNIT_MIN_DONATE, 10_000_000]):
     if not await _unit_precheck(interaction): return
     user = interaction.user
-    # DB 호출이 여러 번이라 3초를 넘길 수 있으므로 먼저 응답을 보류한다 (안 하면 '응답하지 않음' 오류)
-    try:
-        await interaction.response.defer()
-    except discord.HTTPException:
-        return
-    paid = False
     try:
         unit = await asyncio.to_thread(police_unit_get_by_user, interaction.guild_id, user.id)
         if not unit:
-            await interaction.followup.send("소속된 수사팀이 없습니다.", ephemeral=True)
+            await interaction.response.send_message("소속된 수사팀이 없습니다.", ephemeral=True)
             return
         info = await asyncio.to_thread(get_user_data, user.id)
         if info["money"] < 금액:
-            await interaction.followup.send("보유 자금이 부족합니다.", ephemeral=True)
+            await interaction.response.send_message("보유 자금이 부족합니다.", ephemeral=True)
             return
         await asyncio.to_thread(update_user_stats, user.id, -금액, 0)
-        paid = True
         unit = await asyncio.to_thread(police_unit_get_by_id, unit["id"])   # 최신 금고 값으로 갱신
-        if not unit:
-            raise RuntimeError("수사팀을 다시 불러오지 못했습니다")
         new_treasury = unit.get("treasury", 0) + 금액
         await asyncio.to_thread(police_unit_update, unit["id"], {"treasury": new_treasury})
     except Exception as e:
-        import traceback
         print(f"Police unit donate error: {e}")
-        traceback.print_exc()
-        if paid:   # 돈만 빠지고 금고에 못 넣은 경우 되돌려 준다
-            try:
-                await asyncio.to_thread(update_user_stats, user.id, 금액, 0)
-            except Exception as e2:
-                print(f"Police unit donate refund error: {e2}")
-        try:
-            await interaction.followup.send(POLICE_UNIT_DB_ERROR_MSG, ephemeral=True)
-        except discord.HTTPException:
-            pass
+        await interaction.response.send_message(POLICE_UNIT_DB_ERROR_MSG, ephemeral=True)
         return
-    await interaction.followup.send(f"**{user.mention}** 님이 수사팀 금고에 `${금액:,}` 을(를) 기부했습니다! (금고 `${new_treasury:,}`)")
+    await interaction.response.send_message(f"**{user.mention}** 님이 수사팀 금고에 `${금액:,}` 을(를) 기부했습니다! (금고 `${new_treasury:,}`)")
 
 class PoliceUnitDisbandView(discord.ui.View):
     def __init__(self, owner: discord.Member, unit_id, unit_name: str):
@@ -10611,7 +11016,7 @@ POLICE_SALARY_SHIFT_SEC = 600          # 근무(추적) 시간
 POLICE_SALARY_FULL_SCORE = 100         # 이 점수에 도달하면 기본 월급의 100%
 POLICE_SALARY_MAX_RATIO = 1.5          # 월급 상한 (기본 월급의 150% = 150점)
 POLICE_SALARY_BASE_MONEY = 2000        # 100% 월급: 보상금
-POLICE_SALARY_BASE_HONOR = 44          # 100% 월급: 명예 (황금 배지 보너스 적용)
+POLICE_SALARY_BASE_HONOR = 22          # 100% 월급: 명예 (황금 배지 보너스 적용)
 POLICE_SALARY_ARREST_BONUS_PER = 100   # 거물 검거 보너스: 수배범 명예 100pt 당 +1점
 POLICE_SALARY_ARREST_BONUS_MAX = 50    # 거물 검거 보너스 상한 → 검거 1회 50 ~ 100점
 
