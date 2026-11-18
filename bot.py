@@ -5,7 +5,7 @@ import io
 import re
 import random
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # === PIL (Pillow) 관련 Import ===
 import unicodedata
@@ -187,8 +187,8 @@ wanted_list = {}
 # {guild_id: "dark" | "eden" | "ultimate" | None}  ← 서버에 지금 어떤 보스가 떠 있는지 (None/없음 = 보스 없음)
 #   "dark"     = [히든보스] 어둠의 지배자  (HIDDEN_BOSS)
 #   "eden"     = [테러보스] 에칼 데 페스토  (EDEN_BOSS)
+#   "judge"    = [재앙보스] 침묵의 심판자    (JUDGE_BOSS)  ← 에칼보다 강하고 태초의 파괴자보다는 약한 보스
 #   "ultimate" = [최강보스] 태초의 파괴자  (ULTIMATE_BOSS)
-#   "silent"   = [심판보스] 침묵의 심판자  (SILENT_BOSS)
 #   "dark_x" / "eden_x" / "ultimate_x" = [강화보스] 위 보스들의 강화판 (ELITE_*_BOSS)
 active_boss_guilds = {}
 # {guild_id: NPCBattleView}  ← 지금 보스와 싸우는 도전자 (한 서버에서 보스전은 한 번에 한 명만)
@@ -254,11 +254,11 @@ def load_boss_state_sync() -> int:
 
 # 일반 /전투 승리 시 '보스마다 각각' 출현할 확률 (테스트할 때는 0.3 처럼 크게 바꾸세요)
 #   • 서버에 보스가 없을 때만 판정하고, 한 번에 보스 한 마리만 출현합니다.
-#   • 보스 3종(각 3%) + 침묵의 심판자(2%) + 강화 보스 3종(각 0.3%)이라 '아무 보스나' 나올 확률은 합계 11.9% 입니다. (BOSS_SPAWN_TABLE 참고)
+#   • 보스 4종(3%·3%·2%·3%) + 강화 보스 3종(각 0.3%)이라 '아무 보스나' 나올 확률은 합계 11.9% 입니다. (BOSS_SPAWN_TABLE 참고)
 BOSS_SPAWN_CHANCE = 0.03            # 3% (어둠의 지배자)
 EDEN_BOSS_SPAWN_CHANCE = 0.03       # 3% (에칼 데 페스토)
+JUDGE_BOSS_SPAWN_CHANCE = 0.02      # 2% (침묵의 심판자: 에칼보다 강한 만큼 더 드물게 출현)
 ULTIMATE_BOSS_SPAWN_CHANCE = 0.03   # 3% (태초의 파괴자)
-SILENT_BOSS_SPAWN_CHANCE = 0.02     # 2% (침묵의 심판자)
 ELITE_BOSS_SPAWN_CHANCE = 0.003     # 0.3% (강화 보스: 보스마다 각각 이 확률로 더 강한 강화판이 출현. 합계 0.9%)
 
 # {user_id: datetime (석방 예정 시간)}
@@ -715,9 +715,36 @@ DAILY_QUESTS = [
 DAILY_COOLDOWN_SEC = 24 * 60 * 60     # 1일 쿨타임 (완료 시각 기준)
 ATTENDANCE_TITLE_STACKS = 30          # 출석 스택이 이 값에 도달하면 칭호 획득 (한 달 = 30일)
 
+# === 주간 의뢰(/주간) 설정 ===
+# 매주 월요일 00:00(한국 시간)에 초기화됩니다. 자기 직업의 의뢰를 전부 채우면 /주간 에서 [보상 수령] 버튼으로 보상을 받습니다.
+#   • 조직원과 경찰은 서로 다른 의뢰 4개를 받습니다. (key 는 겹치지 않게 w_ 로 시작)
+#   • 의뢰를 바꾸려면 이 표의 name / target / hint 만 고치면 됩니다. (집계 지점은 key 로 연결되어 있음)
+WEEKLY_KST = timezone(timedelta(hours=9))
+WEEKLY_QUESTS = {
+    "mafia": [
+        {"key": "w_mission",  "name": "비밀 임무 성공",  "target": 12, "hint": "/임무"},
+        {"key": "w_fight",    "name": "NPC 전투 승리",   "target": 10, "hint": "/전투"},
+        {"key": "w_gamble",   "name": "카지노 도박",     "target": 15, "hint": "/도박"},
+        {"key": "w_parttime", "name": "아르바이트",      "target": 8,  "hint": "/아르바이트"},
+    ],
+    "police": [
+        {"key": "w_op",          "name": "수사 작전 성공",   "target": 10, "hint": "/작전"},
+        {"key": "w_arrest",      "name": "지명수배범 검거",  "target": 3,  "hint": "/검거"},
+        {"key": "w_patrol",      "name": "치안 순찰",        "target": 12, "hint": "/순찰"},
+        {"key": "w_interrogate", "name": "심문 진행",        "target": 5,  "hint": "/심문"},
+    ],
+}
+# 한 직업만 달성할 수 있는 의뢰 (이 의뢰를 집계하면 그 유저의 직업이 정해집니다. 도박·아르바이트는 공용이라 제외)
+WEEKLY_ROLE_KEYS = {"w_mission": "mafia", "w_fight": "mafia",
+                    "w_op": "police", "w_arrest": "police", "w_patrol": "police", "w_interrogate": "police"}
+WEEKLY_REWARD_MONEY = 30000
+WEEKLY_REWARD_HONOR = 50              # 조직원은 명예, 경찰은 경찰 실적으로 들어갑니다
+WEEKLY_TITLE_CLEARS = 4               # 주간 의뢰를 이 횟수만큼 완료하면 칭호 획득 (한 달)
+
 # === 칭호 시스템 ===
 TITLES = {
     "attendance_month": {"name": "성실한 출석왕", "desc": f"일일 의뢰 출석 {ATTENDANCE_TITLE_STACKS}스택 달성 (한 달)", "check": lambda s, i: s["attendance"] >= ATTENDANCE_TITLE_STACKS},
+    "weekly_month": {"name": "한 달 개근", "desc": f"주간 의뢰 {WEEKLY_TITLE_CLEARS}회 완료", "check": lambda s, i: s["weekly_clears"] >= WEEKLY_TITLE_CLEARS},
     "first_step":   {"name": "첫 발걸음",       "desc": "임무 1회 성공",                        "check": lambda s, i: s["success"] >= 1},
     "veteran":      {"name": "노련한 청부꾼",   "desc": "임무 10회 성공",                       "check": lambda s, i: s["success"] >= 10},
     "legend":       {"name": "전설의 그림자",   "desc": "임무 50회 성공",                       "check": lambda s, i: s["success"] >= 50},
@@ -745,7 +772,7 @@ def get_title_blob(user_info: dict) -> dict:
     stats = blob.get("stats") if isinstance(blob.get("stats"), dict) else {}
     for key in ("success", "fail", "streak", "best_streak", "hard_success",
                 "gamble_played", "gamble_won", "gamble_wagered", "gamble_net", "jackpot", "broke",
-                "attendance",
+                "attendance", "weekly_clears",
                 "fight_wins", "named_kills", "boss_kills", "elite_boss_kills",            # ← 업적용 카운터
                 "duel_wins", "raid_clears", "raid_king_clears", "war_wins", "war_conquests",
                 "police_arrests", "police_big_arrests", "police_patrols", "police_interrogations",   # ← 경찰 업적용 카운터
@@ -1128,6 +1155,196 @@ async def daily_quest_command(interaction: discord.Interaction):
     user = interaction.user
     blob = get_title_blob(get_user_data(user.id))
     await interaction.response.send_message(embed=build_daily_embed(user, blob), ephemeral=True)
+
+# ==========================================
+# 주간 의뢰 시스템 (데이터는 user_data.data JSON 안의 "weekly" / stats.weekly_clears 에 저장)
+#   weekly = {"week": 이번 주 월요일 00:00(KST)의 epoch 초, "progress": {의뢰키: 횟수}, "claimed": 보상 수령 여부, "role": "mafia"/"police"}
+# ==========================================
+def weekly_week_start(now: float = None) -> float:
+    """이번 주 월요일 00:00(한국 시간)의 epoch 초"""
+    now = time.time() if now is None else now
+    kst = datetime.fromtimestamp(now, tz=WEEKLY_KST)
+    monday = (kst - timedelta(days=kst.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    return monday.timestamp()
+
+def weekly_next_reset(now: float = None) -> int:
+    return int(weekly_week_start(now) + 7 * 24 * 60 * 60)
+
+def get_weekly_state(blob: dict, now: float = None) -> dict:
+    """blob["weekly"] 를 읽어 정리해서 돌려줍니다. 새 주가 시작됐으면 진행도와 수령 여부를 초기화."""
+    ws = int(weekly_week_start(now))
+    raw = blob.get("weekly")
+    w = dict(raw) if isinstance(raw, dict) else {}
+    if int(w.get("week", 0) or 0) != ws:
+        w = {"week": ws, "progress": {}, "claimed": False, "role": w.get("role")}
+    prog = w.get("progress") if isinstance(w.get("progress"), dict) else {}
+    w["progress"] = {q["key"]: max(0, min(int(prog.get(q["key"], 0) or 0), q["target"]))
+                     for qs in WEEKLY_QUESTS.values() for q in qs}
+    w["claimed"] = bool(w.get("claimed"))
+    w["role"] = w.get("role") if w.get("role") in WEEKLY_QUESTS else None
+    blob["weekly"] = w
+    return w
+
+def weekly_record(blob: dict, key: str, now: float = None) -> str:
+    """주간 의뢰 진행도를 1 올립니다. (blob 만 수정하므로 호출한 쪽에서 DB에 저장해야 합니다)
+    의뢰 1개 완료 / 전부 완료 시 안내 문구를, 아니면 빈 문자열을 돌려줍니다."""
+    w = get_weekly_state(blob, now)
+    quest_role, quest = None, None
+    for role, qs in WEEKLY_QUESTS.items():
+        for q in qs:
+            if q["key"] == key:
+                quest_role, quest = role, q
+    if quest is None:
+        return ""
+    if key in WEEKLY_ROLE_KEYS:
+        w["role"] = WEEKLY_ROLE_KEYS[key]          # 이 유저의 직업이 확정됨
+    if w["progress"][key] >= quest["target"]:
+        return ""
+    w["progress"][key] += 1
+    if w["progress"][key] < quest["target"]:
+        return ""                                  # 아직 진행 중 (조용히 집계)
+    if w["role"] != quest_role:
+        return ""                                  # 직업이 아직 정해지지 않았거나 다른 직업의 의뢰 (안내 생략)
+    qs = WEEKLY_QUESTS[quest_role]
+    done = sum(1 for q in qs if w["progress"][q["key"]] >= q["target"])
+    if done < len(qs):
+        return f"\n\n**[주간 의뢰]** {quest['name']} 완료! ({done}/{len(qs)})"
+    if w["claimed"]:
+        return ""
+    return "\n\n**[주간 의뢰 전부 완료]** `/주간` 에서 보상을 받으세요!"
+
+def weekly_all_done(w: dict, role: str) -> bool:
+    return all(w["progress"][q["key"]] >= q["target"] for q in WEEKLY_QUESTS[role])
+
+def police_weekly_bump_sync(user_id: int, key: str) -> str:
+    """경찰 활동 1회를 주간 의뢰에 집계합니다. (동기 DB 작업 → to_thread 로 실행)"""
+    _require_db()
+    with _ach_lock:
+        info = get_user_data(user_id)
+        blob = get_title_blob(info)
+        msg = weekly_record(blob, key)
+        save_title_blob(user_id, blob)
+    return msg
+
+async def police_weekly_bump(user_id: int, key: str) -> str:
+    """결과 화면에 붙일 주간 의뢰 안내 문구. 실패해도 명령어 처리는 막지 않음"""
+    try:
+        return await asyncio.to_thread(police_weekly_bump_sync, user_id, key)
+    except Exception as e:
+        print(f"[경찰 주간 의뢰 오류] user={user_id} key={key}: {e}")
+        return ""
+
+def claim_weekly_sync(user_id: int, is_police: bool) -> dict:
+    """주간 의뢰 보상 지급 (경매·업적 쓰기와 겹치지 않도록 잠금). 반환: {"status": ok/not_done/claimed, ...}"""
+    _require_db()
+    role = "police" if is_police else "mafia"
+    with _ach_lock, _inv_lock:
+        info = get_user_data(user_id)
+        blob = get_title_blob(info)
+        w = get_weekly_state(blob)
+        if w["claimed"]:
+            return {"status": "claimed"}
+        if not weekly_all_done(w, role):
+            return {"status": "not_done"}
+        w["claimed"] = True
+        w["role"] = role
+        blob["stats"]["weekly_clears"] += 1
+        money = int(info.get("money", 0) or 0) + WEEKLY_REWARD_MONEY
+        honor = int(info.get("honor", 0) or 0) + WEEKLY_REWARD_HONOR
+        new_ids = evaluate_new_titles(blob, {**info, "money": money, "honor": honor})
+        _auction_update(user_id, {"money": money, "honor": honor, "data": blob})
+    return {"status": "ok", "money": money, "honor": honor, "clears": blob["stats"]["weekly_clears"],
+            "notice": format_new_titles(new_ids)}
+
+def build_weekly_embed(user: discord.abc.User, blob: dict, is_police: bool) -> discord.Embed:
+    role = "police" if is_police else "mafia"
+    w = get_weekly_state(blob)
+    qs = WEEKLY_QUESTS[role]
+    done = sum(1 for q in qs if w["progress"][q["key"]] >= q["target"])
+    reset_ts = weekly_next_reset()
+
+    lines = []
+    for q in qs:
+        cur = w["progress"][q["key"]]
+        mark = "[완료]" if cur >= q["target"] else "[ ]"
+        lines.append(f"{mark} **{q['name']}** — `{cur}/{q['target']}`  ({q['hint']})")
+
+    if w["claimed"]:
+        status, color = "이번 주 보상을 이미 받았습니다!", discord.Color.green()
+    elif done == len(qs):
+        status, color = "모든 의뢰를 완료했습니다! 아래 **[보상 수령]** 버튼을 눌러 보상을 받으세요.", discord.Color.gold()
+    else:
+        status, color = f"모든 의뢰를 완료하면 보상을 받습니다. ({done}/{len(qs)} 완료)", discord.Color.blurple()
+
+    embed = discord.Embed(title=f"[{user.name} 님의 주간 의뢰]",
+                          description=f"{status}\n다음 초기화: <t:{reset_ts}:R> (<t:{reset_ts}:f>)", color=color)
+    embed.add_field(name="이번 주 의뢰", value="\n".join(lines), inline=False)
+    honor_label = "경찰 실적" if is_police else "명예"
+    clears = blob["stats"]["weekly_clears"]
+    goal = (f"{TITLES['weekly_month']['name']} 칭호 획득 완료!" if "weekly_month" in blob["titles"]
+            else f"{WEEKLY_TITLE_CLEARS}회 완료 시 {TITLES['weekly_month']['name']} 칭호 (남은 횟수 {max(0, WEEKLY_TITLE_CLEARS - clears)})")
+    embed.add_field(name="완료 보상",
+                    value=f"자금 `${WEEKLY_REWARD_MONEY:,}` / {honor_label} `+{WEEKLY_REWARD_HONOR} pt`\n누적 완료 **{clears}회** — {goal}",
+                    inline=False)
+    embed.set_footer(text="매주 월요일 00:00(한국 시간)에 새 의뢰로 초기화됩니다.")
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    return embed
+
+class WeeklyClaimView(discord.ui.View):
+    def __init__(self, owner: discord.abc.User, is_police: bool, claimable: bool):
+        super().__init__(timeout=180)
+        self.owner = owner
+        self.is_police = is_police
+        self.claim_btn.disabled = not claimable
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner.id:
+            await interaction.response.send_message("본인의 주간 의뢰 창만 조작할 수 있습니다.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="보상 수령", style=discord.ButtonStyle.success)
+    async def claim_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        try:
+            res = await asyncio.to_thread(claim_weekly_sync, self.owner.id, self.is_police)
+        except Exception as e:
+            print(f"[주간 의뢰 보상 오류] user={self.owner.id}: {e}")
+            await interaction.followup.send("보상을 지급하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.", ephemeral=True)
+            return
+        if res["status"] != "ok":
+            msg = "이번 주 보상을 이미 받았습니다." if res["status"] == "claimed" else "아직 모든 의뢰를 완료하지 못했습니다."
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+        blob = get_title_blob(get_user_data(self.owner.id))
+        embed = build_weekly_embed(self.owner, blob, self.is_police)
+        honor_label = "경찰 실적" if self.is_police else "명예"
+        embed.description += (f"\n\n**[보상 지급]** 자금 `+${WEEKLY_REWARD_MONEY:,}` / {honor_label} `+{WEEKLY_REWARD_HONOR} pt`\n"
+                              f"**현재 보유 자금:** `${res['money']:,}`{res['notice']}")
+        button.disabled = True
+        await interaction.edit_original_response(embed=embed, view=self)
+
+@bot.tree.command(name="주간", description="[조직원·경찰] 이번 주 주간 의뢰를 확인하고, 모두 완료하면 보상을 받습니다.")
+async def weekly_quest_command(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    user = interaction.user
+    is_police = _is_police(user)
+    role = "police" if is_police else "mafia"
+    blob = get_title_blob(get_user_data(user.id))
+    w = get_weekly_state(blob)
+    if w["role"] != role:        # 직업을 기록해 두면 공용 의뢰(도박·아르바이트)도 완료 안내가 정확해집니다
+        w["role"] = role
+        try:
+            save_title_blob(user.id, blob)
+        except Exception as e:
+            print(f"[주간 의뢰 직업 기록 오류] user={user.id}: {e}")
+    claimable = (not w["claimed"]) and weekly_all_done(w, role)
+    await interaction.response.send_message(embed=build_weekly_embed(user, blob, is_police),
+                                            view=WeeklyClaimView(user, is_police, claimable), ephemeral=True)
 
 def build_title_embed(user: discord.abc.User, blob: dict, new_ids: list = None) -> discord.Embed:
     equipped = blob.get("equipped")
@@ -2306,6 +2523,7 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
                         bonus=min(POLICE_SALARY_ARREST_BONUS_MAX, _target_honor // POLICE_SALARY_ARREST_BONUS_PER))   # /월급 근무 실적
     ach_note = await police_ach_bump(interaction.user.id, police_arrests=1,
                                      police_big_arrests=1 if _target_honor >= POLICE_BIG_FISH_HONOR else 0)   # 업적 카운터
+    ach_note += await police_weekly_bump(interaction.user.id, "w_arrest")   # 주간 의뢰
 
     # 압류: 조직원 아이템 랜덤 1~2종을 경찰이 가져감
     try:
@@ -2580,6 +2798,7 @@ async def patrol_location(interaction: discord.Interaction, 지역: app_commands
         print(f"Patrol reward error: {e}")
     police_shift_record(user.id, "patrol")   # /월급 근무 실적
     ach_note = await police_ach_bump(user.id, police_patrols=1)   # 업적 카운터
+    ach_note += await police_weekly_bump(user.id, "w_patrol")     # 주간 의뢰
 
     police_info = get_user_data(user.id)
     police_rank = get_user_rank(police_info["honor"], is_police=True)
@@ -2673,6 +2892,7 @@ def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n:
         s = blob["stats"]
 
         earned_money = earned_honor = fine = 0
+        weekly_msg = ""
         if success:
             earned_money = random.randint(*op["reward"])
             earned_honor = int(round(op["honor"] * police_bonuses(inv)["honor_mult"]))
@@ -2681,6 +2901,7 @@ def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n:
             s["police_ops"] += 1
             if op_key == "op_5":
                 s["police_ops_boss"] += 1
+            weekly_msg = weekly_record(blob, "w_op")   # 주간 의뢰
         else:
             fine = min(money, op["fine"])
             money -= fine
@@ -2691,7 +2912,7 @@ def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n:
     return {"success": success, "rate": rate, "labels": labels, "money": money, "honor": honor,
             "earned_money": earned_money, "earned_honor": earned_honor, "fine": fine,
             "old_rank": old_rank, "new_rank": get_user_rank(honor, is_police=True),
-            "notice": format_new_titles(new_ids)}
+            "weekly_msg": weekly_msg, "notice": format_new_titles(new_ids)}
 
 class OperationSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
@@ -2750,7 +2971,7 @@ class OperationSelect(discord.ui.Select):
                              f"**경찰 실적:** `+{res['earned_honor']} pt`\n\n"
                              f"**현재 직급:** `{res['new_rank']}`\n"
                              f"**보유 자금:** `${res['money']:,}`\n"
-                             f"**총 명예:** `{res['honor']} pt`{rank_up}{res['notice']}"),
+                             f"**총 명예:** `{res['honor']} pt`{rank_up}{res['weekly_msg']}{res['notice']}"),
                 color=discord.Color.blue()
             )
         else:
@@ -3014,6 +3235,7 @@ async def interrogate_trial(s: InterrogationSession, opinion: str):
         police_shift_record(s.police.id, "interrogate")   # /월급 근무 실적
         ach_note = await police_ach_bump(s.police.id, police_interrogations=1,
                                          police_matches=1 if verdict == opinion else 0)   # 업적 카운터
+        ach_note += await police_weekly_bump(s.police.id, "w_interrogate")   # 주간 의뢰
         reward_text = ""
         if verdict == opinion:   # 경찰 의견과 판결이 일치
             police_shift_record(s.police.id, "interrogate_match")
@@ -3205,19 +3427,18 @@ EDEN_BOSS = {
     "desc": "모두가 평등한 세상을 외치며 칼렌데를 불바다로 만들려는 유토피아 오브 에덴의 창립자입니다. 15턴 안에 쓰러뜨리지 못하면 도시가 불탑니다."
 }
 
-# === 심판 보스: 침묵의 심판자 ===
-# 에칼 데 페스토(95,000)와 태초의 파괴자(120,000) 사이의 난이도입니다.
-#   • 고유 기믹 "silence": N  → N턴마다 '침묵의 선고'를 내려, 그 턴에는 스킬(강타·전투 함성·필살 일격)을 쓸 수 없습니다. (기본 공격만 가능)
-#   • 그림은 아직 없어서 "image" 를 지정하지 않았습니다. 그림을 넣으려면 assets 폴더에 파일을 두고 "image": "boss_silent.png" 를 추가하세요.
-SILENT_BOSS = {
-    "name": "[심판보스] 침묵의 심판자",   # 보스 승리 시 보스가 연속 출현하지 않도록 비교하는 이름이므로 함부로 바꾸지 마세요
-    "hp": 105000,
-    "atk": 4600,
-    "def": 820,
-    "silence": 4,
-    "reward_money": (25000, 58000),
-    "reward_honor": 280,
-    "desc": "말 한마디 없이 죄인을 가려내는 칼렌데 지하 세계의 심판자입니다. 4턴마다 침묵의 선고를 내려 그 턴의 스킬을 봉인합니다. 15턴 안에 쓰러뜨리지 못하면 판결이 확정됩니다."
+# === 재앙 보스: 침묵의 심판자 ===
+# 에칼 데 페스토(체력 95,000 / 공격력 3,800 / 방어력 750)보다 모든 능력치가 높고,
+# 태초의 파괴자(120,000 / 5,500 / 900)보다는 약한 난이도입니다. 체력이 절반 아래로 떨어지면 격노합니다.
+JUDGE_BOSS = {
+    "name": "[재앙보스] 침묵의 심판자",   # 보스 승리 시 보스가 연속 출현하지 않도록 비교하는 이름이므로 함부로 바꾸지 마세요
+    "hp": 110000,
+    "atk": 4700,
+    "def": 830,
+    "enrage": 1.25,
+    "reward_money": (24000, 58000),
+    "reward_honor": 300,
+    "desc": "칼렌데의 모든 판결을 쥐고 있다는 전설 속 심판자입니다. 체력이 절반 아래로 떨어지면 격노합니다. 15턴 안에 쓰러뜨리지 못하면 도시가 영원한 침묵에 잠깁니다."
 }
 
 # === 강화 보스 (각 보스의 강화판: 출현 확률 0.3% / 체력·공격력·방어력이 훨씬 높고 격노하지만 보상이 훨씬 큼) ===
@@ -3262,6 +3483,14 @@ BOSS_KINDS = {
                       "도시 곳곳에서 붉은 깃발이 펄럭이고 폭발음이 들려옵니다!\n"
                       "**유토피아 오브 에덴의 창립자 에칼 데 페스토**가 모습을 드러냈습니다! (`/보스` 명령어로 토벌 가능)"),
     },
+    "judge": {
+        "data": JUDGE_BOSS,
+        "title": "[재앙의 서막] 침묵의 심판자 토벌전",
+        "color": discord.Color.from_rgb(30, 60, 140),
+        "spawn_msg": ("**[재앙 경보]** \n"
+                      "도시의 모든 소리가 멈추고, 차갑고 무거운 정적이 내려앉았습니다!\n"
+                      "**[재앙보스] 침묵의 심판자**가 모습을 드러냈습니다! (`/보스` 명령어로 토벌 가능)"),
+    },
     "ultimate": {
         "data": ULTIMATE_BOSS,
         "title": "[멸망의 전조] 태초의 파괴자 토벌전",
@@ -3270,14 +3499,6 @@ BOSS_KINDS = {
                       "차원의 균열이 갈라지며 역대급 재앙의 기운이 감지되었습니다!\n"
                       "**[최강보스] 태초의 파괴자**가 강림했습니다! (`/보스` 명령어로 토벌 가능)"),
     },
-}
-BOSS_KINDS["silent"] = {
-    "data": SILENT_BOSS,
-    "title": "[심판보스] 침묵의 심판자 토벌전",
-    "color": discord.Color.from_rgb(160, 160, 175),
-    "spawn_msg": ("**[심판 경보]** \n"
-                  "도시의 모든 소리가 한순간 사라졌습니다. 숨소리조차 들리지 않는 정적 속에서 무언가가 다가옵니다...\n"
-                  "**[심판보스] 침묵의 심판자**가 모습을 드러냈습니다! (`/보스` 명령어로 토벌 가능)"),
 }
 BOSS_KINDS["dark_x"] = {
     "data": ELITE_DARK_BOSS,
@@ -3337,8 +3558,8 @@ def boss_image_file(boss_data: dict):
 BOSS_SPAWN_TABLE = [
     ("dark", BOSS_SPAWN_CHANCE),
     ("eden", EDEN_BOSS_SPAWN_CHANCE),
+    ("judge", JUDGE_BOSS_SPAWN_CHANCE),
     ("ultimate", ULTIMATE_BOSS_SPAWN_CHANCE),
-    ("silent", SILENT_BOSS_SPAWN_CHANCE),
     ("dark_x", ELITE_BOSS_SPAWN_CHANCE),
     ("eden_x", ELITE_BOSS_SPAWN_CHANCE),
     ("ultimate_x", ELITE_BOSS_SPAWN_CHANCE),
@@ -3500,88 +3721,6 @@ async def transfer_money(interaction: discord.Interaction, member: discord.Membe
 
     await interaction.followup.send(embed=embed)
 
-# === 전투 스킬 (NPC·보스·네임드 전투 / 결투 공통) ===
-# '방어하기' 대신 쓰는 행동입니다. 스킬을 쓰면 그 턴의 기본 공격을 대신하고, 쿨다운은 '내 행동 수' 기준입니다.
-SKILL_SMASH_MULT = 1.5          # 강타: 대미지 배율
-SKILL_SMASH_CD = 3              # 강타: 사용 후 이 행동 수가 지나야 다시 사용 (3 = 두 번 쉬고 세 번째 행동에 재사용)
-SKILL_RALLY_BONUS = 0.25        # 전투 함성: 공격력 증가율
-SKILL_RALLY_TURNS = 3           # 전투 함성: 사용 뒤 몇 번의 행동 동안 효과가 유지되는지
-SKILL_RALLY_CD = 5              # 전투 함성: 재사용 대기 (행동 수)
-SKILL_FINISHER_MULT = 2.5       # 필살 일격: 대미지 배율
-SKILL_FINISHER_MIN_TURN = 5     # 필살 일격: 이 행동부터 사용 가능 (전투당 1회)
-PVE_HP_SCALE = 1.25             # 스킬이 생긴 만큼 NPC·보스 체력을 늘려 기존과 비슷한 난이도를 유지
-
-SKILL_LABELS = {"attack": "공격하기", "smash": "강타", "rally": "전투 함성", "finisher": "필살 일격"}
-
-
-class SkillState:
-    """한 전투에서 한 사람의 스킬 사용 상태"""
-
-    def __init__(self):
-        self.actions = 0              # 지금까지 한 행동 수
-        self.smash_ready = 1          # 이 행동 번호부터 강타 사용 가능
-        self.rally_ready = 1
-        self.rally_until = 0          # 이 행동 번호까지 전투 함성 효과 유지
-        self.finisher_used = False
-
-    @property
-    def turn(self) -> int:
-        """지금 하려는 행동의 번호 (1부터)"""
-        return self.actions + 1
-
-    def atk_mult(self) -> float:
-        return 1 + SKILL_RALLY_BONUS if self.turn <= self.rally_until else 1.0
-
-    def buff_turns_left(self) -> int:
-        return max(0, self.rally_until - self.turn + 1)
-
-    def wait(self, key: str) -> str:
-        """지금 쓸 수 없으면 그 이유(짧은 문구), 쓸 수 있으면 빈 문자열"""
-        t = self.turn
-        if key == "smash" and self.smash_ready > t:
-            return f"{self.smash_ready - t}턴 뒤"
-        if key == "rally" and self.rally_ready > t:
-            return f"{self.rally_ready - t}턴 뒤"
-        if key == "finisher":
-            if self.finisher_used:
-                return "사용함"
-            if t < SKILL_FINISHER_MIN_TURN:
-                return f"{SKILL_FINISHER_MIN_TURN}턴째부터"
-        return ""
-
-    def use(self, key: str):
-        """스킬 사용 기록 (행동 수를 올리기 전에 호출)"""
-        t = self.turn
-        if key == "smash":
-            self.smash_ready = t + SKILL_SMASH_CD
-        elif key == "rally":
-            self.rally_ready = t + SKILL_RALLY_CD
-            self.rally_until = t + SKILL_RALLY_TURNS
-        elif key == "finisher":
-            self.finisher_used = True
-
-    def status_text(self) -> str:
-        lines = []
-        for key in ("smash", "rally", "finisher"):
-            w = self.wait(key)
-            lines.append(f"{SKILL_LABELS[key]} : {w if w else '사용 가능'}")
-        return "\n".join(lines)
-
-
-def skill_hit(state: SkillState, key: str, atk: int, defense: int, spread: int) -> int:
-    """기본 공격 / 강타 / 필살 일격의 대미지 (전투 함성 효과 반영). 상대의 방어 자세 보정은 호출하는 쪽에서 처리한다."""
-    base = max(10, int(atk * state.atk_mult()) - defense + random.randint(-spread, spread))
-    if key == "smash":
-        return int(base * SKILL_SMASH_MULT)
-    if key == "finisher":
-        return int(base * SKILL_FINISHER_MULT)
-    return base
-
-
-SKILL_FOOTER = (f"강타 x{SKILL_SMASH_MULT} · 전투 함성 공격력 +{int(SKILL_RALLY_BONUS * 100)}% ({SKILL_RALLY_TURNS}턴) · "
-                f"필살 일격 x{SKILL_FINISHER_MULT} ({SKILL_FINISHER_MIN_TURN}턴째부터 1회)")
-
-
 # === NPC 턴제 전투 View 클래스 (턴 제한 추가) ===
 class NPCBattleView(GuardedView):
     holds_command_lock = True   # 전투가 끝날 때까지 다른 명령어 실행 차단
@@ -3591,16 +3730,16 @@ class NPCBattleView(GuardedView):
         self.user = user
         self.npc_info = npc_info
         self.max_turns = max_turns  # 최대 턴 수 설정 (기본 10턴)
-
+        
         # 유저 및 NPC 스탯 설정
         self.u_hp = user_stats_dict["hp"]
         self.u_max_hp = user_stats_dict["hp"]
         self.u_atk = user_stats_dict["atk"]
         self.u_def = user_stats_dict["def"]
-        self.skill = SkillState()   # 강타 / 전투 함성 / 필살 일격 사용 상태
+        self.u_guard = False
 
-        self.npc_hp = int(npc_info["hp"] * PVE_HP_SCALE)
-        self.npc_max_hp = self.npc_hp
+        self.npc_hp = npc_info["hp"]
+        self.npc_max_hp = npc_info["hp"]
         self.npc_atk = npc_info["atk"]
         self.npc_def = npc_info["def"]
         self.npc_guard = False
@@ -3609,18 +3748,6 @@ class NPCBattleView(GuardedView):
         self.logs = [f"{user.display_name} 님과 **[{npc_info['name']}]**의 전투가 시작되었습니다! (제한: {max_turns}턴)"]
         self.message = None
         self.finished = False
-        self.silenced = False   # 보스의 '침묵의 선고' 때문에 이번 턴 스킬이 봉인되었는지
-        self._refresh_buttons()
-
-    def _refresh_buttons(self):
-        """스킬 버튼에 남은 대기 턴을 표시하고, 쓸 수 없으면 비활성화"""
-        for key, btn in (("smash", self.smash_btn), ("rally", self.rally_btn), ("finisher", self.finisher_btn)):
-            w = self.skill.wait(key)
-            btn.label = SKILL_LABELS[key] + (f" ({w})" if w else "")
-            btn.disabled = bool(w)
-            if getattr(self, "silenced", False):   # 침묵: 이번 턴에는 스킬 사용 불가
-                btn.label = SKILL_LABELS[key] + " (봉인)"
-                btn.disabled = True
 
     def get_embed(self) -> discord.Embed:
         embed = discord.Embed(
@@ -3629,11 +3756,9 @@ class NPCBattleView(GuardedView):
             color=discord.Color.dark_purple()
         )
 
-        buff = self.skill.buff_turns_left()
-        buff_line = f"\n버프 : 공격력 +{int(SKILL_RALLY_BONUS * 100)}% ({buff}턴)" if buff else ""
         embed.add_field(
             name=f"{self.user.display_name} (나)",
-            value=f"체력 : {self.u_hp} / {self.u_max_hp}\n공격력 : {self.u_atk}\n방어력 : {self.u_def}{buff_line}",
+            value=f"체력 : {self.u_hp} / {self.u_max_hp}\n공격력 : {self.u_atk}\n방어력 : {self.u_def}",
             inline=True
         )
         embed.add_field(
@@ -3641,7 +3766,6 @@ class NPCBattleView(GuardedView):
             value=f"체력 : {self.npc_hp} / {self.npc_max_hp}\n공격력 : {self.npc_atk}\n방어력 : {self.npc_def}",
             inline=True
         )
-        embed.add_field(name="스킬", value=self.skill.status_text(), inline=False)
 
         log_text = "\n".join(self.logs[-6:])
         embed.add_field(
@@ -3649,7 +3773,6 @@ class NPCBattleView(GuardedView):
             value=f"```diff\n{log_text}\n```",
             inline=False
         )
-        embed.set_footer(text=SKILL_FOOTER)
         if self.npc_info.get("image"):   # 보스 그림 (최초 전송 때 첨부한 파일을 계속 참조)
             embed.set_image(url=f"attachment://{self.npc_info['image']}")
         return embed
@@ -3659,35 +3782,20 @@ class NPCBattleView(GuardedView):
             await interaction.response.send_message("본인의 전투 창만 조작할 수 있습니다.", ephemeral=True)
             return
 
-        wait = self.skill.wait(action_type) if action_type != "attack" else ""
-        if wait:
-            await interaction.response.send_message(f"{SKILL_LABELS[action_type]} 은(는) 아직 사용할 수 없습니다. ({wait})", ephemeral=True)
-            return
-        if action_type != "attack" and getattr(self, "silenced", False):
-            await interaction.response.send_message("침묵의 선고로 이번 턴에는 스킬을 쓸 수 없습니다. 기본 공격만 가능합니다.", ephemeral=True)
-            return
-
         await interaction.response.defer()
 
         # 1. 유저 행동 처리
-        name = self.user.display_name
-        npc_name = self.npc_info["name"]
-        if action_type == "rally":
-            self.skill.use("rally")
-            self.logs.append(f"+ {name}의 전투 함성! 앞으로 {SKILL_RALLY_TURNS}번의 행동 동안 공격력 +{int(SKILL_RALLY_BONUS * 100)}%")
-        else:
-            buffed = self.skill.atk_mult() > 1
-            defense = self.npc_def * 2 if self.npc_guard else self.npc_def
-            dmg = skill_hit(self.skill, action_type, self.u_atk, defense, 10)
+        self.u_guard = False
+        if action_type == "attack":
+            dmg = max(10, self.u_atk - (self.npc_def * 2 if self.npc_guard else self.npc_def) + random.randint(-10, 10))
             if self.npc_guard:
                 dmg = int(dmg * 0.5)
-                self.logs.append(f"+ {npc_name}이(가) 방어 상태여서 대미지가 감소했습니다!")
+                self.logs.append(f"+ {self.npc_info['name']}이(가) 방어 상태여서 대미지가 감소했습니다!")
             self.npc_hp = max(0, self.npc_hp - dmg)
-            verb = {"attack": "공격", "smash": "강타", "finisher": "필살 일격!!"}[action_type]
-            self.logs.append(f"+ {name}의 {verb}! {npc_name}에게 {dmg} 대미지!" + (" [함성 효과]" if buffed else ""))
-            if action_type != "attack":
-                self.skill.use(action_type)
-        self.skill.actions += 1
+            self.logs.append(f"+ {self.user.display_name}의 공격! {self.npc_info['name']}에게 {dmg} 대미지!")
+        elif action_type == "guard":
+            self.u_guard = True
+            self.logs.append(f"+ {self.user.display_name}이(가) 방어 자세를 취했습니다.")
 
         # NPC 사망 확인 (승리)
         if self.npc_hp <= 0:
@@ -3704,7 +3812,7 @@ class NPCBattleView(GuardedView):
         self.npc_guard = False
         if random.random() < 0.2:
             self.npc_guard = True
-            self.logs.append(f"- {npc_name}이(가) 방어 태세를 갖췄습니다.")
+            self.logs.append(f"- {self.npc_info['name']}이(가) 방어 태세를 갖췄습니다.")
         else:
             cur_npc_atk = self.npc_atk
             enrage = self.npc_info.get("enrage")
@@ -3712,10 +3820,13 @@ class NPCBattleView(GuardedView):
                 cur_npc_atk = int(self.npc_atk * enrage)
                 if not getattr(self, "_enraged", False):
                     self._enraged = True
-                    self.logs.append(f"- {npc_name}이(가) 격노했습니다! 공격력 +{int((enrage - 1) * 100)}%")
-            npc_dmg = max(10, cur_npc_atk - self.u_def + random.randint(-10, 10))
+                    self.logs.append(f"- {self.npc_info['name']}이(가) 격노했습니다! 공격력 +{int((enrage - 1) * 100)}%")
+            npc_dmg = max(10, cur_npc_atk - (self.u_def * 2 if self.u_guard else self.u_def) + random.randint(-10, 10))
+            if self.u_guard:
+                npc_dmg = int(npc_dmg * 0.5)
+                self.logs.append(f"- 방어 성공! 대미지를 절반으로 감소시켰습니다.")
             self.u_hp = max(0, self.u_hp - npc_dmg)
-            self.logs.append(f"- {npc_name}의 반격! {name}이(가) {npc_dmg} 대미지를 입었습니다.")
+            self.logs.append(f"- {self.npc_info['name']}의 반격! {self.user.display_name}이(가) {npc_dmg} 대미지를 입었습니다.")
 
         # 유저 사망 확인 (체력 0 패배)
         if self.u_hp <= 0:
@@ -3723,28 +3834,15 @@ class NPCBattleView(GuardedView):
             return
 
         self.turn_count += 1
-        silence = self.npc_info.get("silence")   # 보스 기믹: N턴마다 스킬 봉인
-        self.silenced = bool(silence) and self.turn_count % silence == 0
-        if self.silenced:
-            self.logs.append(f"- {npc_name}이(가) 침묵의 선고를 내렸습니다! 이번 턴에는 스킬을 쓸 수 없습니다.")
-        self._refresh_buttons()
         await interaction.edit_original_response(embed=self.get_embed(), view=self)
 
     @discord.ui.button(label="공격하기", style=discord.ButtonStyle.danger)
     async def attack_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.process_turn(interaction, "attack")
 
-    @discord.ui.button(label="강타", style=discord.ButtonStyle.primary)
-    async def smash_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_turn(interaction, "smash")
-
-    @discord.ui.button(label="전투 함성", style=discord.ButtonStyle.success)
-    async def rally_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_turn(interaction, "rally")
-
-    @discord.ui.button(label="필살 일격", style=discord.ButtonStyle.secondary)
-    async def finisher_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_turn(interaction, "finisher")
+    @discord.ui.button(label="방어하기", style=discord.ButtonStyle.primary)
+    async def guard_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_turn(interaction, "guard")
 
     async def end_battle(self, interaction: discord.Interaction, outcome: str):
         self.finished = True
@@ -3805,6 +3903,7 @@ class NPCBattleView(GuardedView):
                 "inventory": update_payload.get("inventory", user_data.get("inventory"))
             }
             daily_msg = daily_record(daily_blob, "fight", after_info)
+            daily_msg += weekly_record(daily_blob, "w_fight")   # 주간 의뢰
             daily_msg += format_new_titles(evaluate_new_titles(daily_blob, after_info))   # 새 칭호·업적 안내
             update_payload["data"] = daily_blob
 
@@ -4115,6 +4214,7 @@ async def part_time_job(interaction: discord.Interaction):
     try:
         daily_blob = get_title_blob(user_stats)
         daily_msg = daily_record(daily_blob, "parttime", user_stats)
+        daily_msg += weekly_record(daily_blob, "w_parttime")   # 주간 의뢰
         save_title_blob(user.id, daily_blob)
     except Exception as e:
         print(f"DB Error (parttime daily quest): {e}")
@@ -4191,6 +4291,7 @@ def settle_gamble(user_id: int, bet: int, payout: int, info: dict = None, prepai
     if new_money <= 0:
         s["broke"] += 1
     daily_msg = daily_record(blob, "gamble", {**info, "money": new_money})   # 일일 의뢰 집계 (도박 1판)
+    daily_msg += weekly_record(blob, "w_gamble")                              # 주간 의뢰 집계
     new_ids = evaluate_new_titles(blob, {**info, "money": new_money})
 
     res = supabase.table("user_data").update({"money": new_money, "data": blob}).eq("user_id", str(user_id)).execute()
@@ -4631,32 +4732,23 @@ class DuelBattleView(GuardedView):
         self.target = target
         self.bet = bet
         self.cross = cross   # 조직원 vs 경찰 (진영이 다른 결투)
-
+        
         # 스탯 및 전투 데이터 초기화
         self.players = {
-            challenger.id: {"member": challenger, "hp": c_stats["hp"], "max_hp": c_stats["hp"], "atk": c_stats["atk"], "def": c_stats["def"], "skill": SkillState()},
-            target.id: {"member": target, "hp": t_stats["hp"], "max_hp": t_stats["hp"], "atk": t_stats["atk"], "def": t_stats["def"], "skill": SkillState()}
+            challenger.id: {"member": challenger, "hp": c_stats["hp"], "max_hp": c_stats["hp"], "atk": c_stats["atk"], "def": c_stats["def"], "guard": False},
+            target.id: {"member": target, "hp": t_stats["hp"], "max_hp": t_stats["hp"], "atk": t_stats["atk"], "def": t_stats["def"], "guard": False}
         }
-
+        
         self.current_turn_id = challenger.id  # 도전자부터 시작
         self.turn_count = 1
         self.logs = [f"{challenger.display_name} 님과 {target.display_name} 님의 결투가 시작되었습니다!"]
         self.message = None
         self.winner = None
-        self._refresh_buttons()
-
-    def _refresh_buttons(self):
-        """지금 차례인 사람의 스킬 상태에 맞춰 버튼을 갱신"""
-        skill = self.players[self.current_turn_id]["skill"]
-        for key, btn in (("smash", self.smash_btn), ("rally", self.rally_btn), ("finisher", self.finisher_btn)):
-            w = skill.wait(key)
-            btn.label = SKILL_LABELS[key] + (f" ({w})" if w else "")
-            btn.disabled = bool(w)
 
     def get_embed(self) -> discord.Embed:
         c_p = self.players[self.challenger.id]
         t_p = self.players[self.target.id]
-
+        
         current_turn_user = self.players[self.current_turn_id]["member"]
 
         embed = discord.Embed(
@@ -4665,15 +4757,16 @@ class DuelBattleView(GuardedView):
             color=discord.Color.dark_red()
         )
 
-        for p in (c_p, t_p):
-            buff = p["skill"].buff_turns_left()
-            buff_line = f"\n버프 : 공격력 +{int(SKILL_RALLY_BONUS * 100)}% ({buff}턴)" if buff else ""
-            embed.add_field(
-                name=f"{p['member'].display_name}",
-                value=f"체력 : {p['hp']} / {p['max_hp']}\n공격력 : {p['atk']}\n방어력 : {p['def']}{buff_line}",
-                inline=True
-            )
-        embed.add_field(name=f"스킬 ({current_turn_user.display_name})", value=self.players[self.current_turn_id]["skill"].status_text(), inline=False)
+        embed.add_field(
+            name=f"{c_p['member'].display_name}",
+            value=f"체력 : {c_p['hp']} / {c_p['max_hp']}\n공격력 : {c_p['atk']}\n방어력 : {c_p['def']}",
+            inline=True
+        )
+        embed.add_field(
+            name=f"{t_p['member'].display_name}",
+            value=f"체력 : {t_p['hp']} / {t_p['max_hp']}\n공격력 : {t_p['atk']}\n방어력 : {t_p['def']}",
+            inline=True
+        )
 
         log_text = "\n".join(self.logs[-6:])  # 최근 로그 6개만 표시
         embed.add_field(
@@ -4681,7 +4774,6 @@ class DuelBattleView(GuardedView):
             value=f"```diff\n{log_text}\n```",
             inline=False
         )
-        embed.set_footer(text=SKILL_FOOTER)
         return embed
 
     async def process_action(self, interaction: discord.Interaction, action_type: str):
@@ -4689,33 +4781,30 @@ class DuelBattleView(GuardedView):
             await interaction.response.send_message("지금은 당신의 차례가 아닙니다!", ephemeral=True)
             return
 
-        attacker_id = self.current_turn_id
-        defender_id = self.target.id if attacker_id == self.challenger.id else self.challenger.id
-
-        att = self.players[attacker_id]
-        defn = self.players[defender_id]
-        skill = att["skill"]
-
-        wait = skill.wait(action_type) if action_type != "attack" else ""
-        if wait:
-            await interaction.response.send_message(f"{SKILL_LABELS[action_type]} 은(는) 아직 사용할 수 없습니다. ({wait})", ephemeral=True)
-            return
-
         await interaction.response.defer()
 
-        name = att["member"].display_name
-        if action_type == "rally":
-            skill.use("rally")
-            self.logs.append(f"+ {name}의 전투 함성! 앞으로 {SKILL_RALLY_TURNS}번의 행동 동안 공격력 +{int(SKILL_RALLY_BONUS * 100)}%")
-        else:
-            buffed = skill.atk_mult() > 1
-            damage = skill_hit(skill, action_type, att["atk"], defn["def"], 15)
+        attacker_id = self.current_turn_id
+        defender_id = self.target.id if attacker_id == self.challenger.id else self.challenger.id
+        
+        att = self.players[attacker_id]
+        defn = self.players[defender_id]
+
+        # 방어 상태 초기화
+        att["guard"] = False
+
+        if action_type == "attack":
+            # 기본 공격 계산
+            damage = max(10, att["atk"] - (defn["def"] * 2 if defn["guard"] else defn["def"]) + random.randint(-15, 15))
+            if defn["guard"]:
+                damage = int(damage * 0.5)  # 방어 중이면 50% 경감
+                self.logs.append(f"+ {defn['member'].display_name}이(가) 방어 자세를 취해 피해를 줄였습니다!")
+            
             defn["hp"] = max(0, defn["hp"] - damage)
-            verb = {"attack": "공격", "smash": "강타", "finisher": "필살 일격!!"}[action_type]
-            self.logs.append(f"+ {name}의 {verb}! {defn['member'].display_name}의 체력 - {damage}" + (" [함성 효과]" if buffed else ""))
-            if action_type != "attack":
-                skill.use(action_type)
-        skill.actions += 1
+            self.logs.append(f"+ {att['member'].display_name}의 공격! {defn['member'].display_name}의 체력 - {damage}")
+
+        elif action_type == "guard":
+            att["guard"] = True
+            self.logs.append(f"+ {att['member'].display_name}이(가) 단단히 방어 태세를 갖췄습니다. (다음 피격 대미지 50% 감소)")
 
         # 승리 조건 체크
         if defn["hp"] <= 0:
@@ -4728,24 +4817,15 @@ class DuelBattleView(GuardedView):
         if self.current_turn_id == self.challenger.id:
             self.turn_count += 1
 
-        self._refresh_buttons()
         await self.message.edit(embed=self.get_embed(), view=self)
 
     @discord.ui.button(label="공격하기", style=discord.ButtonStyle.danger)
     async def attack_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.process_action(interaction, "attack")
 
-    @discord.ui.button(label="강타", style=discord.ButtonStyle.primary)
-    async def smash_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_action(interaction, "smash")
-
-    @discord.ui.button(label="전투 함성", style=discord.ButtonStyle.success)
-    async def rally_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_action(interaction, "rally")
-
-    @discord.ui.button(label="필살 일격", style=discord.ButtonStyle.secondary)
-    async def finisher_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_action(interaction, "finisher")
+    @discord.ui.button(label="방어하기", style=discord.ButtonStyle.primary)
+    async def guard_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_action(interaction, "guard")
 
     async def end_battle(self, interaction: discord.Interaction):
         self.stop()
@@ -5179,6 +5259,7 @@ class MissionSelect(discord.ui.Select):
                 rank_up_msg = f"\n\n**[조직 승급 축하]** **{old_rank}** **{new_rank}**(으)로 승급하셨습니다!"
 
             rank_up_msg += daily_record(blob, "mission", {**user_stats, "money": current_money, "honor": current_honor})
+            rank_up_msg += weekly_record(blob, "w_mission")   # 주간 의뢰
 
             new_title_ids = evaluate_new_titles(blob, {**user_stats, "money": current_money, "honor": current_honor})
             rank_up_msg += format_new_titles(new_title_ids)
@@ -6202,6 +6283,7 @@ async def finalize_mission(session: MissionSession, success: bool, reason: str, 
             rank_up_msg = f"\n\n**[조직 승급 축하]** **{old_rank}** **{new_rank}**(으)로 승급하셨습니다!"
 
         rank_up_msg += daily_record(blob, "mission", {**user_stats, "money": current_money, "honor": current_honor})
+        rank_up_msg += weekly_record(blob, "w_mission")   # 주간 의뢰
 
         new_title_ids = evaluate_new_titles(blob, {**user_stats, "money": current_money, "honor": current_honor})
         rank_up_msg += format_new_titles(new_title_ids)
@@ -6900,6 +6982,7 @@ async def kick_member(interaction: discord.Interaction, member: discord.Member, 
     app_commands.Choice(name="카지노 & 도박 (/도박)", value="도박"),
     app_commands.Choice(name="칭호 시스템 (/칭호)", value="칭호"),
     app_commands.Choice(name="일일 의뢰 (/일퀘)", value="일퀘"),
+    app_commands.Choice(name="주간 의뢰 (/주간)", value="주간"),
     app_commands.Choice(name="경찰 상점 (/경찰상점)", value="경찰상점"),
     app_commands.Choice(name="통합 설정 (/설정)", value="설정"),
     app_commands.Choice(name="네임드 몬스터 (/네임드)", value="네임드"),
@@ -6927,11 +7010,6 @@ async def info_command(interaction: discord.Interaction, keyword: str):
             "title": "시스템: /전투 [npc이름]",
             "desc": "지정한 NPC와 1:1 턴제 결투를 벌입니다.\n"
                     "• **특징:** 제한 턴(10턴) 내에 처치해야 승리하며, 패배 시 치료비 패널티가 발생합니다.\n"
-                    f"• **행동:** `공격하기` 외에 스킬 3가지를 쓸 수 있습니다. (스킬을 쓰면 그 턴의 기본 공격을 대신합니다)\n"
-                    f"  - **강타:** 대미지 x{SKILL_SMASH_MULT} (사용 후 {SKILL_SMASH_CD}번째 행동부터 재사용)\n"
-                    f"  - **전투 함성:** 이후 {SKILL_RALLY_TURNS}번의 행동 동안 공격력 +{int(SKILL_RALLY_BONUS * 100)}% (재사용 {SKILL_RALLY_CD}행동 뒤)\n"
-                    f"  - **필살 일격:** 대미지 x{SKILL_FINISHER_MULT}, {SKILL_FINISHER_MIN_TURN}턴째부터 전투당 1회\n"
-                    f"  - 스킬이 생긴 만큼 NPC·보스 체력도 늘어나 있어서, 스킬을 잘 써야 기존과 같은 난이도입니다. `/결투`에서도 같은 스킬을 씁니다.\n"
                     f"• **히든 이벤트:** 전투 승리 시 낮은 확률로 보스가 서버에 출현합니다! ({boss_chance_text()} / 한 번에 한 마리)",
         },
         "보스": {
@@ -6962,6 +7040,14 @@ async def info_command(interaction: discord.Interaction, keyword: str):
                     + "".join(f"• {q['name']} {q['target']}회 ({q['hint']})\n" for q in DAILY_QUESTS)
                     + "• **쿨타임:** 4개를 모두 완료한 시각부터 24시간 뒤에 새 의뢰가 열립니다.\n"
                     f"• **보상:** 출석 {ATTENDANCE_TITLE_STACKS}스택 달성 시 {TITLES['attendance_month']['name']} 칭호",
+        },
+        "주간": {
+            "title": "시스템: /주간",
+            "desc": "매주 월요일 00:00(한국 시간)에 초기화되는 주간 의뢰입니다. 직업(조직원/경찰)에 맞는 의뢰를 모두 완료한 뒤 `/주간`의 **[보상 수령]** 버튼으로 보상을 받습니다.\n"
+                    + "**조직원**\n" + "".join(f"• {q['name']} {q['target']}회 ({q['hint']})\n" for q in WEEKLY_QUESTS["mafia"])
+                    + "**경찰**\n" + "".join(f"• {q['name']} {q['target']}회 ({q['hint']})\n" for q in WEEKLY_QUESTS["police"])
+                    + f"• **보상:** 자금 ${WEEKLY_REWARD_MONEY:,} / 명예(경찰은 실적) +{WEEKLY_REWARD_HONOR}pt\n"
+                    + f"• **칭호:** 주간 의뢰 {WEEKLY_TITLE_CLEARS}회 완료 시 {TITLES['weekly_month']['name']}",
         },
         "설정": {
             "title": "시스템: /설정",
@@ -7000,7 +7086,7 @@ async def info_command(interaction: discord.Interaction, keyword: str):
         "레이드": {
             "title": "명령어: /레이드 [시작·정보]",
             "desc": "조직원이 함께 레이드 보스를 잡는 협동 콘텐츠입니다. `/레이드 정보` 에서 보스별 조건·보상과 전투 방법을 볼 수 있습니다.\n"
-                    "공격 / 응급처치 / 전투 함성 3가지 버튼으로 진행하며, 보상은 참여도(딜량)에 따라 나뉩니다.",
+                    "공격 / 응급처치 / 방어 태세 3가지 버튼으로 진행하며, 보상은 참여도(딜량)에 따라 나뉩니다.",
         },
         "경찰상점": {
             "title": "명령어: /경찰상점 (경찰 전용)",
@@ -7121,9 +7207,8 @@ RAID_FAMILY_COOLDOWN_SEC = 1800   # 같은 조직의 레이드 재시작 대기�
 RAID_GCD_SEC = 2.0                # 모든 행동 공통 대기시간
 RAID_ATTACK_CD_SEC = 4.0          # 공격 대기시간
 RAID_HEAL_CD_SEC = 25.0           # 응급처치 대기시간
-RAID_RALLY_CD_SEC = 30.0          # 전투 함성 대기시간
-RAID_RALLY_DURATION_SEC = 10.0    # 전투 함성 지속시간 (공격대 전원의 공격력 증가, 겹쳐 쓰면 시간만 갱신)
-RAID_RALLY_BONUS = 0.20           # 전투 함성 효과: 공격대 전원 공격력 +20%
+RAID_GUARD_CD_SEC = 20.0          # 방어 태세 대기시간
+RAID_GUARD_DURATION_SEC = 10.0    # 방어 태세 지속시간 (이 안에 광역기가 오면 피해 절반)
 RAID_AOE_INTERVAL_SEC = 20        # 광역기 주기
 RAID_AOE_INTERVAL_ENRAGE_SEC = 15 # 격노 후 광역기 주기
 RAID_HEAL_RATIO = 0.12            # 응급처치(전원 회복) 회복량: 최대 체력의 12%
@@ -7137,19 +7222,19 @@ RAID_BASE_SHARE = 0.6             # 보상 중 '균등 분배' 비율 (나머지
 RAID_TIERS = {
     "rat": {
         "name": "하수구의 쥐왕", "min_players": 2, "min_honor": 0, "cost": 1000,
-        "hits": 42, "def_ratio": 0.25, "aoe": 0.07, "aoe_enrage": 0.10,
+        "hits": 38, "def_ratio": 0.25, "aoe": 0.07, "aoe_enrage": 0.10,
         "money": 3000, "honor": 15, "points": 10,
         "desc": "하수도를 지배하는 거대한 쥐떼의 왕. 입문자용 레이드입니다.",
     },
     "bull": {
         "name": "부두 항만의 폭군", "min_players": 3, "min_honor": 1500, "cost": 3000,
-        "hits": 51, "def_ratio": 0.30, "aoe": 0.09, "aoe_enrage": 0.13,
+        "hits": 46, "def_ratio": 0.30, "aoe": 0.09, "aoe_enrage": 0.13,
         "money": 7000, "honor": 30, "points": 25,
         "desc": "에르느코항 부두를 장악한 괴력의 폭군. 응급처치 담당이 꼭 필요합니다.",
     },
     "king": {
         "name": "칼렌데 지하 황제", "min_players": 4, "min_honor": 4000, "cost": 8000,
-        "hits": 59, "def_ratio": 0.35, "aoe": 0.09, "aoe_enrage": 0.13,
+        "hits": 54, "def_ratio": 0.35, "aoe": 0.09, "aoe_enrage": 0.13,
         "money": 14000, "honor": 50, "points": 60,
         "desc": "칼렌데 지하 세계의 진짜 주인. 정상급 조직만이 도전할 수 있습니다.",
     },
@@ -7559,7 +7644,7 @@ async def family_disband_cmd(interaction: discord.Interaction):
 # ================================================================ /레이드
 class RaidPlayer:
     __slots__ = ("member", "uid", "name", "max_hp", "hp", "atk", "dmg_done", "hits",
-                 "gcd_until", "atk_ready", "heal_ready", "rally_ready")
+                 "gcd_until", "atk_ready", "heal_ready", "guard_ready", "guard_until")
 
     def __init__(self, member: discord.Member, stats: dict):
         self.member = member
@@ -7573,7 +7658,8 @@ class RaidPlayer:
         self.gcd_until = 0.0
         self.atk_ready = 0.0
         self.heal_ready = 0.0
-        self.rally_ready = 0.0
+        self.guard_ready = 0.0
+        self.guard_until = 0.0
 
     @property
     def alive(self) -> bool:
@@ -7601,7 +7687,6 @@ class RaidSession:
         self.next_aoe = 0.0
         self.enraged = False
         self.fight_started = False
-        self.rally_until = 0.0         # 전투 함성 효과가 끝나는 시각 (공격대 전체에 적용)
 
     def log(self, text: str):
         self.logs.append(text)
@@ -7632,11 +7717,10 @@ def raid_fight_embed(s: RaidSession) -> discord.Embed:
     aoe_warn = ""
     if s.state == "fighting":
         left = int(s.next_aoe - now)
-        aoe_warn = f"**광역 공격까지 {max(left, 0)}초!** 응급처치 준비!\n" if left <= 6 else ""
-    rally_line = f"**전투 함성 효과 중** (공격력 +{int(RAID_RALLY_BONUS * 100)}% / <t:{int(s.rally_until)}:R> 종료)\n" if s.state == "fighting" and s.rally_until > now else ""
+        aoe_warn = f"**광역 공격까지 {max(left, 0)}초!** (방어 태세는 {int(RAID_GUARD_DURATION_SEC)}초간 유지)\n" if left <= 6 else ""
     embed = discord.Embed(
         title=f"[레이드 전투] {t['name']}",
-        description=(f"{rage}{rally_line}"
+        description=(f"{rage}"
                      f"보스 `{_bar(s.boss_hp, s.boss_max, 20)}` **{max(0, int(s.boss_hp * 100 / max(1, s.boss_max)))}%**\n"
                      f"종료 <t:{int(s.fight_end)}:R>  ·  다음 광역 <t:{int(s.next_aoe)}:R>\n"
                      f"{aoe_warn}"),
@@ -7646,12 +7730,14 @@ def raid_fight_embed(s: RaidSession) -> discord.Embed:
     for p in s.players.values():
         if not p.alive:
             icon = "[전투불능]"
+        elif p.guard_until > now:
+            icon = "[방어]"
         else:
             icon = "[전투]"
         lines.append(f"{icon} **{p.name}** `{_bar(p.hp, p.max_hp, 8)}` {int(p.hp * 100 / max(1, p.max_hp))}% · 딜 {p.dmg_done:,}")
     embed.add_field(name="공격대", value="\n".join(lines) or "-", inline=False)
     embed.add_field(name="전황", value="\n".join(s.logs) or "전투 시작!", inline=False)
-    embed.set_footer(text=f"공격 {int(RAID_ATTACK_CD_SEC)}초 / 응급처치 {int(RAID_HEAL_CD_SEC)}초 / 전투 함성 {int(RAID_RALLY_CD_SEC)}초 쿨타임")
+    embed.set_footer(text="공격 4초 / 응급처치 25초 / 방어 20초 쿨타임")
     return embed
 
 
@@ -7774,8 +7860,7 @@ class RaidFightView(discord.ui.View):
         if p.atk_ready > now:
             await interaction.response.send_message(f"공격 쿨타임 {p.atk_ready - now:.1f}초", ephemeral=True)
             return
-        mult = 1 + RAID_RALLY_BONUS if now < s.rally_until else 1.0   # 전투 함성 효과
-        dmg = max(10, int(p.atk * mult) - s.boss_def + random.randint(-10, 10))
+        dmg = max(10, p.atk - s.boss_def + random.randint(-10, 10))
         s.boss_hp = max(0, s.boss_hp - dmg)
         p.dmg_done += dmg
         p.hits += 1
@@ -7812,20 +7897,18 @@ class RaidFightView(discord.ui.View):
         p.gcd_until = now + RAID_GCD_SEC
         await interaction.response.defer()
 
-    @discord.ui.button(label="전투 함성", style=discord.ButtonStyle.primary)
-    async def rally(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="방어 태세", style=discord.ButtonStyle.primary)
+    async def guard(self, interaction: discord.Interaction, button: discord.ui.Button):
         p = await self._prep(interaction)
         if not p: return
-        s = self.s
         now = time.time()
-        if p.rally_ready > now:
-            await interaction.response.send_message(f"전투 함성 쿨타임 {p.rally_ready - now:.1f}초", ephemeral=True)
+        if p.guard_ready > now:
+            await interaction.response.send_message(f"방어 태세 쿨타임 {p.guard_ready - now:.1f}초", ephemeral=True)
             return
-        s.rally_until = max(s.rally_until, now + RAID_RALLY_DURATION_SEC)
-        p.rally_ready = now + RAID_RALLY_CD_SEC
+        p.guard_until = now + RAID_GUARD_DURATION_SEC
+        p.guard_ready = now + RAID_GUARD_CD_SEC
         p.gcd_until = now + RAID_GCD_SEC
-        s.log(f"{p.name}의 전투 함성! {int(RAID_RALLY_DURATION_SEC)}초간 공격대 공격력 +{int(RAID_RALLY_BONUS * 100)}%")
-        await interaction.response.defer()
+        await interaction.response.send_message(f"방어 태세! {int(RAID_GUARD_DURATION_SEC)}초 안에 오는 광역 공격 피해가 절반이 됩니다.", ephemeral=True)
 
 
 # ---------------------------------------------------------------- 진행 / 정산
@@ -7837,6 +7920,8 @@ def raid_do_aoe(s: RaidSession):
         if not p.alive:
             continue
         dmg = int(p.max_hp * pct * random.uniform(0.9, 1.1))
+        if p.guard_until > now:
+            dmg //= 2
         p.hp = max(0, p.hp - dmg)
         if p.hp == 0:
             downed.append(p.name)
@@ -8082,7 +8167,7 @@ async def raid_info_cmd(interaction: discord.Interaction):
                      f"**진행:** `/레이드 시작` → 조직원이 `참가` ({RAID_LOBBY_SEC}초) → 전투 {RAID_DURATION_SEC // 60}분\n"
                      "**공격**: 보스 체력을 깎습니다.\n"
                      "**응급처치**: 쓰러진 동료를 되살리거나, 없으면 전원 체력을 회복합니다.\n"
-                     f"**전투 함성**: {int(RAID_RALLY_DURATION_SEC)}초 동안 공격대 전원의 공격력 +{int(RAID_RALLY_BONUS * 100)}%! (쿨타임 {int(RAID_RALLY_CD_SEC)}초, 여러 명이 번갈아 쓰면 효과를 계속 유지할 수 있어요)\n"
+                     "**방어 태세**: 10초 동안 광역 공격 피해가 절반! (광역 공격 직전에 사용하세요)\n"
                      "보스는 체력이 절반이 되면 **격노**하고, 시간 안에 못 잡거나 전멸하면 실패합니다.\n"
                      f"보상은 {int(RAID_BASE_SHARE * 100)}% 균등 + {100 - int(RAID_BASE_SHARE * 100)}% 딜량 비례이며, 한 번도 공격하지 않으면 받을 수 없습니다.\n"
                      f"조직 레이드 재도전 대기시간은 {RAID_FAMILY_COOLDOWN_SEC // 60}분입니다."),
@@ -9546,7 +9631,6 @@ M_EDEN    = MATERIAL_PREFIX + "에덴의 붉은 깃발"
 M_RAT     = MATERIAL_PREFIX + "쥐왕의 송곳니"
 M_BULL    = MATERIAL_PREFIX + "폭군의 닻줄"
 M_KING    = MATERIAL_PREFIX + "황제의 왕관 파편"
-M_SILENT  = MATERIAL_PREFIX + "침묵의 저울추"
 
 # 재료 → 획득처 안내 (/제작 화면에 표시)
 MATERIAL_SOURCES = {
@@ -9557,10 +9641,9 @@ MATERIAL_SOURCES = {
     M_BIANCA:  "/네임드: 독사 비앙카",
     M_BORONIN: "/네임드: 철의 장군 보로닌",
     M_EXEC:    "/네임드: 붉은 달의 처형자",
-    M_DARK:    "/보스: 어둠의 지배자",
-    M_EDEN:    "/보스: 에칼 데 페스토",
+    M_DARK:    "/보스: 어둠의 지배자·침묵의 심판자",
+    M_EDEN:    "/보스: 에칼 데 페스토·침묵의 심판자",
     M_ORIGIN:  "/보스: 태초의 파괴자",
-    M_SILENT:  "/보스: 침묵의 심판자",
     M_RAT:     "/레이드: 하수구의 쥐왕",
     M_BULL:    "/레이드: 부두 항만의 폭군",
     M_KING:    "/레이드: 칼렌데 지하 황제",
@@ -9582,8 +9665,8 @@ MATERIAL_DROPS = {
     # /보스
     "[히든보스] 어둠의 지배자":    [(M_DARK, 1.00, (2, 3)), (M_ALLOY, 1.00, (2, 4))],
     "[테러보스] 에칼 데 페스토":   [(M_EDEN, 1.00, (2, 3)), (M_ALLOY, 1.00, (3, 4))],
+    "[재앙보스] 침묵의 심판자":    [(M_DARK, 1.00, (2, 3)), (M_EDEN, 1.00, (1, 2)), (M_ALLOY, 1.00, (4, 5))],
     "[최강보스] 태초의 파괴자":    [(M_ORIGIN, 1.00, (2, 3)), (M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (3, 5))],
-    "[심판보스] 침묵의 심판자":    [(M_SILENT, 1.00, (2, 3)), (M_ALLOY, 1.00, (3, 5))],
     # 강화 보스: 일반 보스보다 재료를 훨씬 많이, 특수 합금은 확정으로 줍니다
     "[강화보스] 심연을 삼킨 어둠의 지배자":      [(M_DARK, 1.00, (5, 8)), (M_ALLOY, 1.00, (6, 10))],
     "[강화보스] 대재앙의 화신 에칼 데 페스토":    [(M_EDEN, 1.00, (5, 8)), (M_ALLOY, 1.00, (7, 11))],
@@ -9612,7 +9695,6 @@ CRAFT_RECIPES = [
     _recipe("w_exec",   "처형자의 붉은 낫",     "weapon",  10000, {M_EXEC: 3, M_ALLOY: 8},       atk=1100, hp=1000,  desc="붉은 달 아래 처형에 쓰이던 낫."),
     _recipe("w_dark",   "어둠의 대검",          "weapon",  15000, {M_DARK: 2, M_ALLOY: 8},       atk=1300, hp=2000,  desc="어둠의 핵이 박힌 거대한 대검."),
     _recipe("w_eden",   "혁명의 붉은 총검",     "weapon",  22000, {M_EDEN: 2, M_ALLOY: 9},       atk=1600, hp=2800,  desc="에덴의 붉은 깃발을 감아 만든 총검."),
-    _recipe("w_silent", "침묵의 판결검",        "weapon",  26000, {M_SILENT: 2, M_ALLOY: 10},    atk=1800, hp=3100,  desc="침묵의 저울추를 녹여 벼린 판결의 검."),
     _recipe("w_origin", "태초의 파괴검",        "weapon",  30000, {M_ORIGIN: 2, M_ALLOY: 10},    atk=2000, hp=3500,  desc="태초의 파편이 깃든 파괴의 검."),
     # ── 방어구
     _recipe("a_vest",    "보강 방탄 조끼",       "armor",    600, {M_SCRAP: 10},                 df=25,  hp=400,     desc="고철 판으로 보강한 조끼."),
@@ -9623,7 +9705,6 @@ CRAFT_RECIPES = [
     _recipe("a_king",    "황제의 왕관 갑주",     "armor",  10000, {M_KING: 3, M_ALLOY: 8},       df=240, hp=3000,    desc="황제의 왕관 파편이 박힌 갑주."),
     _recipe("a_dark",    "어둠의 갑주",          "armor",  15000, {M_DARK: 2, M_ALLOY: 10},      df=330, hp=5000,    desc="어둠의 핵이 맥동하는 갑주."),
     _recipe("a_eden",    "붉은 깃발 방탄 코트",  "armor",  22000, {M_EDEN: 2, M_ALLOY: 9},       df=410, hp=6500,    desc="에덴의 붉은 깃발로 안감을 댄 방탄 코트."),
-    _recipe("a_silent",  "침묵의 법복 갑주",     "armor",  26000, {M_SILENT: 2, M_ALLOY: 10},    df=450, hp=7200,    desc="소리 없이 모든 공격을 삼키는 심판자의 법복."),
     _recipe("a_origin",  "태초의 방벽",          "armor",  30000, {M_ORIGIN: 2, M_ALLOY: 10},    df=500, hp=8000,    desc="태초의 파편으로 빚어낸 절대 방벽."),
 ]
 _CRAFT_ALL_GOAL = len(CRAFT_RECIPES)
