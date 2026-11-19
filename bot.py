@@ -1970,6 +1970,8 @@ async def admin_lookup(interaction: discord.Interaction, member: discord.Member)
     embed.add_field(name="기본 정보", value=(f"역할: {', '.join(roles) or '없음'}\n직급: {get_user_rank(int(info.get('honor') or 0), '경찰' in roles)}\n"
                                               f"위치: {info.get('location', '-')}\n상태: {', '.join(status) or '정상'}"), inline=True)
     embed.add_field(name="재산", value=f"자금: ${int(info.get('money') or 0):,}\n명예: {int(info.get('honor') or 0):,} pt", inline=True)
+    _al = align_get(blob)
+    embed.add_field(name="성향", value=f"{align_label(_al['score'])} ({_al['score']:+d}) / 시민 활동 {_al['acts']}회 / 부패 경찰: {'예' if _al['corrupt'] else '아니오'}", inline=False)
     embed.add_field(name="최근 24시간 송금", value=f"보낸 금액: ${sent:,}\n받은 금액: ${received:,}", inline=False)
     embed.add_field(name="인벤토리", value=inv_text[:1000], inline=False)
     await interaction.followup.send(embed=embed, ephemeral=True)
@@ -4280,11 +4282,19 @@ async def part_time_job(interaction: discord.Interaction):
         print(f"DB Error (parttime daily quest): {e}")
         daily_msg = ""
 
+    align_msg = ""
+    if _kind_of(user) == "citizen":
+        try:
+            ar = await asyncio.to_thread(align_apply_sync, user.id, ALBA_ALIGN_SCORE)
+            align_msg = f"\n**성향:** `{ar['before']:+d}` → `{ar['after']:+d}` ({align_label(ar['after'])})"
+        except Exception as e:
+            print(f"DB Error (parttime align): {e}")
+
     embed = discord.Embed(
         title=f"[{selected_job['title']}] 완료",
         description=f"**{user.mention}** 님이 정직한 노동으로 자금을 벌었습니다!\n\n"
                     f"**획득 급여:** `${earned_money:,}`\n"
-                    f"**현재 보유 자금:** `${user_stats['money']:,}`{daily_msg}",
+                    f"**현재 보유 자금:** `${user_stats['money']:,}`{align_msg}{daily_msg}",
         color=discord.Color.blue()
     )
     if user.avatar:
@@ -5097,6 +5107,533 @@ class WeaponShopView(discord.ui.View):
         super().__init__(timeout=60)
         self.add_item(WeaponShopSelect(owner))
 
+# ==========================================
+# [시민 성향(선/악) · 전직 조건 · 부패 경찰]
+#
+#   1) 시민 성향
+#        - 시민은 /아르바이트(선 +1)와 /시민활동(선행 = 선 점수 +, 악행 = 악 점수 -)으로 성향 점수(-100 ~ +100)를 쌓습니다.
+#        - 점수 +30 이상 = 선 / -30 이하 = 악 / 그 사이 = 중립.  /프로필 과 /성향 에서 확인합니다.
+#   2) 전직 조건 (/가입 의 입단·임용 버튼)
+#        - 공통: 시민 활동(아르바이트·시민활동)을 JOB_CHANGE_MIN_ACTS 회 이상 해야 합니다.
+#        - 마피아 조직원: 성향이 '선'이면 입단할 수 없습니다. (악행을 쌓아 성향을 바꿔야 함)
+#        - 경찰: 선 / 중립이면 정식 경찰. 성향이 '악'이면 CORRUPT_ENTRY_BRIBE 의 뇌물을 내고 '부패 경찰'로 임용됩니다.
+#   3) 부패 경찰 (악 성향으로 임용된 경찰)
+#        - 프로필에 '부패 경찰'로 표시되고, 일반 경찰 활동 외에 /부패 무차별체포 · /부패 횡령 을 할 수 있습니다.
+#        - 비위를 저지를 때마다 감찰에 적발될 위험이 있고, 적발되면 벌금 + 명예 삭감 + 수감됩니다.
+#        - 시민과 청렴한 경찰은 /부패 신고 로 최근 비위를 저지른 부패 경찰을 신고할 수 있습니다.
+#   값은 아래 상수들로 조절합니다. 성향 데이터는 유저 데이터(data)의 "align" 항목에 저장됩니다.
+# ==========================================
+ALIGN_LIMIT = 100                  # 성향 점수 범위 (-100 ~ +100)
+ALIGN_GOOD_AT = 30                 # 이 점수 이상이면 '선'
+ALIGN_EVIL_AT = -30                # 이 점수 이하이면 '악'
+JOB_CHANGE_MIN_ACTS = 3            # 전직에 필요한 시민 활동 횟수 (0 으로 하면 조건 해제)
+CORRUPT_ENTRY_BRIBE = 3000         # 악 성향이 경찰로 임용될 때 내는 뇌물
+ALBA_ALIGN_SCORE = 1               # /아르바이트 1회당 선 점수
+CITIZEN_ACT_COOLDOWN_SEC = 90      # /시민활동 쿨타임
+
+CORRUPT_COOLDOWN_SEC = 300         # 부패 경찰의 비위 활동 쿨타임 (무차별체포 / 횡령 공통)
+CORRUPT_ARREST_JAIL_SEC = 90       # 무차별 체포당한 시민의 수감 시간
+CORRUPT_ARREST_EXTORT_RATE = 0.10  # 무차별 체포 시 시민 보유 자금에서 뜯어내는 비율
+CORRUPT_ARREST_EXTORT_MAX = 3000   # 뜯어내는 금액 상한
+CORRUPT_ARREST_EXPOSE = 0.25       # 무차별 체포 후 감찰에 적발될 확률
+CORRUPT_EMBEZZLE_REWARD = (1500, 5000)   # 횡령 금액
+CORRUPT_EMBEZZLE_EXPOSE = 0.40     # 횡령 후 감찰에 적발될 확률
+CORRUPT_VICTIM_IMMUNITY_SEC = 600  # 무차별 체포를 당한 시민이 다시 체포당하지 않는 시간
+CORRUPT_EXPOSE_FINE_MAX = 5000     # 적발 시 벌금 상한 (보유 자금 이내)
+CORRUPT_EXPOSE_HONOR_LOSS = 60     # 적발 시 명예 삭감
+CORRUPT_EXPOSE_JAIL_SEC = 180      # 적발 시 수감 시간
+CORRUPT_REPORT_WINDOW_SEC = 1800   # 마지막 비위로부터 이 시간 안에만 신고할 수 있음
+CORRUPT_REPORT_COOLDOWN_SEC = 600  # 신고 쿨타임
+CORRUPT_REPORT_CITIZEN_CHANCE = 0.55   # 시민 신고의 성공 확률 (청렴한 경찰의 신고는 100%)
+CORRUPT_REPORT_CITIZEN_REWARD = 2000   # 시민 신고 성공 보상금
+CORRUPT_REPORT_CITIZEN_SCORE = 4       # 시민 신고 성공 시 선 점수
+CORRUPT_REPORT_POLICE_REWARD = 3000    # 청렴한 경찰 신고 성공 보상금
+CORRUPT_REPORT_POLICE_HONOR = 25       # 청렴한 경찰 신고 성공 명예
+
+# 시민 활동. kind: good(선행) / evil(악행).  success 가 있는 활동은 실패하면 fine 만큼 벌금(보유 자금 이내)을 냅니다.
+CITIZEN_ACTS = {
+    "volunteer":  {"name": "자원봉사",     "kind": "good", "delta": 3,  "reward": (50, 150),
+                   "text": "복지관에서 하루 종일 봉사활동을 했습니다."},
+    "tip":        {"name": "범죄 제보",    "kind": "good", "delta": 4,  "reward": (200, 500),
+                   "text": "수상한 거래를 목격하고 치안국에 익명으로 제보했습니다."},
+    "charity":    {"name": "불우이웃 돕기", "kind": "good", "delta": 6,  "cost": 1000,
+                   "text": "자기 돈을 털어 어려운 이웃에게 기부했습니다."},
+    "pickpocket": {"name": "소매치기",     "kind": "evil", "delta": -3, "success": 0.70, "reward": (600, 1500), "fine": 400,
+                   "text": "붐비는 광장에서 행인의 지갑을 노렸습니다."},
+    "scam":       {"name": "사기",         "kind": "evil", "delta": -5, "success": 0.55, "reward": (1500, 4000), "fine": 1200,
+                   "text": "가짜 투자 상품으로 사람들을 속이려 했습니다."},
+    "extort":     {"name": "협박 갈취",    "kind": "evil", "delta": -6, "success": 0.45, "reward": (2500, 6000), "fine": 2000,
+                   "text": "골목 상인들을 찾아가 보호비를 요구했습니다."},
+}
+citizen_act_cooldowns = {}       # {user_id: epoch}
+corrupt_cooldowns = {}           # {경찰 user_id: epoch}
+corrupt_victim_immunity = {}     # {시민 user_id: epoch}
+corrupt_report_cooldowns = {}    # {신고자 user_id: epoch}
+
+
+def _kind_of(member) -> str:
+    names = {r.name for r in member.roles}
+    return "police" if "경찰" in names else "mafia" if "조직원" in names else "citizen"
+
+
+def align_get(blob: dict) -> dict:
+    """블롭에서 성향 정보를 읽어 정리해 돌려줍니다. (blob["align"] 에 정리된 값을 다시 넣음)"""
+    raw = blob.get("align") if isinstance(blob.get("align"), dict) else {}
+    a = {
+        "score": max(-ALIGN_LIMIT, min(ALIGN_LIMIT, int(raw.get("score", 0) or 0))),
+        "acts": int(raw.get("acts", 0) or 0),                  # 시민 활동 횟수
+        "corrupt": bool(raw.get("corrupt")),                   # 부패 경찰 여부
+        "last_corrupt": float(raw.get("last_corrupt", 0) or 0),  # 마지막 비위 시각 (신고 가능 기간 계산)
+        "job": raw.get("job"),                                 # 전직한 직업 ("police" / "mafia")
+    }
+    blob["align"] = a
+    return a
+
+
+def align_label(score: int) -> str:
+    return "선" if score >= ALIGN_GOOD_AT else "악" if score <= ALIGN_EVIL_AT else "중립"
+
+
+def align_apply_sync(user_id: int, delta: int = 0, money: int = 0, honor: int = 0,
+                     count_act: bool = True, mark_corrupt: bool = False) -> dict:
+    """성향 점수·자금·명예를 한 번에 바꿉니다. (자금·명예는 0 밑으로 내려가지 않음)"""
+    _require_db()
+    with _inv_lock:
+        info = get_user_data(user_id)
+        blob = get_title_blob(info)
+        a = align_get(blob)
+        before = a["score"]
+        a["score"] = max(-ALIGN_LIMIT, min(ALIGN_LIMIT, before + delta))
+        if count_act:
+            a["acts"] += 1
+        if mark_corrupt:
+            a["last_corrupt"] = time.time()
+        new_money = max(0, int(info.get("money") or 0) + money)
+        new_honor = max(0, int(info.get("honor") or 0) + honor)
+        res = supabase.table("user_data").update({"money": new_money, "honor": new_honor, "data": blob}).eq("user_id", str(user_id)).execute()
+        _check_updated(res, "align_apply")
+        return {"before": before, "after": a["score"], "money": new_money, "honor": new_honor, "acts": a["acts"]}
+
+
+def align_set_sync(user_id: int, score: int, corrupt=None) -> dict:
+    """[관리자] 성향 점수와 부패 경찰 여부를 직접 지정"""
+    _require_db()
+    with _inv_lock:
+        info = get_user_data(user_id)
+        blob = get_title_blob(info)
+        a = align_get(blob)
+        a["score"] = max(-ALIGN_LIMIT, min(ALIGN_LIMIT, score))
+        if corrupt is not None:
+            a["corrupt"] = bool(corrupt)
+            if corrupt:
+                a["job"] = a.get("job") or "police"
+        res = supabase.table("user_data").update({"data": blob}).eq("user_id", str(user_id)).execute()
+        _check_updated(res, "align_set")
+        return a
+
+
+def align_read(user_id: int) -> dict:
+    return align_get(get_title_blob(get_user_data(user_id)))
+
+
+def evaluate_job_change(info: dict, role_name: str) -> dict:
+    """시민이 role_name("조직원" / "경찰") 으로 전직할 수 있는지 판단합니다. (읽기만 함)"""
+    blob = get_title_blob(info)
+    a = align_get(blob)
+    label = align_label(a["score"])
+    money = int(info.get("money") or 0)
+    res = {"ok": False, "reason": "", "corrupt": False, "bribe": 0, "label": label, "score": a["score"], "acts": a["acts"]}
+    if a["acts"] < JOB_CHANGE_MIN_ACTS:
+        res["reason"] = (f"전직하려면 먼저 시민으로서 활동을 해야 합니다. (시민 활동 **{JOB_CHANGE_MIN_ACTS}회** 이상 필요 / 현재 {a['acts']}회)\n"
+                         f"`/아르바이트` 또는 `/시민활동` 으로 활동을 쌓아 주세요.")
+        return res
+    if role_name == "조직원" and label == "선":
+        res["reason"] = (f"선량한 시민은 마피아 조직에 입단할 수 없습니다. (현재 성향: **선** `{a['score']:+d}`)\n"
+                         f"`/시민활동` 의 악행으로 성향이 '선'에서 벗어나야 입단할 수 있습니다. (선 기준 `+{ALIGN_GOOD_AT}` 이상)")
+        return res
+    if role_name == "경찰" and label == "악":
+        res["corrupt"] = True
+        res["bribe"] = CORRUPT_ENTRY_BRIBE
+        if money < CORRUPT_ENTRY_BRIBE:
+            res["reason"] = (f"악한 성향으로 경찰이 되려면 임용 담당자에게 뇌물을 줘야 합니다. (필요 `${CORRUPT_ENTRY_BRIBE:,}` / 보유 `${money:,}`)\n"
+                             f"뇌물을 낼 돈이 없다면 성향을 '중립'까지 끌어올리거나 자금을 먼저 모아 주세요.")
+            return res
+    res["ok"] = True
+    return res
+
+
+def job_change_commit_sync(user_id: int, role_name: str):
+    """조건을 다시 확인하고 전직 기록(성향 블롭, 뇌물)을 저장합니다. 반환: (판정, 되돌릴 스냅샷 또는 None)"""
+    _require_db()
+    with _inv_lock:
+        info = get_user_data(user_id)
+        ev = evaluate_job_change(info, role_name)
+        if not ev["ok"]:
+            return ev, None
+        snapshot = {"money": int(info.get("money") or 0), "data": copy.deepcopy(info.get("data"))}
+        blob = get_title_blob(info)
+        a = align_get(blob)
+        a["job"] = "police" if role_name == "경찰" else "mafia"
+        a["corrupt"] = bool(ev["corrupt"])
+        a["last_corrupt"] = 0
+        res = supabase.table("user_data").update({"money": max(0, snapshot["money"] - ev["bribe"]), "data": blob}).eq("user_id", str(user_id)).execute()
+        _check_updated(res, "job_change")
+        return ev, snapshot
+
+
+def job_change_revert_sync(user_id: int, snapshot: dict):
+    """역할 부여에 실패했을 때 전직 기록과 뇌물을 되돌립니다."""
+    with _inv_lock:
+        try:
+            supabase.table("user_data").update({"money": snapshot["money"], "data": snapshot["data"]}).eq("user_id", str(user_id)).execute()
+        except Exception as e:
+            print(f"DB Error (job change revert): {e}")
+
+
+# ── /성향 ──
+@bot.tree.command(name="성향", description="[시민/공용] 내 성향(선/악)과 전직 조건을 확인합니다.")
+@app_commands.describe(member="확인할 유저 (비우면 본인)")
+async def show_alignment(interaction: discord.Interaction, member: discord.Member = None):
+    if not await check_maintenance(interaction): return
+    target = member or interaction.user
+    info = await asyncio.to_thread(get_user_data, target.id)
+    a = align_get(get_title_blob(info))
+    kind = _kind_of(target)
+    label = align_label(a["score"])
+    embed = discord.Embed(title=f"[성향] {target.display_name}", color=discord.Color.dark_teal())
+    if kind == "police":
+        status = "부패 경찰" if a["corrupt"] else "청렴한 경찰"
+        embed.description = f"**신분:** 경찰 ({status})\n**성향 점수:** `{a['score']:+d}` ({label})"
+    elif kind == "mafia":
+        embed.description = f"**신분:** 마피아 조직원\n**성향 점수:** `{a['score']:+d}` ({label})"
+    else:
+        lines = [f"**성향:** **{label}** `{a['score']:+d}` (선 `+{ALIGN_GOOD_AT}` 이상 / 악 `{ALIGN_EVIL_AT}` 이하)",
+                 f"**시민 활동 횟수:** `{a['acts']}회` (전직 필요 `{JOB_CHANGE_MIN_ACTS}회`)", ""]
+        for role_name, text in (("경찰", "치안국 경찰"), ("조직원", "마피아 조직원")):
+            ev = evaluate_job_change(info, role_name)
+            if ev["ok"] and ev["corrupt"]:
+                lines.append(f"**{text}:** 가능 - **부패 경찰**로 임용 (뇌물 `${ev['bribe']:,}`)")
+            elif ev["ok"]:
+                lines.append(f"**{text}:** 가능")
+            else:
+                lines.append(f"**{text}:** 불가 - {ev['reason'].splitlines()[0]}")
+        embed.description = "\n".join(lines)
+    if target.avatar:
+        embed.set_thumbnail(url=target.avatar.url)
+    await interaction.response.send_message(embed=embed, ephemeral=(target.id == interaction.user.id))
+
+
+# ── /시민활동 ──
+@bot.tree.command(name="시민활동", description="[시민] 선행(선) 또는 악행(악)을 해서 성향을 쌓습니다. 성향은 전직 조건과 활동을 결정합니다.")
+@app_commands.describe(활동="수행할 활동")
+@app_commands.choices(활동=[app_commands.Choice(name=f"[{'선' if v['kind'] == 'good' else '악'}] {v['name']}", value=k) for k, v in CITIZEN_ACTS.items()])
+async def citizen_activity(interaction: discord.Interaction, 활동: app_commands.Choice[str]):
+    if not await check_maintenance(interaction): return
+    if await check_jail(interaction): return
+    user = interaction.user
+    if _kind_of(user) != "citizen":
+        await interaction.response.send_message("시민 활동은 아직 소속이 없는 **시민**만 할 수 있습니다. (소속된 뒤에는 각자의 전용 명령어를 사용하세요)", ephemeral=True)
+        return
+    act = CITIZEN_ACTS[활동.value]
+    now = time.time()
+    cd = citizen_act_cooldowns.get(user.id, 0)
+    if now < cd:
+        await interaction.response.send_message(f"잠시 숨을 고르는 중입니다. **{int(cd - now + 0.999)}초** 뒤에 다시 활동할 수 있습니다.", ephemeral=True)
+        return
+    info = await asyncio.to_thread(get_user_data, user.id)
+    money_now = int(info.get("money") or 0)
+    if act.get("cost") and money_now < act["cost"]:
+        await interaction.response.send_message(f"자금이 부족합니다. (필요 `${act['cost']:,}` / 보유 `${money_now:,}`)", ephemeral=True)
+        return
+    citizen_act_cooldowns[user.id] = now + CITIZEN_ACT_COOLDOWN_SEC
+    await interaction.response.defer()
+
+    if act.get("cost"):
+        money, outcome = -act["cost"], f"기부금 `-${act['cost']:,}`"
+    elif "success" in act:
+        if random.random() < act["success"]:
+            money = random.randint(*act["reward"])
+            outcome = f"**성공!** 훔친 금액 `+${money:,}`"
+        else:
+            money = -min(money_now, act["fine"])
+            outcome = f"**실패!** 현장에서 붙잡혀 벌금 `-${abs(money):,}` 을(를) 냈습니다."
+    else:
+        money = random.randint(*act["reward"])
+        outcome = f"사례금 `+${money:,}`"
+
+    try:
+        res = await asyncio.to_thread(align_apply_sync, user.id, act["delta"], money)
+    except Exception as e:
+        citizen_act_cooldowns.pop(user.id, None)
+        await report_error("/시민활동", e, interaction)
+        await interaction.followup.send("데이터베이스 오류로 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.", ephemeral=True)
+        return
+
+    before_label, after_label = align_label(res["before"]), align_label(res["after"])
+    change = f"\n\n**[성향 변화]** **{before_label}** → **{after_label}** 성향이 되었습니다!" if before_label != after_label else ""
+    embed = discord.Embed(
+        title=f"[{act['name']}] {'선행' if act['kind'] == 'good' else '악행'}",
+        description=f"**{user.mention}** 님 - {act['text']}\n\n{outcome}\n"
+                    f"**성향 점수:** `{res['before']:+d}` → `{res['after']:+d}` ({after_label})\n"
+                    f"**보유 자금:** `${res['money']:,}`{change}",
+        color=discord.Color.green() if act["kind"] == "good" else discord.Color.dark_red()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    await interaction.followup.send(embed=embed)
+
+
+# ── 부패 경찰 ──
+corrupt_group = app_commands.Group(name="부패", description="[부패 경찰] 경찰 권력을 악용하는 비위 활동 / 시민·청렴 경찰의 신고", guild_only=True)
+bot.tree.add_command(corrupt_group)
+
+
+async def _corrupt_cop_gate(interaction: discord.Interaction) -> bool:
+    """부패 경찰만 통과 (응답 전에 호출). 아니면 안내 후 False"""
+    if not await check_maintenance(interaction): return False
+    if await check_jail(interaction): return False
+    user = interaction.user
+    if _kind_of(user) != "police":
+        await interaction.response.send_message("경찰만 사용할 수 있는 명령어입니다.", ephemeral=True)
+        return False
+    a = await asyncio.to_thread(align_read, user.id)
+    if not a["corrupt"]:
+        await interaction.response.send_message("청렴한 경찰은 비위를 저지를 수 없습니다. (악 성향으로 임용된 **부패 경찰**만 사용할 수 있습니다)", ephemeral=True)
+        return False
+    cd = corrupt_cooldowns.get(user.id, 0)
+    if time.time() < cd:
+        await interaction.response.send_message(f"감찰의 눈을 피하는 중입니다. **{int(cd - time.time() + 0.999)}초** 뒤에 다시 움직일 수 있습니다.", ephemeral=True)
+        return False
+    return True
+
+
+def corrupt_extort_sync(cop_id: int, victim_id: int) -> int:
+    """무차별 체포한 시민의 돈을 일부 뜯어 부패 경찰에게 줍니다. 반환: 뜯어낸 금액"""
+    _require_db()
+    with _inv_lock:   # (잠금은 재진입이 안 되므로 경찰 쪽 적립은 잠금 밖에서 처리)
+        v = get_user_data(victim_id)
+        v_money = int(v.get("money") or 0)
+        amount = min(int(v_money * CORRUPT_ARREST_EXTORT_RATE), CORRUPT_ARREST_EXTORT_MAX)
+        if amount > 0:
+            res = supabase.table("user_data").update({"money": v_money - amount}).eq("user_id", str(victim_id)).execute()
+            _check_updated(res, "extort (victim)")
+    try:
+        align_apply_sync(cop_id, 0, amount, count_act=False, mark_corrupt=True)
+    except Exception:
+        if amount > 0:   # 경찰 쪽 적립에 실패하면 시민의 돈을 되돌린다
+            with _inv_lock:
+                try:
+                    cur = int(get_user_data(victim_id).get("money") or 0)
+                    supabase.table("user_data").update({"money": cur + amount}).eq("user_id", str(victim_id)).execute()
+                except Exception as rollback_err:
+                    print(f"DB Error (extort rollback): {rollback_err}")
+        raise
+    return amount
+
+
+def corrupt_expose_sync(cop_id: int):
+    """감찰 적발 처리: 벌금 + 명예 삭감 (+ 신고 가능 기록 삭제). 반환: (벌금, 삭감된 명예)"""
+    _require_db()
+    with _inv_lock:
+        info = get_user_data(cop_id)
+        blob = get_title_blob(info)
+        a = align_get(blob)
+        a["last_corrupt"] = 0
+        fine = min(int(info.get("money") or 0), CORRUPT_EXPOSE_FINE_MAX)
+        loss = min(int(info.get("honor") or 0), CORRUPT_EXPOSE_HONOR_LOSS)
+        res = supabase.table("user_data").update({
+            "money": int(info.get("money") or 0) - fine,
+            "honor": int(info.get("honor") or 0) - loss,
+            "data": blob,
+        }).eq("user_id", str(cop_id)).execute()
+        _check_updated(res, "corrupt_expose")
+        return fine, loss
+
+
+async def corrupt_punish(cop_id: int):
+    """적발된 부패 경찰의 처벌 (벌금·명예 삭감 + 수감). 반환: (벌금, 삭감 명예)"""
+    fine, loss = await asyncio.to_thread(corrupt_expose_sync, cop_id)
+    jail_list[cop_id] = datetime.now() + timedelta(seconds=CORRUPT_EXPOSE_JAIL_SEC)
+    save_status(cop_id)
+    try:
+        await asyncio.to_thread(update_user_location, cop_id, "감옥")
+    except Exception as e:
+        print(f"Location update error: {e}")
+    return fine, loss
+
+
+def _expose_text(fine: int, loss: int) -> str:
+    return (f"\n\n**[감찰 적발]** 내부 감찰이 비위 사실을 포착했습니다! 벌금 `-${fine:,}` / 명예 `-{loss} pt` / "
+            f"**{CORRUPT_EXPOSE_JAIL_SEC // 60}분간 수감**됩니다.")
+
+
+@corrupt_group.command(name="무차별체포", description="[부패 경찰] 죄 없는 시민을 마구잡이로 체포해 수감하고 돈을 뜯어냅니다. (감찰 적발 위험)")
+@app_commands.describe(member="체포할 시민")
+async def corrupt_arrest(interaction: discord.Interaction, member: discord.Member):
+    if not await _corrupt_cop_gate(interaction): return
+    user = interaction.user
+    if member.id == user.id or member.bot:
+        await interaction.response.send_message("자기 자신이나 봇은 체포할 수 없습니다.", ephemeral=True)
+        return
+    if _kind_of(member) != "citizen":
+        await interaction.response.send_message("무차별 체포는 소속이 없는 **시민**에게만 할 수 있습니다. (수배 중인 마피아는 `/검거`)", ephemeral=True)
+        return
+    now = datetime.now()
+    if jail_list.get(member.id) and jail_list[member.id] > now:
+        await interaction.response.send_message(f"{member.mention} 님은 이미 수감 중입니다.", ephemeral=True)
+        return
+    if time.time() < corrupt_victim_immunity.get(member.id, 0):
+        await interaction.response.send_message(f"{member.mention} 님은 방금 체포당한 터라 한동안 건드릴 수 없습니다.", ephemeral=True)
+        return
+
+    corrupt_cooldowns[user.id] = time.time() + CORRUPT_COOLDOWN_SEC
+    corrupt_victim_immunity[member.id] = time.time() + CORRUPT_VICTIM_IMMUNITY_SEC
+    await interaction.response.defer()
+    try:
+        amount = await asyncio.to_thread(corrupt_extort_sync, user.id, member.id)
+    except Exception as e:
+        corrupt_cooldowns.pop(user.id, None)
+        corrupt_victim_immunity.pop(member.id, None)
+        await report_error("/부패 무차별체포", e, interaction)
+        await interaction.followup.send("데이터베이스 오류로 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.", ephemeral=True)
+        return
+
+    jail_list[member.id] = datetime.now() + timedelta(seconds=CORRUPT_ARREST_JAIL_SEC)
+    save_status(member.id)
+    try:
+        await asyncio.to_thread(update_user_location, member.id, "감옥")
+    except Exception as e:
+        print(f"Location update error: {e}")
+
+    exposed_text = ""
+    if random.random() < CORRUPT_ARREST_EXPOSE:
+        try:
+            fine, loss = await corrupt_punish(user.id)
+            exposed_text = _expose_text(fine, loss)
+        except Exception as e:
+            await report_error("/부패 무차별체포 (감찰 적발 처리)", e, interaction)
+
+    embed = discord.Embed(
+        title="[부패 경찰의 횡포] 무차별 체포",
+        description=(f"**{user.mention}** 경찰관이 아무 죄도 없는 시민 **{member.mention}** 님을 영장 없이 끌고 갔습니다!\n\n"
+                     f"**수감:** `{CORRUPT_ARREST_JAIL_SEC}초` 동안 감옥에 갇힙니다.\n"
+                     f"**갈취한 금액:** `${amount:,}`" + exposed_text
+                     + f"\n\n피해를 입었다면 `/부패 신고` 로 신고할 수 있습니다. ({CORRUPT_REPORT_WINDOW_SEC // 60}분 이내)"),
+        color=discord.Color.dark_red()
+    )
+    if member.avatar:
+        embed.set_thumbnail(url=member.avatar.url)
+    await interaction.followup.send(embed=embed)
+
+
+@corrupt_group.command(name="횡령", description="[부패 경찰] 치안국 압수품 보관소의 돈을 몰래 빼돌립니다. (감찰 적발 위험이 큽니다)")
+async def corrupt_embezzle(interaction: discord.Interaction):
+    if not await _corrupt_cop_gate(interaction): return
+    user = interaction.user
+    corrupt_cooldowns[user.id] = time.time() + CORRUPT_COOLDOWN_SEC
+    await interaction.response.defer()
+    amount = random.randint(*CORRUPT_EMBEZZLE_REWARD)
+    try:
+        res = await asyncio.to_thread(align_apply_sync, user.id, 0, amount, 0, False, True)
+    except Exception as e:
+        corrupt_cooldowns.pop(user.id, None)
+        await report_error("/부패 횡령", e, interaction)
+        await interaction.followup.send("데이터베이스 오류로 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.", ephemeral=True)
+        return
+    exposed_text = ""
+    if random.random() < CORRUPT_EMBEZZLE_EXPOSE:
+        try:
+            fine, loss = await corrupt_punish(user.id)
+            exposed_text = _expose_text(fine, loss)
+        except Exception as e:
+            await report_error("/부패 횡령 (감찰 적발 처리)", e, interaction)
+    embed = discord.Embed(
+        title="[부패 경찰] 압수품 횡령",
+        description=(f"**{user.mention}** 경찰관이 압수품 보관소에서 몰래 돈을 빼돌렸습니다.\n\n"
+                     f"**빼돌린 금액:** `${amount:,}`\n**현재 자금:** `${res['money']:,}`" + exposed_text),
+        color=discord.Color.dark_gold()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    await interaction.followup.send(embed=embed, ephemeral=not exposed_text)   # 들키지 않았다면 본인에게만 보임
+
+
+@corrupt_group.command(name="신고", description="[시민/청렴 경찰] 최근 비위를 저지른 부패 경찰을 감찰에 신고합니다.")
+@app_commands.describe(member="신고할 부패 경찰")
+async def corrupt_report(interaction: discord.Interaction, member: discord.Member):
+    if not await check_maintenance(interaction): return
+    if await check_jail(interaction): return
+    user = interaction.user
+    kind = _kind_of(user)
+    if kind == "mafia":
+        await interaction.response.send_message("범죄 조직원은 치안국에 신고할 수 없습니다.", ephemeral=True)
+        return
+    if member.id == user.id:
+        await interaction.response.send_message("자기 자신은 신고할 수 없습니다.", ephemeral=True)
+        return
+    cd = corrupt_report_cooldowns.get(user.id, 0)
+    if time.time() < cd:
+        await interaction.response.send_message(f"방금 신고를 접수했습니다. **{int(cd - time.time() + 0.999)}초** 뒤에 다시 신고할 수 있습니다.", ephemeral=True)
+        return
+    if _kind_of(member) != "police":
+        await interaction.response.send_message("경찰이 아닌 사람은 감찰 신고 대상이 아닙니다.", ephemeral=True)
+        return
+    if kind == "police":   # 신고하는 쪽이 부패 경찰이면 동료를 신고할 수 없음
+        mine = await asyncio.to_thread(align_read, user.id)
+        if mine["corrupt"]:
+            await interaction.response.send_message("부패 경찰은 감찰에 신고할 자격이 없습니다.", ephemeral=True)
+            return
+    target = await asyncio.to_thread(align_read, member.id)
+    if not target["corrupt"] or time.time() - target["last_corrupt"] > CORRUPT_REPORT_WINDOW_SEC:
+        await interaction.response.send_message(f"{member.mention} 님에게는 최근 {CORRUPT_REPORT_WINDOW_SEC // 60}분 안의 비위 증거가 없습니다. (허위 신고)", ephemeral=True)
+        return
+
+    corrupt_report_cooldowns[user.id] = time.time() + CORRUPT_REPORT_COOLDOWN_SEC
+    await interaction.response.defer()
+    success = kind == "police" or random.random() < CORRUPT_REPORT_CITIZEN_CHANCE
+    if not success:
+        await interaction.followup.send(embed=discord.Embed(
+            title="[감찰 신고] 증거 불충분",
+            description=f"**{user.mention}** 님의 신고가 접수됐지만 증거가 부족해 **{member.mention}** 님은 처벌받지 않았습니다.",
+            color=discord.Color.dark_grey()))
+        return
+    try:
+        fine, loss = await corrupt_punish(member.id)
+        if kind == "police":
+            await asyncio.to_thread(align_apply_sync, user.id, 0, CORRUPT_REPORT_POLICE_REWARD, CORRUPT_REPORT_POLICE_HONOR, False)
+            reward = f"포상금 `${CORRUPT_REPORT_POLICE_REWARD:,}` / 명예 `+{CORRUPT_REPORT_POLICE_HONOR} pt`"
+        else:
+            await asyncio.to_thread(align_apply_sync, user.id, CORRUPT_REPORT_CITIZEN_SCORE, CORRUPT_REPORT_CITIZEN_REWARD)
+            reward = f"사례금 `${CORRUPT_REPORT_CITIZEN_REWARD:,}` / 선 점수 `+{CORRUPT_REPORT_CITIZEN_SCORE}`"
+    except Exception as e:
+        corrupt_report_cooldowns.pop(user.id, None)
+        await report_error("/부패 신고", e, interaction)
+        await interaction.followup.send("데이터베이스 오류로 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.", ephemeral=True)
+        return
+    await interaction.followup.send(embed=discord.Embed(
+        title="[감찰 신고 접수] 부패 경찰 적발",
+        description=(f"**{user.mention}** 님의 신고로 부패 경찰 **{member.mention}** 의 비위가 드러났습니다!\n\n"
+                     f"**처분:** 벌금 `-${fine:,}` / 명예 `-{loss} pt` / **{CORRUPT_EXPOSE_JAIL_SEC // 60}분간 수감**\n"
+                     f"**신고 보상:** {reward}"),
+        color=discord.Color.dark_blue()))
+
+
+# ── [관리자] /관리 성향 ──
+@admin_group.command(name="성향", description="유저의 성향 점수와 부패 경찰 여부를 직접 지정합니다. (테스트·정정용)")
+@app_commands.describe(member="대상 유저", score=f"성향 점수 (-{ALIGN_LIMIT} ~ +{ALIGN_LIMIT})", corrupt="부패 경찰 여부 (비우면 그대로)")
+async def admin_alignment(interaction: discord.Interaction, member: discord.Member, score: int, corrupt: bool = None):
+    if not await admin_only(interaction): return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        a = await asyncio.to_thread(align_set_sync, member.id, score, corrupt)
+    except Exception as e:
+        await report_error("/관리 성향", e, interaction)
+        await interaction.followup.send("DB 오류로 처리하지 못했습니다.", ephemeral=True)
+        return
+    await admin_audit(interaction, "성향 조정", member, f"점수 {a['score']:+d} ({align_label(a['score'])}) / 부패 경찰: {'예' if a['corrupt'] else '아니오'}")
+    await interaction.followup.send(f"{member.mention} 님의 성향: `{a['score']:+d}` ({align_label(a['score'])}) / 부패 경찰: {'예' if a['corrupt'] else '아니오'}", ephemeral=True)
+
+
 # === 1. 셀프 가입 버튼 뷰 ===
 class SelfJoinView(discord.ui.View):
     def __init__(self):
@@ -5130,21 +5667,35 @@ class SelfJoinView(discord.ui.View):
             await interaction.response.send_message("당신은 이미 소속(마피아 또는 경찰)이 결정되었습니다!", ephemeral=True)
             return
 
+        # 전직 조건 확인 + 기록 저장 (응답 전에 처리)
+        try:
+            ev, snapshot = await asyncio.to_thread(job_change_commit_sync, user.id, target_role_name)
+        except Exception as e:
+            await report_error("전직 처리", e, interaction)
+            await interaction.response.send_message("데이터베이스 오류로 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.", ephemeral=True)
+            return
+        if not ev["ok"]:
+            await interaction.response.send_message(ev["reason"], ephemeral=True)
+            return
+
         try:
             if citizen_role and citizen_role in user.roles:
                 await user.remove_roles(citizen_role)
             await user.add_roles(target_role)
         except discord.Forbidden:
+            await asyncio.to_thread(job_change_revert_sync, user.id, snapshot)
             await interaction.response.send_message("봇의 역할 권한 순서를 올려주세요.", ephemeral=True)
             return
 
-        user_stats = get_user_data(user.id)
-
+        extra = ""
+        if ev["corrupt"]:
+            extra = (f"\n\n**[부패 경찰]** 악한 성향(`{ev['score']:+d}`)을 숨기고 뇌물 `${ev['bribe']:,}` 로 임용되었습니다. "
+                     f"프로필에 부패 경찰로 기록되며 `/부패` 명령어를 쓸 수 있지만, 감찰과 시민 신고를 조심하세요.")
         embed = discord.Embed(
             title=f"[{rank_title} 발령/입단]",
             description=f"**{user.mention}** 님이 시민의 삶을 마치고 **{target_role_name}**(으)로 새로운 활동을 시작합니다!\n\n"
-                        f"**신분 변화:** `시민` `{target_role_name}`",
-            color=discord.Color.gold()
+                        f"**신분 변화:** `시민` `{target_role_name}`{extra}",
+            color=discord.Color.dark_red() if ev["corrupt"] else discord.Color.gold()
         )
         if user.avatar:
             embed.set_thumbnail(url=user.avatar.url)
@@ -6624,7 +7175,7 @@ async def _load_avatar(member: discord.Member, size: int = 190) -> Image.Image:
     img = img.resize((size, size), Image.Resampling.LANCZOS)
     return ImageOps.colorize(ImageOps.grayscale(img), black=(35, 22, 10), white=(238, 224, 196))
 
-def make_profile_image(kind: str, rows: list, user_id: int, avatar: Image.Image) -> io.BytesIO:
+def make_profile_image(kind: str, rows: list, user_id: int, avatar: Image.Image, stamp_text: str = "승인") -> io.BytesIO:
     """증명서 이미지를 그려서 PNG 바이트로 반환. kind: police / mafia / citizen"""
     S = PROFILE_SCALE
     path = next(_asset_paths(PROFILE_BG_NAMES), None)
@@ -6655,11 +7206,12 @@ def make_profile_image(kind: str, rows: list, user_id: int, avatar: Image.Image)
     f_label, f_value = _profile_font(26), _profile_font(34)
     label_x, value_x = x1 + 30, x1 + 150
     line_end = photo_x - 30
+    pitch = 58 if len(rows) <= 6 else 50
     for i, (label, value) in enumerate(rows):
-        y = top + i * 58
+        y = top + i * pitch
         draw.text((label_x, y + 6), label, fill=PROFILE_MUTED, font=f_label)
         draw.text((value_x, y), _fit_text(draw, value, f_value, line_end - value_x), fill=PROFILE_INK, font=f_value)
-        draw.line((label_x, y + 50, line_end, y + 50), fill=(170, 145, 110), width=1)
+        draw.line((label_x, y + pitch - 8, line_end, y + pitch - 8), fill=(170, 145, 110), width=1)
 
     # [4] 붉은 도장 (사진 아래쪽에 살짝 걸치게)
     stamp = Image.new("RGBA", (170, 170), (0, 0, 0, 0))
@@ -6667,7 +7219,7 @@ def make_profile_image(kind: str, rows: list, user_id: int, avatar: Image.Image)
     red = (170, 40, 40, 210)
     sd.ellipse((6, 6, 164, 164), outline=red, width=6)
     sd.ellipse((20, 20, 150, 150), outline=red, width=2)
-    sd.text((85, 85), "승인", fill=red, font=_profile_font(52), anchor="mm")
+    sd.text((85, 85), stamp_text, fill=red, font=_profile_font(52), anchor="mm")
     stamp = stamp.rotate(-14, resample=Image.Resampling.BICUBIC)
     paper.alpha_composite(stamp, (photo_x - 20, top + avatar.height + 12 - 50))
 
@@ -6756,10 +7308,16 @@ async def profile_image_command(interaction: discord.Interaction, member: discor
         ("자 금", f"${data.get('money', 0):,}"),
         ("명 예", f"{honor:,} pt"),
     ]
+    al = align_get(get_title_blob(data))
+    stamp_text = "승인"
+    if kind == "police" and al["corrupt"]:
+        rows[1] = ("직 급", rows[1][1] + " (부패 경찰)")
+        stamp_text = "부패"
+    rows.append(("성 향", f"{align_label(al['score'])} ({al['score']:+d})"))
 
     try:
         avatar = await _load_avatar(target)
-        buf = await asyncio.to_thread(make_profile_image, kind, rows, target.id, avatar)
+        buf = await asyncio.to_thread(make_profile_image, kind, rows, target.id, avatar, stamp_text)
     except Exception as e:
         print(f"Profile image error: {e}")
         await interaction.followup.send("증명서를 발급하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
@@ -10672,7 +11230,7 @@ async def auction_command(interaction: discord.Interaction, 아이템: str,
 HELP_CATEGORIES = [
     # (키, 표시 이름, 분류 설명, [명령어 이름 — /조직 처럼 그룹 명령어는 첫 단어만])
     ("start",   "시작 · 정보",          "가입과 내 정보 확인, 설정, 랭킹 등 기본이 되는 명령어입니다.",
-     ["도움말", "가입", "탈퇴", "프로필", "정보", "설정", "일퀘", "주간", "칭호", "업적", "랭킹"]),
+     ["도움말", "가입", "탈퇴", "프로필", "정보", "설정", "일퀘", "주간", "칭호", "업적", "랭킹", "성향", "시민활동"]),
     ("economy", "이동 · 상점 · 경제",   "거점 이동, 장비 구매, 자금 이체, 제작 등 돈과 장비에 관한 명령어입니다.",
      ["이동", "암시장", "무기상점", "인벤토리", "송금", "아르바이트", "제작", "경매"]),
     ("mafia",   "마피아 활동",          "비밀 임무 수행, 경찰 매수, 탈옥 등 조직원의 범죄 활동입니다.",
@@ -10682,7 +11240,7 @@ HELP_CATEGORIES = [
     ("casino",  "카지노",               "자금을 걸고 즐기는 도박입니다. (`/도박 규칙` 에서 배당표 확인)",
      ["도박"]),
     ("police",  "경찰",                 "경찰 소속 전용 명령어입니다.",
-     ["작전", "검거", "순찰", "심문", "월급", "경찰상점", "수사팀"]),
+     ["작전", "검거", "순찰", "심문", "월급", "경찰상점", "수사팀", "부패"]),
     ("family",  "조직 · 레이드 · 구역", "조직(패밀리)을 만들어 함께하는 협동·점령 콘텐츠입니다.",
      ["조직", "레이드", "구역"]),
     ("admin",   "관리자",               "서버 관리자 전용 명령어입니다.",
