@@ -478,7 +478,7 @@ LOCATIONS = {
 # 페이스를 조절하려면 이 값들을 같은 비율로 올리거나 내리고, 쿨타임(아래 *_COOLDOWN_SEC)을 함께 조절하세요.
 MISSION_COOLDOWN_SEC = 40        # 임무 기본 쿨타임
 MISSION_COOLDOWN_FAST_SEC = 30   # 크로노그래프 시계 / 특수 바이크 보유 시
-NPC_COOLDOWN_SEC = 45            # /전투 쿨타임
+# (/전투 와 /네임드 는 쿨타임이 없습니다. 전투 화면이 끝날 때까지 다른 명령어가 잠기므로 동시에 여러 판을 열 수는 없습니다)
 BOSS_COOLDOWN_SEC = 60           # /보스 쿨타임
 PARTTIME_COOLDOWN_SEC = 45       # /아르바이트 쿨타임
 NPC_LOSS_PENALTY = 500           # NPC전 패배 시 치료비
@@ -3650,7 +3650,6 @@ def boss_reward_text() -> str:
 # 일반 NPC보다 훨씬 강하고, 체력이 절반 아래로 떨어지면 격노(enrage)해서 공격력이 오릅니다.
 # 처음 처치하면 고유 전리품()을 얻고, 명예는 조금만 주므로 대부 달성 속도에는 거의 영향이 없습니다.
 # min_honor 는 입장 조건, 12턴 안에 못 쓰러뜨리면 패배합니다.
-NAMED_COOLDOWN_SEC = 240
 NAMED_MONSTERS = {
     "marco": {
         "name": "[네임드] 백정 마르코", "named": True, "min_honor": 500, "max_turns": 12,
@@ -4180,7 +4179,7 @@ class NPCBattleView(GuardedView):
                 if active_boss_guilds.get(guild_id) == boss_spawn_kind:
                     set_active_boss(guild_id, None)
 
-        # 승패와 상관없이, 그리고 전투가 어떤 결과로 끝났든 무조건 쿨타임 즉시 초기화
+        # 승패와 상관없이, 그리고 전투가 어떤 결과로 끝났든 /보스 쿨타임은 무조건 즉시 초기화 (/전투·/네임드 는 쿨타임 자체가 없음)
         if self.user.id in npc_cooldowns:
             del npc_cooldowns[self.user.id]
 
@@ -4193,15 +4192,7 @@ async def fight_npc(interaction: discord.Interaction, npc_name: str):
 
     user = interaction.user
 
-    # 쿨타임 체크 (20초)
-    now = datetime.now()
-    if user.id in npc_cooldowns:
-        remaining = int((npc_cooldowns[user.id] - now).total_seconds())
-        if remaining > 0:
-            await interaction.response.send_message(f"부상에서 회복 중입니다. **{remaining}초** 뒤에 다시 전투할 수 있습니다.", ephemeral=True)
-            return
-
-    npc_cooldowns[user.id] = now + timedelta(seconds=NPC_COOLDOWN_SEC)
+    # /전투 는 쿨타임이 없습니다. (전투 화면이 끝날 때까지 다른 명령어가 잠기므로 동시에 여러 판은 열리지 않음)
 
     # 텍스트 입력값과 NPC 목록 매칭 확인
     target_npc = NPC_DATA.get(npc_name.strip())
@@ -4302,8 +4293,6 @@ async def fight_boss(interaction: discord.Interaction):
         await interaction.followup.send("보스전을 시작하는 중 오류가 발생했습니다. 보스는 그대로 남아 있으니 다시 시도해주세요.", ephemeral=True)
 
 # === [조직원 전용] `/네임드` 명령어 ===
-named_cooldowns = {}
-
 @bot.tree.command(name="네임드", description="[조직원 전용] 강화된 네임드 몬스터에 도전합니다. (명예 조건 / 고유 전리품)")
 @app_commands.describe(monster="도전할 네임드 몬스터")
 @app_commands.choices(monster=[
@@ -4328,14 +4317,6 @@ async def fight_named(interaction: discord.Interaction, monster: app_commands.Ch
             ephemeral=True
         )
         return
-
-    now = datetime.now()
-    if user.id in named_cooldowns:
-        remaining = int((named_cooldowns[user.id] - now).total_seconds())
-        if remaining > 0:
-            await interaction.response.send_message(f"네임드 사냥 후 숨을 고르는 중입니다. **{remaining}초** 뒤에 다시 도전할 수 있습니다.", ephemeral=True)
-            return
-    named_cooldowns[user.id] = now + timedelta(seconds=NAMED_COOLDOWN_SEC)
 
     await interaction.response.defer()
 
@@ -7541,7 +7522,7 @@ async def info_command(interaction: discord.Interaction, keyword: str):
                     "• **입장 조건:** 마르코 500pt / 비앙카 1,500pt / 보로닌 2,500pt / 처형자 4,000pt (명예)\n"
                     "• **특징:** 12턴 제한, 체력이 절반 아래가 되면 **격노**하여 공격력이 크게 오릅니다.\n"
                     "• **보상:** 많은 자금 + 소량의 명예, 최초 처치 시 고유 전리품 (칭호 해금)\n"
-                    "• **쿨타임:** 4분",
+                    "• **쿨타임:** 없음 (전투가 끝나면 바로 다시 도전할 수 있습니다)",
         },
         "전투": {
             "title": "시스템: /전투 [npc이름]",
@@ -7552,6 +7533,7 @@ async def info_command(interaction: discord.Interaction, keyword: str):
                     f"  - **전투 함성:** 이후 {SKILL_RALLY_TURNS}번의 행동 동안 공격력 +{int(SKILL_RALLY_BONUS * 100)}% (재사용 {SKILL_RALLY_CD}행동 뒤)\n"
                     f"  - **필살 일격:** 대미지 x{SKILL_FINISHER_MULT}, {SKILL_FINISHER_MIN_TURN}턴째부터 전투당 1회\n"
                     f"  - 스킬이 생긴 만큼 NPC·보스 체력도 늘어나 있어서, 스킬을 잘 써야 기존과 같은 난이도입니다. `/결투`에서도 같은 스킬을 씁니다.\n"
+                    "• **쿨타임:** 없음 (전투가 끝나면 바로 다음 전투를 시작할 수 있습니다)\n"
                     f"• **히든 이벤트:** 전투 승리 시 낮은 확률로 보스가 서버에 출현합니다! ({boss_chance_text()} / 한 번에 한 마리)",
         },
         "보스": {
@@ -11357,6 +11339,19 @@ def police_unit_update(unit_id, data: dict):
     res = supabase.table("police_units").update(data).eq("id", unit_id).execute()
     _check_updated(res, "police_unit_update")
 
+def police_unit_add_treasury_atomic(unit_id, delta: int) -> int:
+    """금고에 delta 를 더하고 새 금고 값을 돌려줍니다.
+    읽은 값이 그대로일 때만 갱신하므로, 동시에 다른 팀원이 기부해도 서로의 금액을 덮어쓰지 않습니다. (바뀌었으면 다시 읽고 재시도)"""
+    for _ in range(5):
+        unit = police_unit_get_by_id(unit_id)
+        if not unit:
+            raise RuntimeError("수사팀을 찾을 수 없습니다")
+        old = unit.get("treasury", 0)
+        res = supabase.table("police_units").update({"treasury": old + delta}).eq("id", unit_id).eq("treasury", old).execute()
+        if res.data:
+            return old + delta
+    raise RuntimeError("금고 갱신이 계속 겹쳐 실패했습니다")
+
 def police_unit_delete(unit_id):
     supabase.table("police_units").delete().eq("id", unit_id).execute()
 
@@ -11680,24 +11675,40 @@ async def unit_transfer_cmd(interaction: discord.Interaction, member: discord.Me
 async def unit_donate_cmd(interaction: discord.Interaction, 금액: app_commands.Range[int, POLICE_UNIT_MIN_DONATE, 10_000_000]):
     if not await _unit_precheck(interaction): return
     user = interaction.user
+    # 1) 조회 (두 번의 DB 조회를 동시에 — Discord 의 3초 응답 제한 안에 끝내기 위해)
     try:
-        unit = await asyncio.to_thread(police_unit_get_by_user, interaction.guild_id, user.id)
-        if not unit:
-            await interaction.response.send_message("소속된 수사팀이 없습니다.", ephemeral=True)
-            return
-        info = await asyncio.to_thread(get_user_data, user.id)
-        if info["money"] < 금액:
-            await interaction.response.send_message("보유 자금이 부족합니다.", ephemeral=True)
-            return
-        await asyncio.to_thread(update_user_stats, user.id, -금액, 0)
-        unit = await asyncio.to_thread(police_unit_get_by_id, unit["id"])   # 최신 금고 값으로 갱신
-        new_treasury = unit.get("treasury", 0) + 금액
-        await asyncio.to_thread(police_unit_update, unit["id"], {"treasury": new_treasury})
+        unit, info = await asyncio.gather(
+            asyncio.to_thread(police_unit_get_by_user, interaction.guild_id, user.id),
+            asyncio.to_thread(get_user_data, user.id),
+        )
     except Exception as e:
-        print(f"Police unit donate error: {e}")
+        print(f"Police unit donate lookup error: {e}")
         await interaction.response.send_message(POLICE_UNIT_DB_ERROR_MSG, ephemeral=True)
         return
-    await interaction.response.send_message(f"**{user.mention}** 님이 수사팀 금고에 `${금액:,}` 을(를) 기부했습니다! (금고 `${new_treasury:,}`)")
+    if not unit:
+        await interaction.response.send_message("소속된 수사팀이 없습니다.", ephemeral=True)
+        return
+    if info["money"] < 금액:
+        await interaction.response.send_message("보유 자금이 부족합니다.", ephemeral=True)
+        return
+
+    # 2) 여기부터는 DB 쓰기가 여러 번이라 오래 걸릴 수 있으므로 먼저 응답을 예약해 둔다
+    await interaction.response.defer()
+    paid = False
+    try:
+        await asyncio.to_thread(update_user_stats, user.id, -금액, 0)
+        paid = True
+        new_treasury = await asyncio.to_thread(police_unit_add_treasury_atomic, unit["id"], 금액)
+    except Exception as e:
+        print(f"Police unit donate error: {e}")
+        if paid:   # 돈만 빠지고 금고에 못 넣은 경우 되돌려 준다
+            try:
+                await asyncio.to_thread(update_user_stats, user.id, 금액, 0)
+            except Exception as e2:
+                print(f"Police unit donate refund error: {e2}")
+        await interaction.followup.send(POLICE_UNIT_DB_ERROR_MSG + "\n(자금은 차감되지 않았습니다.)", ephemeral=True)
+        return
+    await interaction.followup.send(f"**{user.mention}** 님이 수사팀 금고에 `${금액:,}` 을(를) 기부했습니다! (금고 `${new_treasury:,}`)")
 
 class PoliceUnitDisbandView(discord.ui.View):
     def __init__(self, owner: discord.Member, unit_id, unit_name: str):
