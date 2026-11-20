@@ -3675,6 +3675,7 @@ NAMED_MONSTERS = {
         "hp": 14000, "atk": 800, "def": 170, "enrage": 1.5,
         "reward_money": inc_range((3000, 5400)), "reward_honor": 14,
         "drop": "[전리품] 보로닌의 철 훈장",
+        "image": "named_boronin.png",   # 전투 화면 그림 (assets 폴더). 파일이 없으면 그림 없이 진행됩니다.
         "desc": "퇴역 후 용병단을 이끄는 철벽의 장군. 방어가 매우 단단합니다."
     },
     "executioner": {
