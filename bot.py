@@ -7093,8 +7093,9 @@ def make_profile_image(kind: str, rows: list, user_id: int, avatar: Image.Image,
 
     # [3] 인적 사항 (왼쪽): 라벨 + 값 + 밑줄
     dense = len(rows) > 6          # 줄이 7개 이상이면 간격과 글씨를 조금 줄여서 하단 문구와 겹치지 않게 함
-    pitch = 48 if dense else 58
-    f_label, f_value = _profile_font(24 if dense else 26), _profile_font(30 if dense else 34)
+    tight = len(rows) > 7          # 8줄 이상(사치품 줄까지 있는 시민)이면 한 단계 더 줄임
+    pitch = 42 if tight else 48 if dense else 58
+    f_label, f_value = _profile_font(22 if tight else 24 if dense else 26), _profile_font(27 if tight else 30 if dense else 34)
     label_x, value_x = x1 + 30, x1 + 150
     line_end = photo_x - 30
     for i, (label, value) in enumerate(rows):
@@ -7205,6 +7206,9 @@ async def profile_image_command(interaction: discord.Interaction, member: discor
     ]
     if kind == "citizen":
         rows.insert(2, ("성 향", alignment_text(pblob["karma"])))   # 시민일 때만 성향 표시
+    _lux_n, _lux_total = luxury_summary(data.get("inventory") or {})
+    if _lux_n:
+        rows.append(("사치품", f"{_lux_n}점 · ${_lux_total:,}"))   # 백화점에서 산 사치품 (과시용)
 
     try:
         avatar = await _load_avatar(target)
@@ -7226,12 +7230,17 @@ async def show_inventory(interaction: discord.Interaction):
     inventory = user_stats.get("inventory", {})
 
     embed = discord.Embed(title=f"[{interaction.user.name} 님의 장비 가방]", color=discord.Color.dark_green())
-    gear_keys = [k for k in inventory.keys() if not k.startswith(MATERIAL_PREFIX)]
+    gear_keys = [k for k in inventory.keys() if not k.startswith(MATERIAL_PREFIX) and k not in LUXURY_BY_NAME]
     inv_list = [f"• **{item}** `[보유 중]`" for item in gear_keys] if gear_keys else ["*보유 중인 장비가 없습니다.*"]
     embed.add_field(name="보유 중인 전용 장비", value="\n".join(inv_list), inline=False)
     mat_lines = [f"• {k[len(MATERIAL_PREFIX):]} x{v}" for k, v in inventory.items() if k.startswith(MATERIAL_PREFIX) and v > 0]
     if mat_lines:
         embed.add_field(name="제작 재료 (`/제작`)", value="\n".join(mat_lines), inline=False)
+    _lux = luxury_owned(inventory)
+    if _lux:
+        _lux_n, _lux_total = luxury_summary(inventory)
+        embed.add_field(name=f"사치품 ({_lux_n}점 · 정가 합계 ${_lux_total:,})",
+                        value="\n".join(f"• **{it['name']}**" for it in _lux)[:1000], inline=False)
     
     if interaction.user.avatar:
         embed.set_thumbnail(url=interaction.user.avatar.url)
@@ -10636,6 +10645,8 @@ def auction_blocked_reason(item: str):
         return "고유 전리품은 칭호·업적과 연결되어 있어 거래할 수 없습니다."
     if item in {it["name"] for it in POLICE_SHOP_ITEMS}:
         return "치안국 보급품은 거래할 수 없습니다."
+    if item in LUXURY_BY_NAME:
+        return "사치품은 개인 소유물이라 거래·경매·압류할 수 없습니다."
     return None
 
 # ── DB 작업 (동기, to_thread 로 실행) ────────────────────────────────────
@@ -11135,7 +11146,7 @@ HELP_CATEGORIES = [
     ("start",   "시작 · 정보",          "가입과 내 정보 확인, 설정, 랭킹 등 기본이 되는 명령어입니다.",
      ["도움말", "가입", "탈퇴", "프로필", "정보", "설정", "일퀘", "주간", "칭호", "업적", "랭킹"]),
     ("economy", "이동 · 상점 · 경제",   "거점 이동, 장비 구매, 자금 이체, 제작 등 돈과 장비에 관한 명령어입니다.",
-     ["이동", "암시장", "무기상점", "인벤토리", "송금", "제작", "경매"]),
+     ["이동", "암시장", "무기상점", "백화점", "인벤토리", "송금", "제작", "경매"]),
     ("citizen", "시민 활동",         "가입 전 시민의 활동입니다. 좋은 활동은 선, 나쁜 활동은 악 성향이 쌓이고 전직 조건에 영향을 줍니다.",
      ["아르바이트", "봉사", "기부", "소매치기"]),
     ("mafia",   "마피아 활동",          "비밀 임무 수행, 경찰 매수, 탈옥 등 조직원의 범죄 활동입니다.",
@@ -11451,10 +11462,13 @@ def _unit_embed(unit: dict, guild: discord.Guild) -> discord.Embed:
         crown = "[팀장] " if m == unit["owner_id"] else "• "
         lines.append(f"{crown}<@{m}>")
     embed = discord.Embed(title=f"수사팀 「{unit['name']}」", color=discord.Color.blue())
-    embed.add_field(name=f"팀원 ({len(members)}/{POLICE_UNIT_MAX_MEMBERS})", value="\n".join(lines) or "-", inline=False)
+    embed.add_field(name=f"팀원 ({len(members)}/{unit_max_members(unit)})", value="\n".join(lines) or "-", inline=False)
     embed.add_field(name="금고", value=f"`${unit.get('treasury', 0):,}`", inline=True)
     embed.add_field(name="작전 점수", value=f"`{unit.get('op_points', 0):,} pt`", inline=True)
     embed.add_field(name="소탕 성공", value=f"`{unit.get('ops_cleared', 0):,}회`", inline=True)
+    _fac_line = unit_facility_summary(unit)
+    if _fac_line:
+        embed.add_field(name="시설", value=_fac_line, inline=False)
     op = police_ops.get(unit["id"])
     if op:
         embed.add_field(name="진행 중인 작전", value=f"{op.tier['name']} ({'모집 중' if op.state == 'lobby' else '작전 수행 중'})", inline=False)
@@ -11536,7 +11550,7 @@ class PoliceUnitInviteView(discord.ui.View):
                 await interaction.response.edit_message(content="수사팀이 더 이상 존재하지 않습니다.", embed=None, view=None)
                 return
             members = list(unit.get("member_ids") or [])
-            if len(members) >= POLICE_UNIT_MAX_MEMBERS:
+            if len(members) >= unit_max_members(unit):
                 await interaction.response.edit_message(content="수사팀 정원이 가득 찼습니다.", embed=None, view=None)
                 return
             members.append(str(self.target.id))
@@ -11546,7 +11560,7 @@ class PoliceUnitInviteView(discord.ui.View):
             await interaction.response.edit_message(content=POLICE_UNIT_DB_ERROR_MSG, embed=None, view=None)
             return
         embed = discord.Embed(title="[수사팀 합류]",
-                              description=f"**{self.target.mention}** 님이 **「{self.unit_name}」** 에 합류했습니다! ({len(members)}/{POLICE_UNIT_MAX_MEMBERS})",
+                              description=f"**{self.target.mention}** 님이 **「{self.unit_name}」** 에 합류했습니다! ({len(members)}/{unit_max_members(unit)})",
                               color=discord.Color.green())
         await interaction.response.edit_message(content=None, embed=embed, view=None)
 
@@ -11576,7 +11590,7 @@ async def unit_invite_cmd(interaction: discord.Interaction, member: discord.Memb
         if unit["owner_id"] != str(user.id):
             await interaction.response.send_message("팀장만 초대할 수 있습니다.", ephemeral=True)
             return
-        if len(unit.get("member_ids") or []) >= POLICE_UNIT_MAX_MEMBERS:
+        if len(unit.get("member_ids") or []) >= unit_max_members(unit):
             await interaction.response.send_message("수사팀 정원이 가득 찼습니다.", ephemeral=True)
             return
         if await asyncio.to_thread(police_unit_get_by_user, interaction.guild_id, member.id):
@@ -11732,6 +11746,7 @@ class PoliceOpSession:
     def __init__(self, unit: dict, tier_key: str, leader: discord.Member, leader_stats: dict):
         self.unit_id = unit["id"]
         self.unit_name = unit["name"]
+        self.upgrades = unit_upgrades(unit)   # 수사팀 시설 레벨 (/수사팀 시설)
         self.member_ids = set(unit.get("member_ids") or [])
         self.tier_key = tier_key
         self.tier = POLICE_OP_TIERS[tier_key]
@@ -11830,7 +11845,8 @@ def police_op_stage_chance(session: PoliceOpSession) -> float:
     n = len(session.players)
     avg_atk = sum(st["atk"] for _, st in session.players.values()) / max(1, n)
     chance = t["base"] + 0.04 * max(0, n - t["min_players"]) + 0.12 * min(1.0, avg_atk / t["ref_atk"])
-    return max(0.30, min(0.92, chance))
+    chance += POLICE_UNIT_FACILITIES["range"]["per"] / 100 * session.upgrades.get("range", 0)   # 사격 훈련장
+    return max(0.30, min(0.95, chance))
 
 def police_op_progress_embed(session: PoliceOpSession, results: list) -> discord.Embed:
     lines = []
@@ -11878,11 +11894,12 @@ async def run_police_op(session: PoliceOpSession):
 
         succ = sum(results)
         frac = POLICE_OP_REWARD_FRAC[succ]
+        lab_mult = 1 + POLICE_UNIT_FACILITIES["lab"]["per"] / 100 * session.upgrades.get("lab", 0)   # 과학수사 연구소
         if succ > 0:
-            money_each = int(tier["money"] * frac)
+            money_each = int(tier["money"] * frac * lab_mult)
             honor_each = int(round(tier["honor"] * frac))
         else:
-            money_each = int(tier["money"] * POLICE_OP_FAIL_MONEY_RATIO)
+            money_each = int(tier["money"] * POLICE_OP_FAIL_MONEY_RATIO * lab_mult)
             honor_each = 0
         points = int(tier["points"] * frac)
 
@@ -11920,7 +11937,7 @@ async def run_police_op(session: PoliceOpSession):
     finally:
         session.state = "done"
         if ran:
-            police_op_cooldowns[session.unit_id] = datetime.now() + timedelta(seconds=POLICE_OP_COOLDOWN_SEC)
+            police_op_cooldowns[session.unit_id] = datetime.now() + timedelta(seconds=unit_op_cooldown_sec(session.upgrades))
         police_op_release(session)
 
 @unit_group.command(name="작전", description="우리 수사팀의 합동 소탕 작전을 엽니다. (수사팀 금고에서 작전비가 소모됩니다)")
@@ -11999,7 +12016,7 @@ async def unit_op_info_cmd(interaction: discord.Interaction):
                      "3. 잠입 → 급습 → 검거 3단계를 차례로 수행하고, 성공한 단계 수만큼 보상을 받습니다.\n"
                      "   (3단계 100% · 2단계 70% · 1단계 40% · 전부 실패 시 위로금)\n"
                      "4. 인원이 많고 장비가 좋을수록 단계 성공률이 올라갑니다.\n"
-                     f"5. 같은 수사팀은 작전 후 {POLICE_OP_COOLDOWN_SEC // 60}분간 정비합니다.\n\n" + "\n\n".join(lines)),
+                     f"5. 같은 수사팀은 작전 후 {POLICE_OP_COOLDOWN_SEC // 60}분간 정비합니다. (`/수사팀 시설` 의 시설로 성공률·보상·대기시간·정원을 키울 수 있어요)\n\n" + "\n\n".join(lines)),
         color=discord.Color.blue()
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -12195,6 +12212,402 @@ async def salary_command(interaction: discord.Interaction):
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
     s.task = asyncio.create_task(run_police_shift(s))
+
+
+
+# ==========================================================================
+# [공용 구매 확인 창]   (수백만 단위 구매 · 시설 업그레이드가 실수로 눌리지 않게 한 번 더 확인합니다)
+# ==========================================================================
+class _PurchaseConfirmView(discord.ui.View):
+    def __init__(self, user_id: int, on_confirm, timeout: int = 30):
+        super().__init__(timeout=timeout)
+        self.user_id = user_id
+        self.on_confirm = on_confirm
+        self.done = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("본인만 누를 수 있습니다.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="구매 확정", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.done:
+            return
+        self.done = True
+        self.stop()
+        await interaction.response.defer()
+        await self.on_confirm(interaction)
+
+    @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.done:
+            return
+        self.done = True
+        self.stop()
+        await interaction.response.edit_message(content="취소했습니다.", embed=None, view=None)
+
+
+# ==========================================================================
+# [수사팀 시설 업그레이드]   /수사팀 시설
+#   • 수사팀 금고($)를 써서 시설을 단계별(Lv.1~5)로 키웁니다. 업그레이드는 팀장만 할 수 있어요.
+#   • 시설 레벨은 Supabase `police_units` 테이블의 `upgrades`(jsonb) 컬럼에 저장됩니다.
+#       → police_unit_upgrade.sql 을 Supabase 에서 한 번 실행하세요. (컬럼이 없어도 봇은 정상 동작하고, 업그레이드만 안 됩니다)
+#   • 가격(costs)·효과(per)는 아래 표에서 자유롭게 바꾸세요. costs 의 길이가 최고 레벨입니다.
+# ==========================================================================
+POLICE_UNIT_UPGRADE_DB_MSG = ("시설 업그레이드 저장에 실패했습니다. "
+                              "(관리자: `police_units` 테이블에 `upgrades` 컬럼이 있는지 확인해 주세요 — police_unit_upgrade.sql 참고)")
+
+POLICE_UNIT_FACILITIES = {
+    "range": {"name": "사격 훈련장",     "per": 2, "effect": "작전 단계 성공률 +{v}%p",
+              "desc": "합동 소탕 작전의 단계별 성공률을 올립니다.",
+              "costs": [500_000, 1_000_000, 2_000_000, 3_500_000, 5_000_000]},
+    "lab":   {"name": "과학수사 연구소", "per": 6, "effect": "작전 보상금 +{v}%",
+              "desc": "합동 소탕 작전의 참가자 보상금이 늘어납니다.",
+              "costs": [600_000, 1_200_000, 2_400_000, 4_000_000, 6_000_000]},
+    "hq":    {"name": "지휘 통제실",     "per": 6, "effect": "작전 정비 대기시간 -{v}%",
+              "desc": "같은 수사팀이 작전을 다시 열 수 있기까지의 대기시간이 줄어듭니다.",
+              "costs": [700_000, 1_400_000, 2_800_000, 4_500_000, 7_000_000]},
+    "annex": {"name": "청사 증축",       "per": 1, "effect": "수사팀 정원 +{v}명",
+              "desc": "수사팀에 들어올 수 있는 인원이 늘어납니다.",
+              "costs": [800_000, 1_600_000, 3_200_000, 5_000_000, 8_000_000]},
+}
+
+_unit_upgrade_lock = _threading.Lock()   # 팀장이 연달아 눌러도 금고가 이중으로 빠지지 않게 직렬화
+
+
+def unit_upgrades(unit) -> dict:
+    """수사팀 행에서 시설 레벨을 읽습니다. (컬럼이 없거나 비어 있으면 전부 0)"""
+    raw = (unit or {}).get("upgrades")
+    if not isinstance(raw, dict):
+        raw = {}
+    out = {}
+    for key, fac in POLICE_UNIT_FACILITIES.items():
+        try:
+            lv = int(raw.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            lv = 0
+        out[key] = max(0, min(lv, len(fac["costs"])))
+    return out
+
+
+def unit_max_members(unit) -> int:
+    return POLICE_UNIT_MAX_MEMBERS + unit_upgrades(unit)["annex"] * POLICE_UNIT_FACILITIES["annex"]["per"]
+
+
+def unit_op_cooldown_sec(ups: dict) -> int:
+    cut = POLICE_UNIT_FACILITIES["hq"]["per"] * (ups or {}).get("hq", 0)
+    return max(60, int(POLICE_OP_COOLDOWN_SEC * (100 - cut) / 100))
+
+
+def unit_facility_summary(unit) -> str:
+    ups = unit_upgrades(unit)
+    parts = [f"{POLICE_UNIT_FACILITIES[k]['name']} Lv.{lv}" for k, lv in ups.items() if lv > 0]
+    return " · ".join(parts)
+
+
+def unit_facility_embed(unit: dict) -> discord.Embed:
+    ups = unit_upgrades(unit)
+    embed = discord.Embed(
+        title=f"수사팀 「{unit['name']}」 시설",
+        description=(f"**수사팀 금고:** `${int(unit.get('treasury') or 0):,}`\n"
+                     f"시설은 금고에서 비용이 나가며, **팀장**만 업그레이드할 수 있습니다. (`/수사팀 기부` 로 금고를 채우세요)"),
+        color=discord.Color.blue()
+    )
+    for key, fac in POLICE_UNIT_FACILITIES.items():
+        lv, mx = ups[key], len(fac["costs"])
+        bar = "■" * lv + "□" * (mx - lv)
+        now_eff = fac["effect"].format(v=fac["per"] * lv) if lv else "효과 없음"
+        nxt = (f"다음 Lv.{lv + 1}: `${fac['costs'][lv]:,}` ({fac['effect'].format(v=fac['per'] * (lv + 1))})"
+               if lv < mx else "**최고 레벨**")
+        embed.add_field(name=f"{fac['name']}  {bar}  Lv.{lv}/{mx}",
+                        value=f"{fac['desc']}\n현재: {now_eff}\n{nxt}", inline=False)
+    return embed
+
+
+def police_unit_upgrade_sync(unit_id, user_id: int, key: str):
+    """시설 1단계 업그레이드. 반환: ("ok", unit, 새 레벨, 비용) / ("no_money", 금고, 비용) / ("maxed",) / ("not_owner",) / ("no_unit",)"""
+    fac = POLICE_UNIT_FACILITIES[key]
+    with _unit_upgrade_lock:
+        unit = police_unit_get_by_id(unit_id)
+        if not unit:
+            return ("no_unit",)
+        if unit["owner_id"] != str(user_id):
+            return ("not_owner",)
+        ups = unit_upgrades(unit)
+        lv = ups[key]
+        if lv >= len(fac["costs"]):
+            return ("maxed",)
+        cost = fac["costs"][lv]
+        treasury = int(unit.get("treasury") or 0)
+        if treasury < cost:
+            return ("no_money", treasury, cost)
+        ups[key] = lv + 1
+        # 금고 차감과 레벨 상승을 한 번의 저장으로 처리 (컬럼이 없으면 여기서 실패 → 금고는 그대로)
+        police_unit_update(unit_id, {"treasury": treasury - cost, "upgrades": ups})
+        unit["treasury"] = treasury - cost
+        unit["upgrades"] = ups
+        return ("ok", unit, lv + 1, cost)
+
+
+class UnitFacilitySelect(discord.ui.Select):
+    def __init__(self, owner: discord.Member, unit: dict):
+        self.owner = owner
+        self.unit = unit
+        ups = unit_upgrades(unit)
+        options = []
+        for key, fac in POLICE_UNIT_FACILITIES.items():
+            lv = ups[key]
+            if lv >= len(fac["costs"]):
+                continue
+            options.append(discord.SelectOption(
+                label=f"{fac['name']} → Lv.{lv + 1}",
+                description=f"${fac['costs'][lv]:,} · {fac['effect'].format(v=fac['per'] * (lv + 1))}"[:100],
+                value=key))
+        super().__init__(placeholder="업그레이드할 시설을 선택하세요...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner.id:
+            await interaction.response.send_message("시설 업그레이드는 팀장만 할 수 있습니다.", ephemeral=True)
+            return
+        key = self.values[0]
+        fac = POLICE_UNIT_FACILITIES[key]
+        lv = unit_upgrades(self.unit)[key]
+        if lv >= len(fac["costs"]):
+            await interaction.response.send_message("이미 최고 레벨입니다.", ephemeral=True)
+            return
+        cost = fac["costs"][lv]
+        unit_id, unit_name = self.unit["id"], self.unit["name"]
+
+        async def do_upgrade(inter: discord.Interaction):
+            try:
+                res = await asyncio.to_thread(police_unit_upgrade_sync, unit_id, inter.user.id, key)
+            except Exception as e:
+                print(f"Police unit upgrade error: {e}")
+                await inter.edit_original_response(content=POLICE_UNIT_UPGRADE_DB_MSG, embed=None, view=None)
+                return
+            tag = res[0]
+            if tag == "ok":
+                _, unit, new_lv, paid = res
+                embed = discord.Embed(
+                    title="[시설 확장 완료]",
+                    description=(f"**{fac['name']}** 이(가) **Lv.{new_lv}** 이(가) 되었습니다!\n"
+                                 f"**효과:** {fac['effect'].format(v=fac['per'] * new_lv)}\n\n"
+                                 f"**차감 비용:** `${paid:,}`\n**남은 금고:** `${int(unit.get('treasury') or 0):,}`"),
+                    color=discord.Color.green())
+                await inter.edit_original_response(content=None, embed=embed, view=None)
+                try:
+                    await inter.channel.send(f"수사팀 **「{unit_name}」** 이(가) **{fac['name']}** 을(를) **Lv.{new_lv}** 로 확장했습니다!")
+                except Exception:
+                    pass
+            elif tag == "no_money":
+                await inter.edit_original_response(
+                    content=f"수사팀 금고가 부족합니다. (필요 `${res[2]:,}` / 금고 `${res[1]:,}`)\n`/수사팀 기부` 로 금고를 채워 주세요.",
+                    embed=None, view=None)
+            elif tag == "maxed":
+                await inter.edit_original_response(content="이미 최고 레벨입니다.", embed=None, view=None)
+            elif tag == "not_owner":
+                await inter.edit_original_response(content="팀장만 시설을 업그레이드할 수 있습니다.", embed=None, view=None)
+            else:
+                await inter.edit_original_response(content="수사팀이 더 이상 존재하지 않습니다.", embed=None, view=None)
+
+        confirm = discord.Embed(
+            title="[시설 업그레이드 확인]",
+            description=(f"**{fac['name']}** Lv.{lv} → **Lv.{lv + 1}**\n"
+                         f"**효과:** {fac['effect'].format(v=fac['per'] * (lv + 1))}\n"
+                         f"**비용:** `${cost:,}` (수사팀 금고에서 차감)"),
+            color=discord.Color.gold())
+        await interaction.response.send_message(embed=confirm, view=_PurchaseConfirmView(interaction.user.id, do_upgrade), ephemeral=True)
+
+
+class UnitFacilityView(discord.ui.View):
+    def __init__(self, owner: discord.Member, unit: dict):
+        super().__init__(timeout=180)
+        self.add_item(UnitFacilitySelect(owner, unit))
+
+
+@unit_group.command(name="시설", description="수사팀 시설을 확인하고, 팀장이 금고로 업그레이드합니다.")
+async def unit_facility_cmd(interaction: discord.Interaction):
+    if not await _unit_precheck(interaction): return
+    try:
+        unit = await asyncio.to_thread(police_unit_get_by_user, interaction.guild_id, interaction.user.id)
+    except Exception as e:
+        print(f"Police unit facility error: {e}")
+        await interaction.response.send_message(POLICE_UNIT_DB_ERROR_MSG, ephemeral=True)
+        return
+    if not unit:
+        await interaction.response.send_message("소속된 수사팀이 없습니다. `/수사팀 생성` 또는 초대를 받아 보세요.", ephemeral=True)
+        return
+
+    embed = unit_facility_embed(unit)
+    kwargs = {}
+    if unit["owner_id"] == str(interaction.user.id):
+        if any(lv < len(POLICE_UNIT_FACILITIES[k]["costs"]) for k, lv in unit_upgrades(unit).items()):
+            kwargs["view"] = UnitFacilityView(interaction.user, unit)
+    else:
+        embed.set_footer(text="시설 업그레이드는 팀장만 할 수 있습니다.")
+    await interaction.response.send_message(embed=embed, **kwargs)
+
+
+# ==========================================================================
+# [백화점 · 사치품]   /백화점
+#   • 돈을 아낌없이 쓰는 과시용 상품입니다. 전투 능력치는 올려주지 않고, /프로필 · /인벤토리 에 보유 현황이 표시됩니다.
+#   • 사치품은 한 종류당 1개만 살 수 있고, 거래·경매·압류가 불가능합니다. (되팔아 돈을 돌려받는 구멍을 막기 위해)
+#   • 가격·상품은 아래 LUXURY_ITEMS 에서 자유롭게 바꾸세요. (id 와 name 은 서로 겹치지 않게)
+#   • LUXURY_ANNOUNCE_MIN 이상 구매하면 채널에 공개 알림이 올라갑니다. (과시 효과)
+# ==========================================================================
+LUXURY_ANNOUNCE_MIN = 3_000_000
+
+LUXURY_ITEMS = [
+    # --- 패션 ---
+    {"id": "lx_suit",     "cat": "패션",   "name": "맞춤 이탈리안 정장",     "price": 300_000,     "desc": "장인이 손수 지은 정장. 입는 순간 분위기가 달라집니다."},
+    {"id": "lx_fur",      "cat": "패션",   "name": "러시안 밍크 코트",       "price": 1_200_000,   "desc": "겨울 사교계의 필수품. 한눈에 부자임이 드러납니다."},
+    {"id": "lx_necklace", "cat": "패션",   "name": "블루 다이아 목걸이",     "price": 8_000_000,   "desc": "경매장에서도 보기 힘든 푸른 다이아몬드."},
+    # --- 시계 ---
+    {"id": "lx_watch1",   "cat": "시계",   "name": "스위스 골드 손목시계",   "price": 700_000,     "desc": "정확하고 묵직한 황금빛 시계."},
+    {"id": "lx_watch2",   "cat": "시계",   "name": "다이아 베젤 시계",       "price": 2_000_000,   "desc": "시침마다 보석이 박힌 사치스러운 시계."},
+    {"id": "lx_watch3",   "cat": "시계",   "name": "한정판 투르비옹 시계",   "price": 5_000_000,   "desc": "전 세계 열 개뿐인 수제 시계. 값은 부르는 대로."},
+    # --- 차량 ---
+    {"id": "lx_classic",  "cat": "차량",   "name": "빈티지 클래식카",        "price": 2_500_000,   "desc": "반질반질하게 복원된 옛 시절의 명차."},
+    {"id": "lx_limo",     "cat": "차량",   "name": "방탄 리무진",            "price": 6_000_000,   "desc": "총알도 튕겨내는 검은 리무진. 기사 포함."},
+    {"id": "lx_super",    "cat": "차량",   "name": "이탈리아 슈퍼카",        "price": 10_000_000,  "desc": "시동 소리만으로 골목이 조용해지는 슈퍼카."},
+    # --- 부동산 ---
+    {"id": "lx_apt",      "cat": "부동산", "name": "시내 고급 아파트",       "price": 15_000_000,  "desc": "레벤하임 중심가가 한눈에 보이는 고층 아파트."},
+    {"id": "lx_villa",    "cat": "부동산", "name": "해안 별장",              "price": 30_000_000,  "desc": "에르느코항 절벽 위에 지은 프라이빗 별장."},
+    # --- 최상위 ---
+    {"id": "lx_yacht",    "cat": "최상위", "name": "전용 초호화 요트",       "price": 50_000_000,  "desc": "파티홀과 수영장을 갖춘 바다 위의 궁전."},
+    {"id": "lx_jet",      "cat": "최상위", "name": "전용 제트기",            "price": 100_000_000, "desc": "원하는 곳 어디든, 원하는 시간에 이륙합니다."},
+    {"id": "lx_island",   "cat": "최상위", "name": "개인 소유 섬",           "price": 300_000_000, "desc": "지도에 당신의 이름이 박힌 섬. 부의 끝판왕."},
+]
+LUXURY_BY_ID = {it["id"]: it for it in LUXURY_ITEMS}
+LUXURY_BY_NAME = {it["name"]: it for it in LUXURY_ITEMS}
+
+
+def luxury_owned(inv: dict) -> list:
+    inv = inv or {}
+    return [it for it in LUXURY_ITEMS if int(inv.get(it["name"], 0) or 0) > 0]
+
+
+def luxury_summary(inv: dict):
+    """(보유 개수, 보유 사치품 정가 합계)"""
+    owned = luxury_owned(inv)
+    return len(owned), sum(it["price"] for it in owned)
+
+
+def luxury_buy_sync(user_id: int, item_id: str):
+    """사치품 구매. 반환: ("ok", 남은 돈) / ("no_money", 보유 돈) / ("owned",) / ("no_item",)"""
+    item = LUXURY_BY_ID.get(item_id)
+    if not item:
+        return ("no_item",)
+    _require_db()
+    with _inv_lock:   # 인벤토리를 읽고 다시 쓰는 작업이 서로 덮어쓰지 않도록
+        info = get_user_data(user_id)
+        money = int(info.get("money") or 0)
+        inv = dict(info.get("inventory") or {})
+        if int(inv.get(item["name"], 0) or 0) >= 1:
+            return ("owned",)
+        if money < item["price"]:
+            return ("no_money", money)
+        inv[item["name"]] = 1
+        res = supabase.table("user_data").update({"money": money - item["price"], "inventory": inv}).eq("user_id", str(user_id)).execute()
+        _check_updated(res, "luxury_buy")
+        return ("ok", money - item["price"])
+
+
+def department_store_embed(user: discord.Member, money: int, inv: dict) -> discord.Embed:
+    n, total = luxury_summary(inv)
+    embed = discord.Embed(
+        title="[레벤하임 백화점] 프리미엄 갤러리아",
+        description=(f"**{user.mention}** 님, 어서 오세요. 부를 증명할 최고급 상품을 준비했습니다.\n"
+                     f"사치품은 능력치를 올려주진 않지만, `/프로필` 에 당신의 재력이 새겨집니다.\n\n"
+                     f"**현재 보유 자금:** `${money:,}`\n"
+                     f"**보유 사치품:** `{n}점` (정가 합계 `${total:,}`)"),
+        color=discord.Color.gold())
+    cats = {}
+    for it in LUXURY_ITEMS:
+        cats.setdefault(it["cat"], []).append(it)
+    for cat, items in cats.items():
+        lines = []
+        for it in items:
+            tag = " `[보유 중]`" if int(inv.get(it["name"], 0) or 0) > 0 else ""
+            lines.append(f"• **{it['name']}** - `${it['price']:,}`{tag}\n  └ *{it['desc']}*")
+        embed.add_field(name=cat, value="\n".join(lines)[:1024], inline=False)
+    embed.set_footer(text="사치품은 한 종류당 1개 · 거래, 경매, 압류 불가")
+    return embed
+
+
+class DepartmentStoreSelect(discord.ui.Select):
+    def __init__(self, owner: discord.Member, items: list):
+        self.owner = owner
+        options = [discord.SelectOption(label=it["name"], description=f"${it['price']:,} · {it['desc']}"[:100], value=it["id"])
+                   for it in items]
+        super().__init__(placeholder="구매할 사치품을 선택하세요...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner.id:
+            await interaction.response.send_message("본인의 백화점 창만 조작할 수 있습니다.", ephemeral=True)
+            return
+        item = LUXURY_BY_ID.get(self.values[0])
+        if not item:
+            await interaction.response.send_message("존재하지 않는 상품입니다.", ephemeral=True)
+            return
+
+        async def do_buy(inter: discord.Interaction):
+            try:
+                res = await asyncio.to_thread(luxury_buy_sync, inter.user.id, item["id"])
+            except Exception as e:
+                print(f"Luxury buy error: {e}")
+                await inter.edit_original_response(content="구매 처리 중 DB 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.", embed=None, view=None)
+                return
+            if res[0] == "ok":
+                embed = discord.Embed(
+                    title="[백화점] 구매 완료",
+                    description=(f"**{inter.user.mention}** 님이 **{item['name']}** 을(를) 구매했습니다!\n\n"
+                                 f"**결제 금액:** `${item['price']:,}`\n**잔여 자금:** `${res[1]:,}`\n"
+                                 f"`/프로필` 에서 보유 사치품을 확인해 보세요."),
+                    color=discord.Color.gold())
+                await inter.edit_original_response(content=None, embed=embed, view=None)
+                if item["price"] >= LUXURY_ANNOUNCE_MIN:
+                    try:
+                        await inter.channel.send(f"[백화점] {inter.user.mention} 님이 **{item['name']}** 을(를) `${item['price']:,}` 에 구매했습니다!")
+                    except Exception:
+                        pass
+            elif res[0] == "owned":
+                await inter.edit_original_response(content="이미 보유 중인 사치품입니다.", embed=None, view=None)
+            elif res[0] == "no_money":
+                await inter.edit_original_response(content=f"자금이 부족합니다! (필요 `${item['price']:,}` / 보유 `${res[1]:,}`)", embed=None, view=None)
+            else:
+                await inter.edit_original_response(content="존재하지 않는 상품입니다.", embed=None, view=None)
+
+        confirm = discord.Embed(
+            title="[백화점] 구매 확인",
+            description=f"**{item['name']}**\n*{item['desc']}*\n\n**가격:** `${item['price']:,}`",
+            color=discord.Color.gold())
+        await interaction.response.send_message(embed=confirm, view=_PurchaseConfirmView(interaction.user.id, do_buy), ephemeral=True)
+
+
+class DepartmentStoreView(discord.ui.View):
+    def __init__(self, owner: discord.Member, items: list):
+        super().__init__(timeout=180)
+        self.add_item(DepartmentStoreSelect(owner, items))
+
+
+@bot.tree.command(name="백화점", description="[공용] 명품·차량·부동산 같은 사치품을 사서 재력을 과시합니다. (프로필에 표시)")
+async def department_store_cmd(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if await check_jail(interaction): return
+    try:
+        data = await asyncio.to_thread(get_user_data, interaction.user.id)
+    except Exception as e:
+        print(f"Department store error: {e}")
+        await interaction.response.send_message("백화점 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.", ephemeral=True)
+        return
+    inv = data.get("inventory") or {}
+    money = int(data.get("money") or 0)
+    items = [it for it in LUXURY_ITEMS if int(inv.get(it["name"], 0) or 0) < 1]
+    kwargs = {"view": DepartmentStoreView(interaction.user, items)} if items else {}
+    await interaction.response.send_message(embed=department_store_embed(interaction.user, money, inv), ephemeral=True, **kwargs)
 
 
 bot.run(os.getenv("DISCORD_TOKEN"))
