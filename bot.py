@@ -1,37 +1,11 @@
 # ======================================================================
-#  마피아 GM 봇 — 전체 코드 묶음 (파일 1개)
-#  (여러 파일을 이어 붙인 것입니다. 각 파일은 `#@@@@ FILE: 경로` 줄로 시작합니다.
-#   .py 가 아닌 파일(README·requirements)은 모든 줄 앞에 `#| ` 가 붙어 있습니다.)
-#
-#  현재 구조: bot.py(진입점) + mafia/ 패키지 13개 모듈
-#    core → status → admin → (battle, civilian, family, market) → economy → mission → police
-#         → (misc, police_unit, territory)      ※ 앞 모듈이 뒤 모듈을 import 하지 않습니다 (순환 없음)
-#    · core         Flask keep-alive, 수입 배율, 명령어 잠금, Supabase 연결, bot 객체, 오류 보고
-#    · status       감옥·수배, 유저 데이터 접근, 업적·일퀘·주간·칭호
-#    · admin        /관리, 점검 모드, 공통 체크, /송금
-#    · battle       /전투 /보스 /네임드 /결투 (NPC·보스·네임드 데이터 포함)
-#    · civilian     아르바이트·봉사·기부·소매치기·갈취, 도박(슬롯·동전·블랙잭)
-#    · economy      /제작 /프로필 /인벤토리 /무기상점 /경매
-#    · family       /조직
-#    · market       /사업 /주식 (시세 5분 루프), 암시장 관련, on_ready
-#    · mission      가입·탈퇴, /임무
-#    · police       경찰상점·이동·암시장·작전·심문·설정·검거·밀수·순찰
-#    · police_unit  /수사팀 (월급·백화점·시설 포함)
-#    · misc         /정보 /능력치 /도움말 /탈옥
-#    · territory    /구역
-#
-#  ▼ 원래 파일로 되돌리는 방법: 이 파일과 같은 폴더에서 아래 코드를 실행 (각 줄 앞 `#  | ` 제거)
-#  | import re, os
-#  | for m in re.finditer(r"^#@@@@ FILE: ([^\n]+)\n(.*?)(?=^#@@@@ FILE: |\Z)", open("mafia_bundle.py", encoding="utf-8").read(), re.S | re.M):
-#  |     path, body = m.group(1), m.group(2)
-#  |     if not path.endswith(".py"): body = "".join(l[3:] for l in body.splitlines(True))
-#  |     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-#  |     open(path, "w", encoding="utf-8", newline="").write(body)
-#  (README 는 예전 35개 모듈 구조 설명이라 현재 구조와 다릅니다. 이미지·폰트는 포함하지 않았습니다.)
+#  마피아 GM 봇 — 한 파일 버전 (bot.py 하나만 올리면 됩니다)
+#  예전의 mafia/ 폴더 구조(13개 모듈)를 순서대로 이어 붙인 파일입니다.
+#  각 구간은 `# ######## [모듈: 이름] ########` 줄로 구분됩니다.
 # ======================================================================
-#@@@@ FILE: mafia/__init__.py
-"""마피아 GM 봇 패키지 (bot.py 에서 불러옵니다)."""
-#@@@@ FILE: mafia/core.py
+
+
+# ########################## [모듈: core] ##########################
 """공통 기반: 자금 흐름 로그, Flask keep-alive, 수입 배율, 명령어 잠금, Supabase 연결, bot 객체, 오류 보고
 
 합친 모듈: ledger.py, core.py
@@ -163,7 +137,7 @@ def _notify(entry: dict, kind: str):
 
         async def go():
             import discord
-            from .admin import _admin_log_channel
+            pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
             sign = "+" if entry["delta"] >= 0 else "-"
             color = discord.Color.green() if entry["delta"] >= 0 else discord.Color.red()
             e = discord.Embed(title=f"[자금 로그] {kind}", color=color, timestamp=discord.utils.utcnow())
@@ -379,7 +353,7 @@ class GuardedTree(app_commands.CommandTree):
         return True
 
     async def on_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
-        from .admin import _notify_user_error  # 순환 import 방지: 호출 시점에 가져옴
+        pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
         _finish_command(interaction)   # 오류로 끝난 명령어도 잠금 해제
         if isinstance(error, (app_commands.CommandNotFound, app_commands.CheckFailure)):
             return   # 유저 쪽 사유(권한 부족 등)는 오류 보고 대상이 아님
@@ -447,7 +421,7 @@ wanted_list = {}
 #   "eden"     = [테러보스] 에칼 데 페스토  (EDEN_BOSS)
 #   "silent"   = [심판보스] 침묵의 심판자  (SILENT_BOSS)
 #   "ultimate" = [최강보스] 태초의 파괴자  (ULTIMATE_BOSS)
-#   "dark_x" / "eden_x" / "ultimate_x" = [강화보스] 위 보스들의 강화판 (ELITE_*_BOSS)
+#   "dark_x" / "eden_x" / "silent_x" / "ultimate_x" = [강화보스] 위 보스들의 강화판 (ELITE_*_BOSS)
 active_boss_guilds = {}
 # {guild_id: NPCBattleView}  ← 지금 보스와 싸우는 도전자 (한 서버에서 보스전은 한 번에 한 명만)
 #   보스는 누군가 처치할 때까지 서버에 남아 있고, 도전에 실패(패배/시간 초과/자리 비움)해도 사라지지 않습니다.
@@ -492,7 +466,7 @@ def set_active_boss(guild_id: int, kind):
 
 def load_boss_state_sync() -> int:
     """봇 시작 시 DB 에 저장된 보스를 메모리로 복구합니다. 반환: 복구한 보스 수"""
-    from .battle import BOSS_KINDS  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     if not supabase:
         return 0
     try:
@@ -513,12 +487,12 @@ def load_boss_state_sync() -> int:
 
 # 일반 /전투 승리 시 '보스마다 각각' 출현할 확률 (테스트할 때는 0.3 처럼 크게 바꾸세요)
 #   • 서버에 보스가 없을 때만 판정하고, 한 번에 보스 한 마리만 출현합니다.
-#   • 보스 4종(각 3%) + 강화 보스 3종(각 0.3%)이라 '아무 보스나' 나올 확률은 합계 12.9% 입니다. (BOSS_SPAWN_TABLE 참고)
+#   • 보스 4종(각 3%) + 강화 보스 4종(각 0.3%)이라 '아무 보스나' 나올 확률은 합계 13.2% 입니다. (BOSS_SPAWN_TABLE 참고)
 BOSS_SPAWN_CHANCE = 0.03            # 3% (어둠의 지배자)
 EDEN_BOSS_SPAWN_CHANCE = 0.03       # 3% (에칼 데 페스토)
 SILENT_BOSS_SPAWN_CHANCE = 0.03     # 3% (침묵의 심판자)
 ULTIMATE_BOSS_SPAWN_CHANCE = 0.03   # 3% (태초의 파괴자)
-ELITE_BOSS_SPAWN_CHANCE = 0.003     # 0.3% (강화 보스: 보스마다 각각 이 확률로 더 강한 강화판이 출현. 합계 0.9%)
+ELITE_BOSS_SPAWN_CHANCE = 0.003     # 0.3% (강화 보스: 보스마다 각각 이 확률로 더 강한 강화판이 출현. 합계 1.2%)
 
 # {user_id: datetime (석방 예정 시간)}
 jail_list = {}
@@ -549,7 +523,7 @@ async def send_log_embed(channel_id, embed: discord.Embed) -> bool:
 
 async def report_error(context: str, error, interaction: discord.Interaction = None, print_tb: bool = True):
     """오류를 콘솔에 남기고, 오류 로그 채널이 지정되어 있으면 임베드로 보고합니다. (이 함수 자체는 절대 예외를 던지지 않음)"""
-    from .admin import _err_recent, _err_sent_times, _tb_text, _unwrap_error, ERROR_DEDUPE_SEC, ERROR_MAX_PER_MIN  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     global _err_suppressed
     try:
         error = _unwrap_error(error)
@@ -604,7 +578,9 @@ def keep_task(task):
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
     return task
-#@@@@ FILE: mafia/status.py
+
+
+# ########################## [모듈: status] ##########################
 """상태·데이터: 유저 데이터/감옥·수배/장비 표, 성향·칭호, 업적·일일·주간 의뢰
 
 합친 모듈: status.py, alignment.py, achievements.py
@@ -618,7 +594,6 @@ import threading as _ach_threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from .core import bot, inc_range, jail_list, supabase, wanted_list
 
 
 # ==========================================================================
@@ -901,13 +876,14 @@ WEAPON_TIERS = [
 ELITE_TROPHY_STATS = {
     "[강화보스 전리품] 심연의 왕관":        (150, 2500, 40),
     "[강화보스 전리품] 대재앙의 붉은 깃발":  (250, 4000, 60),
+    "[강화보스 전리품] 침묵의 판결문":        (330, 5000, 80),
     "[강화보스 전리품] 종말의 심판 인장":    (400, 6000, 100),
 }
 
 def compute_combat_stats(honor: int, inventory: dict) -> dict:
     """/전투, /보스, /결투 가 모두 같은 공식을 쓰도록 한 곳으로 통합"""
-    from .economy import crafted_gear_best  # 순환 import 방지: 호출 시점에 가져옴
-    from .economy import POLICE_SHOP_ITEMS  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     hp = 1000 + honor * 5
     atk = 100 + int(honor * 0.5)
     def_val = 10
@@ -1225,7 +1201,7 @@ TITLES = {
     "named_hunter": {"name": "네임드 사냥꾼",   "desc": "네임드 몬스터 1종 처치",                "check": lambda s, i: any(k.startswith("[전리품]") for k in (i.get("inventory") or {}))},
     "named_slayer": {"name": "네임드 학살자",   "desc": "네임드 몬스터 4종 모두 처치",          "check": lambda s, i: sum(1 for k in (i.get("inventory") or {}) if k.startswith("[전리품]")) >= 4},
     "elite_hunter": {"name": "강화 보스 사냥꾼",   "desc": "강화 보스 1회 처치",                    "check": lambda s, i: s["elite_boss_kills"] >= 1},
-    "elite_slayer": {"name": "재앙을 꺾은 자",     "desc": "강화 보스 3종의 전리품을 모두 획득",    "check": lambda s, i: all(t in (i.get("inventory") or {}) for t in ELITE_TROPHY_STATS)},
+    "elite_slayer": {"name": "재앙을 꺾은 자",     "desc": "강화 보스 4종의 전리품을 모두 획득",    "check": lambda s, i: all(t in (i.get("inventory") or {}) for t in ELITE_TROPHY_STATS)},
     "gambler":      {"name": "도박꾼",          "desc": "도박 10판 플레이",                     "check": lambda s, i: s["gamble_played"] >= 10},
     "jackpot":      {"name": "잭팟의 주인공",   "desc": "슬롯머신 잭팟(7⃣7⃣7⃣) 당첨",         "check": lambda s, i: s["jackpot"] >= 1},
     "high_roller":  {"name": "카지노의 큰손",   "desc": "도박 누적 베팅액 $100,000 이상",        "check": lambda s, i: s["gamble_wagered"] >= 100000},
@@ -1391,7 +1367,7 @@ ACHIEVEMENTS = [
     _ach("a_broke",      "심화", "바닥을 본 자",         "도박으로 보유 자금이 $0이 됨",      lambda s, i: s["broke"],                1,        hide="full"),
     _ach("a_streak_10",  "심화", "신들린 손",            "비밀 임무 10연속 성공",             lambda s, i: s["best_streak"],          10,       hide="full"),
     _ach("a_elite_1",    "심화", "전설을 넘어선 자",     "강화 보스 1회 처치",                lambda s, i: s["elite_boss_kills"],     1,        hide="name"),
-    _ach("a_elite_all",  "심화", "재앙의 지배자",        "강화 보스 3종의 전리품을 모두 획득", lambda s, i: sum(1 for t in ELITE_TROPHY_STATS if t in (i.get("inventory") or {})), 3, hide="full"),
+    _ach("a_elite_all",  "심화", "재앙의 지배자",        "강화 보스 4종의 전리품을 모두 획득", lambda s, i: sum(1 for t in ELITE_TROPHY_STATS if t in (i.get("inventory") or {})), len(ELITE_TROPHY_STATS), hide="full"),
     _ach("a_boss_5",     "심화", "종말의 사냥꾼",        "보스 5회 처치",                     lambda s, i: s["boss_kills"],           5,        hide="full"),
     _ach("a_craft_all",  "심화", "완전한 장인",          "/제작 장비를 전부 제작",            lambda s, i: _inv_count(i, "[제작]"),   _CRAFT_ALL_GOAL, hide="full"),
     _ach("a_raid_king",  "심화", "지하의 왕을 끌어내린 자", "'칼렌데 지하 황제' 레이드 클리어",   lambda s, i: s["raid_king_clears"],     1,        hide="name"),
@@ -1638,7 +1614,7 @@ def build_daily_embed(user: discord.abc.User, blob: dict) -> discord.Embed:
 
 @bot.tree.command(name="일퀘", description="[마피아 GM] 일일 의뢰 4개를 모두 완료하면 출석 1스택! (한 달 달성 시 칭호)")
 async def daily_quest_command(interaction: discord.Interaction):
-    from .admin import check_maintenance, check_membership  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
@@ -1664,7 +1640,7 @@ def weekly_claimable(rows: list) -> list:
     return [r for r in rows if r["done"] and not r["claimed"]]
 
 def weekly_role(member) -> str:
-    from .police_unit import _is_police  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     return "police" if _is_police(member) else "mafia"
 
 def claim_weekly_sync(user_id: int, role: str) -> dict:
@@ -1783,7 +1759,7 @@ class WeeklyView(discord.ui.View):
 
 @bot.tree.command(name="주간", description="[마피아 GM / 경찰] 매주 월요일에 초기화되는 주간 의뢰를 확인하고 보상을 받습니다.")
 async def weekly_quest_command(interaction: discord.Interaction):
-    from .admin import check_maintenance, check_membership  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
@@ -1864,7 +1840,7 @@ class TitleView(discord.ui.View):
 
 @bot.tree.command(name="칭호", description="[마피아 GM] 획득한 칭호를 확인하고 장착합니다.")
 async def titles_command(interaction: discord.Interaction):
-    from .admin import check_maintenance, check_membership  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
 
 
     if not await check_maintenance(interaction): return
@@ -2042,7 +2018,7 @@ class AchCertSelect(discord.ui.Select):
         super().__init__(placeholder="증명서를 발급받을 업적을 선택하세요...", min_values=1, max_values=1, options=options, row=1)
 
     async def callback(self, interaction: discord.Interaction):
-        from .economy import make_achievement_certificate  # 순환 import 방지: 호출 시점에 가져옴
+        pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
         view: "AchievementView" = self.view
         if not await _ach_owner_only(interaction, view): return
         uid = interaction.user.id
@@ -2113,8 +2089,8 @@ def _load_achievements_sync(user_id: int):
 
 @bot.tree.command(name="업적", description="[마피아 GM] 업적 확인 · 보상 수령 · 증명서 발급 (기초 · 숙련 · 심화)")
 async def achievements_command(interaction: discord.Interaction):
-    from .police_unit import _is_police  # 순환 import 방지: 호출 시점에 가져옴
-    from .admin import check_maintenance, check_membership  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
 
@@ -2173,7 +2149,9 @@ CRAFT_RECIPES = [
     _recipe("a_origin",  "태초의 방벽",          "armor",  30000, {M_ORIGIN: 2, M_ALLOY: 10},    df=500, hp=8000,    desc="태초의 파편으로 빚어낸 절대 방벽."),
 ]
 _CRAFT_ALL_GOAL = len(CRAFT_RECIPES)
-#@@@@ FILE: mafia/admin.py
+
+
+# ########################## [모듈: admin] ##########################
 """관리자 도구, 점검 모드, 권한 검사, 설정·송금
 
 합친 모듈: admin.py, transfer.py
@@ -2188,39 +2166,12 @@ import traceback as _traceback
 from datetime import datetime
 from discord import app_commands
 
-from .core import (
-    _env_int,
-    active_boss_guilds,
-    bot,
-    jail_list,
-    keep_task,
-    report_error,
-    send_log_embed,
-    set_active_boss,
-    supabase,
-    wanted_list,
-)
-from .status import (
-    _check_updated,
-    _require_db,
-    BLACK_MARKET_ITEMS,
-    check_jail,
-    get_title_blob,
-    get_user_data,
-    get_user_rank,
-    save_status,
-    save_title_blob,
-    update_user_location,
-    update_user_settings,
-    WEAPON_SHOP_ITEMS,
-)
 
 
 # ==========================================================================
 # [합친 모듈] admin.py
 #   관리자 도구(/관리), 점검 모드, 공통 체크 함수
 # ==========================================================================
-from . import core as _core
 
 # ==========================================
 # [점검 모드 설정 스위치]
@@ -2350,9 +2301,9 @@ async def admin_only(interaction: discord.Interaction) -> bool:
     return True
 
 def _known_item_names() -> set:
-    from .economy import CRAFT_BY_ITEM, MATERIAL_SOURCES  # 순환 import 방지: 호출 시점에 가져옴
-    from .economy import POLICE_SHOP_ITEMS  # 순환 import 방지: 호출 시점에 가져옴
-    from .battle import BOSS_KINDS, NAMED_MONSTERS, NPC_DATA  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     names = set()
     for items in BLACK_MARKET_ITEMS.values():
         names.update(it["name"] for it in items)
@@ -2371,7 +2322,7 @@ def _known_item_names() -> set:
 
 def admin_adjust_sync(user_id: int, money_delta: int = 0, honor_delta: int = 0):
     """자금/명예 증감 (0 아래로는 내려가지 않음). 반환: (이전 자금, 새 자금, 이전 명예, 새 명예)"""
-    from .economy import _inv_lock  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     _require_db()
     with _inv_lock:
         info = get_user_data(user_id)
@@ -2383,7 +2334,7 @@ def admin_adjust_sync(user_id: int, money_delta: int = 0, honor_delta: int = 0):
 
 def admin_item_sync(user_id: int, name: str, delta: int, force: bool):
     """아이템 지급(+) / 회수(-). 반환: (이전 수량, 새 수량) 또는 알 수 없는 이름이면 None"""
-    from .economy import _inv_lock  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     _require_db()
     with _inv_lock:
         info = get_user_data(user_id)
@@ -2402,7 +2353,7 @@ def admin_item_sync(user_id: int, name: str, delta: int, force: bool):
         return old, new
 
 def admin_reset_transfers_sync(user_id: int):
-    from .economy import _inv_lock  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     _require_db()
     with _inv_lock:
         blob = get_title_blob(get_user_data(user_id))
@@ -2467,7 +2418,7 @@ async def admin_money(interaction: discord.Interaction, member: discord.Member, 
 @app_commands.describe(member="이 유저의 기록만 보기 (비우면 전체)", count="보여줄 개수 (기본 15, 최대 30)")
 async def admin_money_log(interaction: discord.Interaction, member: discord.Member = None, count: app_commands.Range[int, 1, 30] = 15):
     if not await admin_only(interaction): return
-    from . import core as ledger  # 자금 변동 기록 (ledger.py)
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     rows = ledger.recent(member.id if member else None, count)
     if not rows:
         await interaction.response.send_message("아직 기록이 없습니다. (봇을 켠 뒤 일어난 변동만 기록됩니다)", ephemeral=True)
@@ -2485,7 +2436,7 @@ async def admin_money_log(interaction: discord.Interaction, member: discord.Memb
 @app_commands.describe(amount="이 금액 이상의 한 번 변동을 알림 (예: 500000)")
 async def admin_money_log_threshold(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 1_000_000_000]):
     if not await admin_only(interaction): return
-    from . import core as ledger  # 자금 변동 기록 (ledger.py)
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     old = ledger.get_threshold()
     ledger.set_threshold(amount)
     await admin_audit(interaction, "자금 로그 기준 변경", None, f"${old:,} -> ${amount:,}")
@@ -2538,7 +2489,7 @@ async def admin_item(interaction: discord.Interaction, member: discord.Member, i
     await interaction.followup.send(f"{member.mention} 님의 `{item}`: {old}개 -> {new}개", ephemeral=True)
 
 async def _admin_boss_autocomplete(interaction: discord.Interaction, current: str):
-    from .battle import BOSS_KINDS  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     cur = (current or "").lower()
     options = [("보스 없음 (제거)", "none")] + [(k["data"]["name"], key) for key, k in BOSS_KINDS.items()]
     return [app_commands.Choice(name=n[:100], value=v) for n, v in options if cur in n.lower() or cur in v][:25]
@@ -2547,7 +2498,7 @@ async def _admin_boss_autocomplete(interaction: discord.Interaction, current: st
 @app_commands.describe(kind="출현시킬 보스 (목록에서 선택 / 보스 없음 = 현재 보스 제거)")
 @app_commands.autocomplete(kind=_admin_boss_autocomplete)
 async def admin_boss(interaction: discord.Interaction, kind: str):
-    from .battle import BOSS_KINDS  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     if not await admin_only(interaction): return
     if kind != "none" and kind not in BOSS_KINDS:
         await interaction.response.send_message("목록에 없는 보스입니다. 자동완성 목록에서 선택해 주세요.", ephemeral=True)
@@ -2654,7 +2605,7 @@ def _transfer_ledger(blob: dict, kind: str, now: float) -> list:
 def transfer_money_limited_sync(sender_id: int, receiver_id: int, amount: int, bypass: bool = False, commit: bool = True) -> dict:
     """제한을 확인하고 송금합니다. (commit=False 이면 확인만 하고 저장하지 않음)
     반환: {"ok": bool, "reason": 실패 사유, "sender_money", "receiver_money", "sent_today"}"""
-    from .economy import _inv_lock  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     _require_db()
     now = time.time()
     with _inv_lock:
@@ -2878,7 +2829,7 @@ class SettingsView(discord.ui.View):
 def transfer_money_sync(sender_id: int, receiver_id: int, amount: int):
     """송금 처리 (동기 DB 작업이라 to_thread 로 실행). 반환: (성공 여부, 송금자 잔액, 수신자 잔액)
     잔액을 다시 확인한 뒤 '차감 → 적립' 순서로 저장하고, 적립이 실패하면 차감을 되돌립니다."""
-    from .economy import _inv_lock  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     _require_db()
     with _inv_lock:
         s_money = int(get_user_data(sender_id).get("money") or 0)
@@ -2977,7 +2928,9 @@ async def transfer_money(interaction: discord.Interaction, member: discord.Membe
         embed.set_footer(text=f"오늘 보낸 금액 ${result['sent_today']:,} / 하루 한도 ${TRANSFER_DAILY_SEND_LIMIT:,}")
 
     await interaction.followup.send(embed=embed)
-#@@@@ FILE: mafia/battle.py
+
+
+# ########################## [모듈: battle] ##########################
 """전투: NPC·보스·네임드 데이터, /전투 /보스 /네임드, /결투
 
 합친 모듈: battle_data.py, battle.py, duel.py
@@ -2991,38 +2944,6 @@ from datetime import datetime, timedelta
 from discord import app_commands
 from PIL import Image
 
-from .core import (
-    active_boss_guilds,
-    boss_challengers,
-    BOSS_SPAWN_CHANCE,
-    bot,
-    EDEN_BOSS_SPAWN_CHANCE,
-    ELITE_BOSS_SPAWN_CHANCE,
-    GuardedView,
-    inc_range,
-    jail_list,
-    report_error,
-    set_active_boss,
-    SILENT_BOSS_SPAWN_CHANCE,
-    supabase,
-    ULTIMATE_BOSS_SPAWN_CHANCE,
-)
-from .status import (
-    _require_db,
-    BOSS_COOLDOWN_SEC,
-    bump_user_stats_sync,
-    check_jail,
-    compute_combat_stats,
-    daily_record,
-    DUEL_MAX_BET,
-    evaluate_new_titles,
-    format_new_titles,
-    get_title_blob,
-    get_user_data,
-    NPC_LOSS_PENALTY,
-    WEAPON_SHOP_ITEMS,
-)
-from .admin import check_maintenance, check_membership
 
 
 # ==========================================================================
@@ -3151,6 +3072,12 @@ ELITE_EDEN_BOSS = {**EDEN_BOSS,
     "reward_money": inc_range((70000, 150000)), "reward_honor": 600,
     "drop": "[강화보스 전리품] 대재앙의 붉은 깃발",
     "desc": "평등의 이름으로 도시를 불태우려던 창립자가 스스로 재앙이 되었습니다. 체력이 절반 아래로 떨어지면 격노합니다. 15턴 안에 쓰러뜨리지 못하면 도시가 잿더미가 됩니다."}
+ELITE_SILENT_BOSS = {**SILENT_BOSS,
+    "name": "[강화보스] 모든 소리를 삼킨 침묵의 심판자",
+    "hp": 205000, "atk": 7400, "def": 1250, "enrage": 1.5,
+    "reward_money": inc_range((95000, 200000)), "reward_honor": 900,
+    "drop": "[강화보스 전리품] 침묵의 판결문",
+    "desc": "침묵의 심판자가 도시의 모든 소리를 삼키고 마지막 판결을 내리러 왔습니다. 체력이 절반 아래로 떨어지면 격노합니다. 15턴 안에 쓰러뜨리지 못하면 모두가 영원한 침묵에 처해집니다."}
 ELITE_ULTIMATE_BOSS = {**ULTIMATE_BOSS,
     "name": "[강화보스] 종말을 선고하는 태초의 파괴자",
     "hp": 240000, "atk": 9000, "def": 1400, "enrage": 1.5,
@@ -3210,6 +3137,14 @@ BOSS_KINDS["eden_x"] = {
                   "하늘이 붉게 물들고 도시의 모든 종이 한꺼번에 울립니다! 에칼 데 페스토가 재앙 그 자체가 되어 나타났습니다!\n"
                   "**[강화보스] 대재앙의 화신 에칼 데 페스토**가 출현했습니다! 극도로 위험합니다! (`/보스` 명령어로 토벌 가능)"),
 }
+BOSS_KINDS["silent_x"] = {
+    "data": ELITE_SILENT_BOSS,
+    "title": "[강화보스] 모든 소리를 삼킨 침묵의 심판자 토벌전",
+    "color": discord.Color.from_rgb(30, 30, 90),
+    "spawn_msg": ("**[최상위 침묵 경보]** \n"
+                  "도시의 모든 소리가 사라지고 자신의 심장 소리조차 들리지 않습니다! 침묵의 심판자가 마지막 판결을 내리러 돌아왔습니다!\n"
+                  "**[강화보스] 모든 소리를 삼킨 침묵의 심판자**가 출현했습니다! 극도로 위험합니다! (`/보스` 명령어로 토벌 가능)"),
+}
 BOSS_KINDS["ultimate_x"] = {
     "data": ELITE_ULTIMATE_BOSS,
     "title": "[강화보스] 종말을 선고하는 태초의 파괴자 토벌전",
@@ -3223,7 +3158,7 @@ BOSS_NAMES = tuple(k["data"]["name"] for k in BOSS_KINDS.values())
 def boss_image_file(boss_data: dict):
     """보스 그림을 discord.File 로 만들어 돌려준다. 그림이 지정되지 않았거나 파일이 없으면 None.
     (임베드에서는 set_image(url="attachment://파일이름") 로 참조한다)"""
-    from .economy import _asset_paths  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     name = boss_data.get("image")
     if not name:
         return None
@@ -3257,6 +3192,7 @@ BOSS_SPAWN_TABLE = [
     ("ultimate", ULTIMATE_BOSS_SPAWN_CHANCE),
     ("dark_x", ELITE_BOSS_SPAWN_CHANCE),
     ("eden_x", ELITE_BOSS_SPAWN_CHANCE),
+    ("silent_x", ELITE_BOSS_SPAWN_CHANCE),
     ("ultimate_x", ELITE_BOSS_SPAWN_CHANCE),
 ]
 
@@ -3554,7 +3490,7 @@ class NPCBattleView(GuardedView):
         await self.process_turn(interaction, "finisher")
 
     async def end_battle(self, interaction: discord.Interaction, outcome: str):
-        from .economy import add_materials, format_material_drops, roll_material_drops  # 순환 import 방지: 호출 시점에 가져옴
+        pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
         self.finished = True
         self.stop()
 
@@ -4185,7 +4121,9 @@ class WeaponShopView(discord.ui.View):
     def __init__(self, owner: discord.Member):
         super().__init__(timeout=60)
         self.add_item(WeaponShopSelect(owner))
-#@@@@ FILE: mafia/civilian.py
+
+
+# ########################## [모듈: civilian] ##########################
 """시민·도박·가입: 아르바이트·봉사·기부·소매치기, 부패 경찰, /도박, 가입·탈퇴 화면
 
 합친 모듈: civilian.py, corrupt_police.py, gamble.py, join_leave.py
@@ -4198,60 +4136,6 @@ import time
 from datetime import datetime, timedelta
 from discord import app_commands
 
-from .core import bot, GuardedView, inc_range, jail_list, supabase, wanted_list
-from .status import (
-    _check_updated,
-    _daily_notices,
-    _is_citizen,
-    _require_db,
-    alignment_text,
-    check_jail,
-    CITIZEN_JOIN_GATING,
-    CORRUPT_ARREST_COOLDOWN_SEC,
-    CORRUPT_ARREST_FINE,
-    CORRUPT_ARREST_JAIL_SEC,
-    CORRUPT_COMPLAINT_CHANCE,
-    CORRUPT_COMPLAINT_WANTED_SEC,
-    CORRUPT_EXTORT_COOLDOWN_SEC,
-    CORRUPT_EXTORT_FAIL_WANTED_SEC,
-    CORRUPT_EXTORT_MAX,
-    CORRUPT_EXTORT_MIN_TARGET_MONEY,
-    CORRUPT_EXTORT_PCT,
-    CORRUPT_EXTORT_SUCCESS,
-    CORRUPT_VICTIM_SHIELD_SEC,
-    daily_record,
-    delete_user_data,
-    DONATE_COOLDOWN_SEC,
-    DONATE_MAX_KARMA,
-    DONATE_MIN,
-    DONATE_UNIT,
-    evaluate_join,
-    evaluate_new_titles,
-    format_new_titles,
-    get_title_blob,
-    get_user_data,
-    join_requirement_text,
-    karma_change,
-    mission_cooldowns,
-    PARTTIME_COOLDOWN_SEC,
-    PARTTIME_KARMA,
-    PICKPOCKET_COOLDOWN_SEC,
-    PICKPOCKET_FINE,
-    PICKPOCKET_KARMA_FAIL,
-    PICKPOCKET_KARMA_OK,
-    PICKPOCKET_REWARD,
-    PICKPOCKET_SUCCESS,
-    PICKPOCKET_WANTED_SEC,
-    save_status,
-    save_title_blob,
-    SERVICE_COOLDOWN_SEC,
-    SERVICE_KARMA,
-    SERVICE_REWARD,
-    take_daily_notice,
-    update_user_location,
-    update_user_stats,
-)
-from .admin import check_maintenance
 
 
 # ==========================================================================
@@ -4471,7 +4355,7 @@ def is_corrupt_police(member: discord.Member) -> bool:
 
 def _corrupt_victim_ok(target: discord.Member) -> str:
     """부패 경찰이 건드릴 수 있는 시민인지 검사. 문제가 있으면 안내 문구, 괜찮으면 빈 문자열"""
-    from .family import _is_jailed  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     if target.bot:
         return "봇은 건드릴 수 없습니다."
     if not _is_citizen(target):
@@ -5094,7 +4978,6 @@ async def gamble_rules(interaction: discord.Interaction):
 # [합친 모듈] join_leave.py
 #   패밀리 가입·탈퇴 화면
 # ==========================================================================
-from . import admin as _admin
 
 # === 1. 셀프 가입 버튼 뷰 ===
 class SelfJoinView(discord.ui.View):
@@ -5199,8 +5082,8 @@ class LeaveConfirmView(discord.ui.View):
 
     @discord.ui.button(label="네, 탈퇴하겠습니다", style=discord.ButtonStyle.danger, custom_id="confirm_leave")
     async def confirm_leave(self, interaction: discord.Interaction, button: discord.ui.Button):
-        from .police_unit import police_unit_detach_user  # 순환 import 방지: 호출 시점에 가져옴
-        from .family import family_detach_user  # 순환 import 방지: 호출 시점에 가져옴
+        pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+        pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
         if interaction.user != self.target_user:
             await interaction.response.send_message("본인의 탈퇴 확인 창만 조작할 수 있습니다.", ephemeral=True)
             return
@@ -5281,1175 +5164,9 @@ class LeaveConfirmView(discord.ui.View):
             color=discord.Color.blue()
         )
         await interaction.edit_original_response(embed=embed, view=self)
-#@@@@ FILE: mafia/economy.py
-"""경제: /제작, /프로필 /인벤토리, /경매
 
-합친 모듈: crafting.py, profile.py, auction.py
-"""
 
-import asyncio
-import discord
-import io
-import os
-import random
-import re
-import threading as _threading
-import time
-import unicodedata
-from datetime import datetime
-from discord import app_commands
-from functools import lru_cache
-from PIL import Image, ImageDraw, ImageFont, ImageOps
-
-from .core import bot, GuardedView, supabase, wanted_list
-from .status import (
-    _check_updated,
-    _CRAFT_ALL_GOAL,
-    _require_db,
-    ACH_BY_ID,
-    ACHIEVEMENTS,
-    alignment_text,
-    check_jail,
-    CRAFT_RECIPES,
-    get_equipped_title_name,
-    get_title_blob,
-    get_user_data,
-    get_user_rank,
-    M_ALLOY,
-    M_BIANCA,
-    M_BORONIN,
-    M_BULL,
-    M_DARK,
-    M_EDEN,
-    M_EXEC,
-    M_KING,
-    M_MARCO,
-    M_ORIGIN,
-    M_RAT,
-    M_SCRAP,
-    M_STEEL,
-    MATERIAL_PREFIX,
-    WEAPON_SHOP_ITEMS,
-)
-from .admin import check_maintenance, check_membership
-from .battle import WeaponShopView
-
-
-# ==========================================================================
-# [합친 모듈] crafting.py
-#   제작 시스템 (/제작)
-# ==========================================================================
-CRAFT_PREFIX = "[제작] "
-
-# 재료 → 획득처 안내 (/제작 화면에 표시)
-MATERIAL_SOURCES = {
-    M_SCRAP:   "/전투: 골목길 깡패·배신자·거상",
-    M_STEEL:   "/전투: 배신자·거상·수배자·암살자 / 네임드",
-    M_ALLOY:   "/전투: 수배자·암살자 / 네임드·보스·레이드",
-    M_MARCO:   "/네임드: 백정 마르코",
-    M_BIANCA:  "/네임드: 독사 비앙카",
-    M_BORONIN: "/네임드: 철의 장군 보로닌",
-    M_EXEC:    "/네임드: 붉은 달의 처형자",
-    M_DARK:    "/보스: 어둠의 지배자",
-    M_EDEN:    "/보스: 에칼 데 페스토",
-    M_ORIGIN:  "/보스: 태초의 파괴자",
-    M_RAT:     "/레이드: 하수구의 쥐왕",
-    M_BULL:    "/레이드: 부두 항만의 폭군",
-    M_KING:    "/레이드: 칼렌데 지하 황제",
-}
-
-# 드랍 표: {처치한 대상 이름: [(재료, 확률, (최소, 최대)), ...]}   — 승리했을 때만 지급
-MATERIAL_DROPS = {
-    # /전투
-    "골목길 깡패":      [(M_SCRAP, 0.70, (1, 2))],
-    "조직의 배신자":    [(M_SCRAP, 1.00, (1, 3)), (M_STEEL, 0.25, (1, 1))],
-    "암시장 악덕 거상": [(M_STEEL, 0.80, (1, 2)), (M_SCRAP, 0.50, (1, 3))],
-    "지명수배자 보스":  [(M_STEEL, 1.00, (1, 3)), (M_ALLOY, 0.25, (1, 1))],
-    "칼렌데 암살자":    [(M_ALLOY, 0.70, (1, 2)), (M_STEEL, 0.50, (1, 2))],
-    # /네임드
-    "[네임드] 백정 마르코":        [(M_MARCO, 1.00, (1, 2)), (M_STEEL, 1.00, (1, 3))],
-    "[네임드] 독사 비앙카":        [(M_BIANCA, 1.00, (1, 2)), (M_STEEL, 1.00, (1, 3)), (M_ALLOY, 0.30, (1, 1))],
-    "[네임드] 철의 장군 보로닌":   [(M_BORONIN, 1.00, (1, 2)), (M_ALLOY, 1.00, (1, 2))],
-    "[네임드] 붉은 달의 처형자":   [(M_EXEC, 1.00, (1, 2)), (M_ALLOY, 1.00, (2, 3))],
-    # /보스
-    "[히든보스] 어둠의 지배자":    [(M_DARK, 1.00, (2, 3)), (M_ALLOY, 1.00, (2, 4))],
-    "[테러보스] 에칼 데 페스토":   [(M_EDEN, 1.00, (2, 3)), (M_ALLOY, 1.00, (3, 4))],
-    "[심판보스] 침묵의 심판자":    [(M_EDEN, 1.00, (2, 3)), (M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (3, 5))],
-    "[최강보스] 태초의 파괴자":    [(M_ORIGIN, 1.00, (2, 3)), (M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (3, 5))],
-    # 강화 보스: 일반 보스보다 재료를 훨씬 많이, 특수 합금은 확정으로 줍니다
-    "[강화보스] 심연을 삼킨 어둠의 지배자":      [(M_DARK, 1.00, (5, 8)), (M_ALLOY, 1.00, (6, 10))],
-    "[강화보스] 대재앙의 화신 에칼 데 페스토":    [(M_EDEN, 1.00, (5, 8)), (M_ALLOY, 1.00, (7, 11))],
-    "[강화보스] 종말을 선고하는 태초의 파괴자":   [(M_ORIGIN, 1.00, (5, 8)), (M_DARK, 1.00, (3, 5)), (M_ALLOY, 1.00, (8, 12))],
-    # /레이드 (RAID_TIERS 의 name)
-    "하수구의 쥐왕":      [(M_RAT, 1.00, (1, 3)), (M_SCRAP, 1.00, (3, 5))],
-    "부두 항만의 폭군":   [(M_BULL, 1.00, (1, 3)), (M_STEEL, 1.00, (2, 4))],
-    "칼렌데 지하 황제":   [(M_KING, 1.00, (1, 3)), (M_ALLOY, 1.00, (2, 3))],
-}
-ACH_BY_ID["a_craft_all"]["goal"] = _CRAFT_ALL_GOAL   # 업적 '완전한 장인' 목표를 실제 레시피 수에 맞춤
-CRAFT_BY_ID = {r["id"]: r for r in CRAFT_RECIPES}
-CRAFT_BY_ITEM = {CRAFT_PREFIX + r["name"]: r for r in CRAFT_RECIPES}
-CRAFT_SLOT_LABEL = {"weapon": "무기", "armor": "방어구"}
-
-_inv_lock = _threading.Lock()   # 재료 지급·제작처럼 인벤토리를 읽고 다시 쓰는 작업이 서로 덮어쓰지 않도록
-
-
-def crafted_gear_best(inventory: dict):
-    """보유한 제작 장비 중 가장 강한 (무기, 방어구) 레시피. 없으면 None."""
-    best_w, best_a = None, None
-    for key, r in CRAFT_BY_ITEM.items():
-        if key not in (inventory or {}):
-            continue
-        if r["slot"] == "weapon":
-            if best_w is None or (r["atk"], r["hp"]) > (best_w["atk"], best_w["hp"]):
-                best_w = r
-        else:
-            if best_a is None or (r["def"], r["hp"]) > (best_a["def"], best_a["hp"]):
-                best_a = r
-    return best_w, best_a
-
-
-def _mat_short(name: str) -> str:
-    return name[len(MATERIAL_PREFIX):] if name.startswith(MATERIAL_PREFIX) else name
-
-
-def roll_material_drops(source_name: str) -> dict:
-    """처치한 대상 이름으로 드랍 판정 → {재료: 개수}"""
-    drops = {}
-    for mat, chance, (lo, hi) in MATERIAL_DROPS.get(source_name, []):
-        if random.random() < chance:
-            drops[mat] = drops.get(mat, 0) + random.randint(lo, hi)
-    return drops
-
-
-def add_materials(inventory: dict, drops: dict) -> dict:
-    for mat, n in drops.items():
-        inventory[mat] = inventory.get(mat, 0) + n
-    return inventory
-
-
-def format_material_drops(drops: dict) -> str:
-    return ", ".join(f"{_mat_short(k)} x{v}" for k, v in drops.items())
-
-
-def grant_materials_sync(user_id: int, drops: dict):
-    """(레이드 정산 등) 인벤토리에 재료를 더해 DB 에 저장"""
-    if not drops:
-        return
-    _require_db()
-    with _inv_lock:
-        data = get_user_data(user_id)
-        inv = dict(data.get("inventory") or {})
-        add_materials(inv, drops)
-        res = supabase.table("user_data").update({"inventory": inv}).eq("user_id", str(user_id)).execute()
-        _check_updated(res, "grant_materials")
-
-
-def craft_missing(inv: dict, money: int, r: dict) -> list:
-    """부족한 항목 설명 목록 (비어 있으면 제작 가능)"""
-    lacks = [f"{_mat_short(m)} {need - inv.get(m, 0)}개" for m, need in r["mats"].items() if inv.get(m, 0) < need]
-    if money < r["money"]:
-        lacks.append(f"제작비 ${r['money'] - money:,}")
-    return lacks
-
-
-def craft_sync(user_id: int, recipe_id: str):
-    """제작 실행. 반환: (성공 여부, 메시지, 남은 자금)"""
-    r = CRAFT_BY_ID.get(recipe_id)
-    if not r:
-        return False, "존재하지 않는 제작법입니다.", None
-    _require_db()
-    with _inv_lock:
-        data = get_user_data(user_id)
-        inv = dict(data.get("inventory") or {})
-        money = int(data.get("money") or 0)
-        item = CRAFT_PREFIX + r["name"]
-        if item in inv:
-            return False, "이미 보유한 장비입니다.", money
-        lacks = craft_missing(inv, money, r)
-        if lacks:
-            return False, "부족한 항목: " + ", ".join(lacks), money
-        for m, need in r["mats"].items():
-            inv[m] -= need
-            if inv[m] <= 0:
-                del inv[m]
-        inv[item] = 1
-        money -= r["money"]
-        res = supabase.table("user_data").update({"money": money, "inventory": inv}).eq("user_id", str(user_id)).execute()
-        _check_updated(res, "craft")
-        return True, "", money
-
-
-def craft_stat_text(r: dict) -> str:
-    parts = []
-    if r["atk"]: parts.append(f"공격력 +{r['atk']:,}")
-    if r["def"]: parts.append(f"방어력 +{r['def']:,}")
-    if r["hp"]:  parts.append(f"체력 +{r['hp']:,}")
-    return " / ".join(parts)
-
-
-# ---------------------------------------------------------------- UI
-def craft_main_embed(user: discord.Member, data: dict, note: str = "") -> discord.Embed:
-    inv = data.get("inventory") or {}
-    money = int(data.get("money") or 0)
-    embed = discord.Embed(title="[제작소] 장비 제작", color=discord.Color.dark_orange())
-    desc = ("전투에서 모은 **재료**로 무기와 방어구를 만들 수 있습니다. 아래 목록에서 제작할 장비를 고르세요.\n"
-            "무기·방어구는 각각 **가장 강한 1개만** 전투 능력치에 적용됩니다. (상점 무기와도 비교해 더 강한 쪽 적용)")
-    if note:
-        desc = f"{note}\n\n{desc}"
-    embed.description = desc
-
-    mats = [(m, inv.get(m, 0)) for m in MATERIAL_SOURCES]
-    lines = [f"• **{_mat_short(m)}** x{n} — *{MATERIAL_SOURCES[m]}*" for m, n in mats]
-    embed.add_field(name="재료 보유 현황 / 획득처", value="\n".join(lines), inline=False)
-
-    bw, ba = crafted_gear_best(inv)
-    applied = (f"무기: **{bw['name']}** ({craft_stat_text(bw)})" if bw else "무기: 없음") + "\n" + \
-              (f"방어구: **{ba['name']}** ({craft_stat_text(ba)})" if ba else "방어구: 없음")
-    embed.add_field(name="현재 적용 중인 제작 장비", value=applied, inline=False)
-    embed.set_footer(text=f"보유 자금 ${money:,}")
-    if user.avatar:
-        embed.set_thumbnail(url=user.avatar.url)
-    return embed
-
-
-def craft_detail_embed(user: discord.Member, data: dict, r: dict, note: str = "") -> discord.Embed:
-    inv = data.get("inventory") or {}
-    money = int(data.get("money") or 0)
-    owned = (CRAFT_PREFIX + r["name"]) in inv
-    embed = discord.Embed(title=f"[제작] {r['name']}", color=discord.Color.dark_orange())
-    desc = f"*{r['desc']}*\n\n**종류:** {CRAFT_SLOT_LABEL[r['slot']]}\n**효과:** {craft_stat_text(r)}"
-    if note:
-        desc = f"{note}\n\n{desc}"
-    if owned:
-        desc += "\n\n**이미 보유 중인 장비입니다.**"
-    embed.description = desc
-    req = []
-    for m, need in r["mats"].items():
-        have = inv.get(m, 0)
-        req.append(f"{'[충족]' if have >= need else '[부족]'} {_mat_short(m)} {have}/{need}")
-    req.append(f"{'[충족]' if money >= r['money'] else '[부족]'} 제작비 ${money:,} / ${r['money']:,}")
-    embed.add_field(name="필요 재료", value="\n".join(req), inline=False)
-    if user.avatar:
-        embed.set_thumbnail(url=user.avatar.url)
-    return embed
-
-
-class CraftView(GuardedView):
-    def __init__(self, owner: discord.Member, data: dict, selected: str = None):
-        super().__init__(timeout=180)
-        self.owner = owner
-        self.selected = selected
-        self.message = None
-        self._build(data)
-
-    def _build(self, data: dict):
-        self.clear_items()
-        inv = data.get("inventory") or {}
-        money = int(data.get("money") or 0)
-        options = []
-        for r in CRAFT_RECIPES:
-            if (CRAFT_PREFIX + r["name"]) in inv:
-                tag = "[보유]"
-            elif not craft_missing(inv, money, r):
-                tag = "[제작 가능]"
-            else:
-                tag = "[재료 부족]"
-            desc = f"{tag} {CRAFT_SLOT_LABEL[r['slot']]} | {craft_stat_text(r)} | ${r['money']:,}"
-            options.append(discord.SelectOption(label=r["name"], value=r["id"], description=desc[:100],
-                                                default=(r["id"] == self.selected)))
-        select = discord.ui.Select(placeholder="제작할 장비를 선택하세요...", options=options, min_values=1, max_values=1)
-        select.callback = self._on_select
-        self.add_item(select)
-
-        sel = CRAFT_BY_ID.get(self.selected)
-        can = bool(sel) and (CRAFT_PREFIX + sel["name"]) not in inv and not craft_missing(inv, money, sel)
-        button = discord.ui.Button(label="제작하기", style=discord.ButtonStyle.success, disabled=not can)
-        button.callback = self._on_craft
-        self.add_item(button)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner.id:
-            await interaction.response.send_message("본인의 제작 창만 조작할 수 있습니다.", ephemeral=True)
-            return False
-        return True
-
-    async def _on_select(self, interaction: discord.Interaction):
-        self.selected = interaction.data["values"][0]
-        data = await asyncio.to_thread(get_user_data, self.owner.id)
-        self._build(data)
-        await interaction.response.edit_message(
-            embed=craft_detail_embed(self.owner, data, CRAFT_BY_ID[self.selected]), view=self)
-
-    async def _on_craft(self, interaction: discord.Interaction):
-        rid = self.selected
-        if rid not in CRAFT_BY_ID:
-            await interaction.response.send_message("먼저 제작할 장비를 선택해 주세요.", ephemeral=True)
-            return
-        await interaction.response.defer()
-        try:
-            ok, msg, _ = await asyncio.to_thread(craft_sync, self.owner.id, rid)
-        except Exception as e:
-            print(f"DB Error (craft): {e}")
-            await interaction.followup.send("데이터베이스 오류로 제작에 실패했습니다. 재료와 자금은 차감되지 않았습니다.", ephemeral=True)
-            return
-        data = await asyncio.to_thread(get_user_data, self.owner.id)
-        r = CRAFT_BY_ID[rid]
-        self._build(data)
-        note = f"**제작 완료!** {r['name']} 을(를) 손에 넣었습니다." if ok else f"**제작 실패** — {msg}"
-        embed = craft_detail_embed(self.owner, data, r, note)
-        embed.color = discord.Color.green() if ok else discord.Color.red()
-        await interaction.edit_original_response(embed=embed, view=self)
-
-    async def on_timeout(self):
-        if self.message is not None:
-            try:
-                await self.message.edit(view=None)
-            except discord.HTTPException:
-                pass
-
-
-@bot.tree.command(name="제작", description="[조직원/경찰] 전투·네임드·보스·레이드에서 얻은 재료로 무기와 방어구를 제작합니다.")
-async def craft_command(interaction: discord.Interaction):
-    if not await check_maintenance(interaction): return
-    if not await check_membership(interaction): return
-    if await check_jail(interaction): return
-
-    await interaction.response.defer()
-    user = interaction.user
-    data = await asyncio.to_thread(get_user_data, user.id)
-    view = CraftView(user, data)
-    view.message = await interaction.followup.send(embed=craft_main_embed(user, data), view=view)
-
-
-# ==========================================================================
-# [합친 모듈] profile.py
-#   /프로필 (이미지 증명서)
-# ==========================================================================
-# === [공용] `/프로필` 명령어 (이미지 증명서 - 아날로그 종이 테마) ===
-# 필요한 파일(봇 파일과 같은 폴더 또는 assets 폴더): paper_background.jpg, font_1.ttf (또는 font_fallback.otf)
-PROFILE_BG_NAMES = ("paper_background.jpg",)
-PROFILE_FONT_NAMES = ("font_1.ttf", "font.ttf", "font_fallback.otf")   # 앞에서부터 시도, 안 되면 다음 폰트
-PROFILE_AREA = (70, 60, 468, 330)      # 배경(543x394) 안쪽 점선 테두리 안에서 글씨를 쓸 영역 (x1, y1, x2, y2)
-PROFILE_SCALE = 2                      # 배경이 작아서 2배로 키워 그림 (글씨가 선명해짐)
-PROFILE_INK = (60, 40, 20)             # 짙은 세피아 잉크색
-PROFILE_MUTED = (125, 98, 66)          # 라벨·하단 문구용 옅은 갈색
-PROFILE_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 프로젝트 루트 (assets 폴더 기준)
-
-def _asset_paths(names):
-    """봇 폴더 → assets 폴더 순서로 실제 존재하는 파일 경로를 하나씩 반환"""
-    for folder in (PROFILE_BASE_DIR, os.path.join(PROFILE_BASE_DIR, "assets")):
-        for name in names:
-            path = os.path.join(folder, name)
-            if os.path.isfile(path):
-                yield path
-
-def _draws_hangul(font, size: int) -> bool:
-    """폰트가 한글을 실제로 그리는지 확인 (한글이 없으면 '가'와 '힣'이 똑같은 빈칸 모양으로 나옴)"""
-    def glyph(ch):
-        img = Image.new("L", (size * 2, size * 2), 0)
-        ImageDraw.Draw(img).text((size // 4, size // 4), ch, fill=255, font=font)
-        return img.tobytes()
-    return glyph("가") != glyph("힣")
-
-@lru_cache(maxsize=1)
-def _profile_font_path():
-    """한글이 실제로 그려지는 첫 번째 폰트 파일 (손상된 파일/한글 없는 폰트는 건너뜀). 처음 한 번만 검사"""
-    for path in _asset_paths(PROFILE_FONT_NAMES):
-        try:
-            if _draws_hangul(ImageFont.truetype(path, 40), 40):
-                return path
-            print(f"한글 글자가 없는 폰트라 건너뜁니다: {path}")
-        except OSError:
-            print(f"폰트를 불러올 수 없어 건너뜁니다 (파일 손상?): {path}")
-    print("사용 가능한 한글 폰트가 없습니다! font_1.ttf 또는 font_fallback.otf 를 봇 폴더에 넣어주세요.")
-    return None
-
-@lru_cache(maxsize=None)
-def _profile_font(size: int):
-    path = _profile_font_path()
-    return ImageFont.truetype(path, size) if path else ImageFont.load_default(size)
-
-def _clean_text(text) -> str:
-    """이미지 폰트로 그릴 수 없는 이모지·기호 제거 (예: '깡패' -> '깡패')"""
-    return "".join(
-        c for c in str(text)
-        if unicodedata.category(c) not in ("So", "Sk", "Cf", "Cs", "Co", "Cn") and c != "\ufe0f"
-    ).strip()
-
-def _fit_text(draw, text: str, font, max_width: int) -> str:
-    """글자가 칸을 넘으면 '…' 로 줄임"""
-    if draw.textlength(text, font=font) <= max_width:
-        return text
-    while text and draw.textlength(text + "…", font=font) > max_width:
-        text = text[:-1]
-    return text + "…"
-
-async def _load_avatar(member: discord.Member, size: int = 190) -> Image.Image:
-    """프로필 사진을 가져와 오래된 증명사진처럼 세피아 톤으로 변환 (실패하면 빈 사진)"""
-    try:
-        data = await member.display_avatar.replace(size=256, static_format="png").read()
-        img = Image.open(io.BytesIO(data)).convert("RGB")
-    except Exception as e:
-        print(f"Avatar load error: {e}")
-        img = Image.new("RGB", (256, 256), (185, 172, 150))
-    img = img.resize((size, size), Image.Resampling.LANCZOS)
-    return ImageOps.colorize(ImageOps.grayscale(img), black=(35, 22, 10), white=(238, 224, 196))
-
-def make_profile_image(kind: str, rows: list, user_id: int, avatar: Image.Image, stamp_text: str = "승인") -> io.BytesIO:
-    """증명서 이미지를 그려서 PNG 바이트로 반환. kind: police / mafia / citizen"""
-    S = PROFILE_SCALE
-    path = next(_asset_paths(PROFILE_BG_NAMES), None)
-    if path:
-        paper = Image.open(path).convert("RGBA")
-        paper = paper.resize((paper.width * S, paper.height * S), Image.Resampling.LANCZOS)
-    else:
-        print("paper_background.jpg 를 찾을 수 없어 기본 종이색을 사용합니다.")
-        paper = Image.new("RGBA", (543 * S, 394 * S), (234, 228, 205, 255))
-
-    draw = ImageDraw.Draw(paper)
-    x1, y1, x2, y2 = (v * S for v in PROFILE_AREA)
-    cx = (x1 + x2) // 2
-
-    # [1] 제목 + 이중선
-    title = {"police": "치안국 신분증", "mafia": "패밀리 증명서", "citizen": "시민 등록증"}[kind]
-    draw.text((cx, y1 + 8), " ".join(title), fill=PROFILE_INK, font=_profile_font(54), anchor="mt")
-    draw.line((x1 + 30, y1 + 88, x2 - 30, y1 + 88), fill=PROFILE_INK, width=3)
-    draw.line((x1 + 30, y1 + 96, x2 - 30, y1 + 96), fill=PROFILE_INK, width=1)
-    draw.text((x2 - 30, y1 + 108), f"No. {str(user_id)[-6:]}", fill=PROFILE_MUTED, font=_profile_font(24), anchor="ra")
-
-    # [2] 증명사진 (오른쪽)
-    top = y1 + 140
-    photo_x = x2 - 30 - (avatar.width + 12)
-    paper.paste(ImageOps.expand(avatar, border=6, fill=PROFILE_INK), (photo_x, top))
-
-    # [3] 인적 사항 (왼쪽): 라벨 + 값 + 밑줄
-    dense = len(rows) > 6          # 줄이 7개 이상이면 간격과 글씨를 조금 줄여서 하단 문구와 겹치지 않게 함
-    tight = len(rows) > 7          # 8줄 이상(사치품 줄까지 있는 시민)이면 한 단계 더 줄임
-    pitch = 42 if tight else 48 if dense else 58
-    f_label, f_value = _profile_font(22 if tight else 24 if dense else 26), _profile_font(27 if tight else 30 if dense else 34)
-    label_x, value_x = x1 + 30, x1 + 150
-    line_end = photo_x - 30
-    for i, (label, value) in enumerate(rows):
-        y = top + i * pitch
-        draw.text((label_x, y + 6), label, fill=PROFILE_MUTED, font=f_label)
-        draw.text((value_x, y), _fit_text(draw, value, f_value, line_end - value_x), fill=PROFILE_INK, font=f_value)
-        draw.line((label_x, y + pitch - 8, line_end, y + pitch - 8), fill=(170, 145, 110), width=1)
-
-    # [4] 붉은 도장 (사진 아래쪽에 살짝 걸치게)
-    stamp = Image.new("RGBA", (170, 170), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(stamp)
-    red = (170, 40, 40, 210)
-    sd.ellipse((6, 6, 164, 164), outline=red, width=6)
-    sd.ellipse((20, 20, 150, 150), outline=red, width=2)
-    sd.text((85, 85), stamp_text, fill=red, font=_profile_font(52), anchor="mm")
-    stamp = stamp.rotate(-14, resample=Image.Resampling.BICUBIC)
-    paper.alpha_composite(stamp, (photo_x - 20, top + avatar.height + 12 - 50))
-
-    # [5] 하단 발급 문구
-    footer = f"발급처  패밀리 GM 통합 정보국   ·   발급일  {datetime.now():%Y-%m-%d}"
-    draw.text((cx, y2 - 6), footer, fill=PROFILE_MUTED, font=_profile_font(22), anchor="mb")
-
-    buf = io.BytesIO()
-    paper.convert("RGB").save(buf, format="PNG")
-    buf.seek(0)
-    return buf
-
-def make_achievement_certificate(recipient: str, ach: dict, achieved_at: int, user_id: int) -> io.BytesIO:
-    """업적 증명서 이미지 (종이 배경 + 붉은 도장). /프로필 과 같은 배경·폰트를 씁니다."""
-    S = PROFILE_SCALE
-    path = next(_asset_paths(PROFILE_BG_NAMES), None)
-    if path:
-        paper = Image.open(path).convert("RGBA")
-        paper = paper.resize((paper.width * S, paper.height * S), Image.Resampling.LANCZOS)
-    else:
-        paper = Image.new("RGBA", (543 * S, 394 * S), (234, 228, 205, 255))
-
-    draw = ImageDraw.Draw(paper)
-    x1, y1, x2, y2 = (v * S for v in PROFILE_AREA)
-    cx = (x1 + x2) // 2
-
-    # [1] 제목 + 이중선 + 번호
-    draw.text((cx, y1 + 8), "업 적 증 명 서", fill=PROFILE_INK, font=_profile_font(54), anchor="mt")
-    draw.line((x1 + 30, y1 + 88, x2 - 30, y1 + 88), fill=PROFILE_INK, width=3)
-    draw.line((x1 + 30, y1 + 96, x2 - 30, y1 + 96), fill=PROFILE_INK, width=1)
-    draw.text((x2 - 30, y1 + 106), f"No. {str(user_id)[-6:]}-{ACHIEVEMENTS.index(ach) + 1:02d}",
-              fill=PROFILE_MUTED, font=_profile_font(22), anchor="ra")
-
-    # [2] 수여 문구
-    name = _fit_text(draw, _clean_text(recipient) or "무명", _profile_font(40), 640)
-    draw.text((cx, y1 + 140), f"{name} 님", fill=PROFILE_INK, font=_profile_font(40), anchor="mt")
-    draw.text((cx, y1 + 196), "위 사람은 아래의 업적을 달성하였기에 이 증서를 수여합니다.",
-              fill=PROFILE_MUTED, font=_profile_font(24), anchor="mt")
-
-    # [3] 업적 이름 + 조건
-    draw.text((cx, y1 + 250), f"─  {ach['tier']} 업적  ─", fill=PROFILE_MUTED, font=_profile_font(28), anchor="mt")
-    title = _fit_text(draw, _clean_text(ach["name"]), _profile_font(58), 700)
-    draw.text((cx, y1 + 296), title, fill=PROFILE_INK, font=_profile_font(58), anchor="mt")
-    cond = _fit_text(draw, _clean_text(ach["desc"]), _profile_font(28), 540)
-    draw.text((cx, y1 + 372), cond, fill=PROFILE_MUTED, font=_profile_font(28), anchor="mt")
-
-    # [4] 붉은 도장 (오른쪽 아래)
-    stamp = Image.new("RGBA", (160, 160), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(stamp)
-    red = (170, 40, 40, 215)
-    sd.ellipse((5, 5, 155, 155), outline=red, width=6)
-    sd.ellipse((18, 18, 142, 142), outline=red, width=2)
-    sd.text((80, 68), "달성", fill=red, font=_profile_font(48), anchor="mm")
-    sd.text((80, 112), ach["tier"], fill=red, font=_profile_font(26), anchor="mm")
-    stamp = stamp.resize((128, 128), Image.Resampling.LANCZOS).rotate(-12, resample=Image.Resampling.BICUBIC)
-    paper.alpha_composite(stamp, (x2 - 30 - 132, y2 - 190))   # 이름 글자를 가리지 않도록 조금 작게, 아래쪽에
-
-    # [5] 하단 문구
-    ach_day = datetime.fromtimestamp(achieved_at) if achieved_at else datetime.now()
-    footer = f"달성일  {ach_day:%Y-%m-%d}   ·   발급일  {datetime.now():%Y-%m-%d}   ·   발급처  패밀리 GM 통합 정보국"
-    draw.text((cx, y2 - 6), footer, fill=PROFILE_MUTED, font=_profile_font(20), anchor="mb")
-
-    buf = io.BytesIO()
-    paper.convert("RGB").save(buf, format="PNG")
-    buf.seek(0)
-    return buf
-
-@bot.tree.command(name="프로필", description="[공용] 본인 또는 다른 유저의 아날로그 증명서를 이미지로 발급합니다.")
-@app_commands.describe(member="조회할 유저 (비우면 본인)")
-async def profile_image_command(interaction: discord.Interaction, member: discord.Member = None):
-    from .police_unit import luxury_summary  # 순환 import 방지: 호출 시점에 가져옴
-    if not await check_maintenance(interaction): return
-    await interaction.response.defer()   # 이미지 생성 시간이 걸릴 수 있어 먼저 응답 예약
-
-    target = member or interaction.user
-    data = get_user_data(target.id)
-
-    role_names = {r.name for r in target.roles}
-    kind = "police" if "경찰" in role_names else "mafia" if "조직원" in role_names else "citizen"
-    honor = data.get("honor", 0)
-
-    pblob = get_title_blob(data)
-    corrupt = (kind == "police" and pblob["corrupt"])
-    rank_text = "시민" if kind == "citizen" else _clean_text(get_user_rank(honor, is_police=(kind == "police")))
-    if corrupt:
-        rank_text = f"부패 경찰 · {rank_text}"
-    rows = [
-        ("성 명", _clean_text(target.display_name) or _clean_text(target.name) or "무명"),
-        ("직 급", rank_text),
-        ("칭 호", _clean_text(get_equipped_title_name(data))),
-        ("거 점", _clean_text(data.get("location", "레벤하임"))),
-        ("자 금", f"${data.get('money', 0):,}"),
-        ("명 예", f"{honor:,} pt"),
-    ]
-    if kind == "citizen":
-        rows.insert(2, ("성 향", alignment_text(pblob["karma"])))   # 시민일 때만 성향 표시
-    _lux_n, _lux_total = luxury_summary(data.get("inventory") or {})
-    if _lux_n:
-        rows.append(("사치품", f"{_lux_n}점 · ${_lux_total:,}"))   # 백화점에서 산 사치품 (과시용)
-
-    try:
-        avatar = await _load_avatar(target)
-        buf = await asyncio.to_thread(make_profile_image, kind, rows, target.id, avatar, "매수" if corrupt else "승인")
-    except Exception as e:
-        print(f"Profile image error: {e}")
-        await interaction.followup.send("증명서를 발급하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
-        return
-
-    await interaction.followup.send(file=discord.File(buf, filename=f"profile_{target.id}.png"))
-
-@bot.tree.command(name="인벤토리", description="[마피아 GM] 소지한 장비를 확인합니다.")
-async def show_inventory(interaction: discord.Interaction):
-    from .police_unit import LUXURY_BY_NAME, luxury_owned, luxury_summary  # 순환 import 방지: 호출 시점에 가져옴
-    if not await check_maintenance(interaction): return
-    if not await check_membership(interaction): return
-    if await check_jail(interaction): return
-
-    user_stats = get_user_data(interaction.user.id)
-    inventory = user_stats.get("inventory", {})
-
-    embed = discord.Embed(title=f"[{interaction.user.name} 님의 장비 가방]", color=discord.Color.dark_green())
-    gear_keys = [k for k in inventory.keys() if not k.startswith(MATERIAL_PREFIX) and k not in LUXURY_BY_NAME]
-    inv_list = [f"• **{item}** `[보유 중]`" for item in gear_keys] if gear_keys else ["*보유 중인 장비가 없습니다.*"]
-    embed.add_field(name="보유 중인 전용 장비", value="\n".join(inv_list), inline=False)
-    mat_lines = [f"• {k[len(MATERIAL_PREFIX):]} x{v}" for k, v in inventory.items() if k.startswith(MATERIAL_PREFIX) and v > 0]
-    if mat_lines:
-        embed.add_field(name="제작 재료 (`/제작`)", value="\n".join(mat_lines), inline=False)
-    _lux = luxury_owned(inventory)
-    if _lux:
-        _lux_n, _lux_total = luxury_summary(inventory)
-        embed.add_field(name=f"사치품 ({_lux_n}점 · 정가 합계 ${_lux_total:,})",
-                        value="\n".join(f"• **{it['name']}**" for it in _lux)[:1000], inline=False)
-    
-    if interaction.user.avatar:
-        embed.set_thumbnail(url=interaction.user.avatar.url)
-
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="무기상점", description="[조직원 전용] 특수 무기(?)-장비를 판매하는 상점을 엽니다.")
-async def open_weapon_shop(interaction: discord.Interaction):
-    if not await check_maintenance(interaction): return
-    if not await check_membership(interaction): return
-    if await check_jail(interaction): return
-
-    await interaction.response.defer()
-
-    user = interaction.user
-    user_stats = get_user_data(user.id)
-    current_money = user_stats.get("money", 0)
-
-    items_desc = "\n".join([
-        f"• **{item['name']}** - `${item['price']:,}`\n  └ *{item['desc']}*"
-        for item in WEAPON_SHOP_ITEMS
-    ])
-
-    embed = discord.Embed(
-        title="[지하 무기 상점] 비밀 카탈로그",
-        description=f"**{user.mention}** 님, 환영합니다. 결투에 필요한 특수 장비들을 구매할 수 있습니다.\n\n"
-                    f"{items_desc}\n\n"
-                    f"**현재 보유 자금:** `${current_money:,}`",
-        color=discord.Color.dark_red()
-    )
-    if user.avatar:
-        embed.set_thumbnail(url=user.avatar.url)
-
-    await interaction.followup.send(embed=embed, view=WeaponShopView(owner=user))
-
-    # === 경찰 전용 상점 아이템 목록 ===
-POLICE_SHOP_ITEMS = [
-    {"id": "police_shield", "name": "치안국 강화 방탄복", "price": 4000, "desc": "경찰의 방어력을 대폭 강화합니다 (방어력 +35)", "def_bonus": 35},
-    {"id": "police_radio", "name": "기동타격대 무전기", "price": 8000, "desc": "/검거 포상금 +20% · /작전 성공률 +5% (보유만 해도 자동 적용)", "bonus_type": "radio"},
-    {"id": "police_badge", "name": "특급 수사관 황금 배지", "price": 20000, "desc": "방어력 +50 / 검거·순찰·심문·작전 명예 실적 +20%", "def_bonus": 50},
-    # --- 고급 장비 (비싼 만큼 강력합니다. 공격력·방어력·체력은 모든 전투 콘텐츠에 반영되고, 서로 겹쳐서 적용됩니다) ---
-    {"id": "police_helmet", "name": "전술 방탄 헬멧", "price": 30000, "desc": "방어력 +25 / 체력 +1,500", "def_bonus": 25, "hp_bonus": 1500},
-    {"id": "police_rifle", "name": "치안국 제식 돌격소총", "price": 60000, "desc": "공격력 +200", "atk_bonus": 200},
-    {"id": "police_swat", "name": "특수작전 중장갑 전투복", "price": 90000, "desc": "방어력 +90 / 체력 +3,000", "def_bonus": 90, "hp_bonus": 3000},
-    {"id": "police_terminal", "name": "광역 수사망 단말기", "price": 120000, "desc": "구역 탈환 포상금 +25% / 탈환 비용 50% 할인", "bonus_type": "terminal"},
-    {"id": "police_sniper", "name": "대테러 저격 소총", "price": 150000, "desc": "공격력 +350", "atk_bonus": 350},
-    {"id": "police_insignia", "name": "치안총감 지휘 휘장", "price": 250000, "desc": "방어력 +60 / 체력 +2,000 / 명예 실적 +15%", "def_bonus": 60, "hp_bonus": 2000, "bonus_type": "insignia"},
-]
-
-
-# ==========================================================================
-# [합친 모듈] auction.py
-#   /경매
-# ==========================================================================
-# ==========================================================================
-# [/경매]  플레이어 경매장
-#   • /경매 아이템 [수량] [시작가]  : 인벤토리의 아이템·장비를 경매에 올립니다. (시작가 최소 $1,000)
-#   • 경찰·조직원 누구나 버튼으로 입찰할 수 있습니다. 입찰 금액은 입찰 즉시 빠져나가고,
-#     다른 사람이 더 높게 부르면 즉시 전액 환불됩니다.
-#   • 마지막 입찰 후 AUCTION_BID_SEC(10초) 동안 아무도 레이즈하지 않으면 낙찰 → 낙찰자가 아이템을 받고, 판매자가 금액을 받습니다.
-#     (입찰 상한은 없습니다. 자기 자신의 입찰을 다시 올리는 것은 막아 두었습니다.)
-#   • 입찰이 없으면 유찰되어 아이템이 판매자에게 돌아옵니다. 판매자는 입찰이 들어오기 전까지 취소할 수 있습니다.
-#
-#   [안전장치]  아이템·입찰금은 user_data.data 안에 "에스크로 기록"(auction_item / auction_escrow)으로 남습니다.
-#               봇이 경매 도중 꺼지거나 재시작돼도, 켜질 때 on_ready 에서 자동으로 아이템 반환·입찰금 환불을 합니다.
-#               (봇을 동시에 두 개 이상 띄우면 안 됩니다. 한쪽이 켜질 때 다른 쪽의 진행 중 경매를 되돌려 버립니다.)
-# ==========================================================================
-AUCTION_START_MIN = 1000          # 시작가 최소 금액
-AUCTION_PRICE_MAX = 2_000_000_000 # 입력 안전 한도 (DB 정수 범위 보호용. 실질적으론 상한 없음)
-AUCTION_MIN_RAISE = 100           # 최소 레이즈 폭
-AUCTION_OPEN_SEC = 60             # 첫 입찰이 들어오기까지 기다리는 시간 (없으면 유찰)
-AUCTION_BID_SEC = 10              # 마지막 입찰 후 낙찰까지 시간
-AUCTION_RAISE_STEPS = (1000, 10000, 100000)   # [+금액] 버튼
-AUCTION_MAX_PER_GUILD = 3         # 서버당 동시 진행 경매 수
-AUCTION_FEE_RATE = 0.0            # 판매 수수료 (0.05 = 5%). 기본은 수수료 없음
-
-active_auctions = {}              # {경매id: AuctionSession}
-auction_by_seller = {}            # {판매자 user_id: 경매id}  (1인 1경매)
-_auction_tasks = set()            # 진행 중인 asyncio 작업 (가비지 컬렉션 방지)
-
-def auction_blocked_reason(item: str):
-    """거래 불가 아이템이면 사유를, 가능하면 None"""
-    from .police_unit import LUXURY_BY_NAME  # 순환 import 방지: 호출 시점에 가져옴
-    if item.startswith(("[전리품]", "[강화보스 전리품]")):
-        return "고유 전리품은 칭호·업적과 연결되어 있어 거래할 수 없습니다."
-    if item in {it["name"] for it in POLICE_SHOP_ITEMS}:
-        return "치안국 보급품은 거래할 수 없습니다."
-    if item in LUXURY_BY_NAME:
-        return "사치품은 개인 소유물이라 거래·경매·압류할 수 없습니다."
-    return None
-
-# ── DB 작업 (동기, to_thread 로 실행) ────────────────────────────────────
-def _auction_retry(fn, *args, tries: int = 3):
-    last = None
-    for i in range(tries):
-        try:
-            return fn(*args)
-        except Exception as e:
-            last = e
-            time.sleep(0.4 * (i + 1))
-    raise last
-
-def _auction_update(user_id, payload: dict):
-    def _do():
-        res = supabase.table("user_data").update(payload).eq("user_id", str(user_id)).execute()
-        _check_updated(res, "auction_update")
-    _auction_retry(_do)
-
-def auction_list_sync(aid: str, seller_id: int, item: str, qty: int) -> str:
-    """판매 아이템을 인벤토리에서 빼서 에스크로 기록으로 옮김. 반환: ok / no_item"""
-    _require_db()
-    with _inv_lock:
-        info = get_user_data(seller_id)
-        inv = dict(info.get("inventory") or {})
-        have = int(inv.get(item, 0) or 0)
-        if have < qty:
-            return "no_item"
-        if have == qty:
-            inv.pop(item, None)
-        else:
-            inv[item] = have - qty
-        blob = get_title_blob(info)
-        blob.setdefault("auction_item", {})[aid] = {"item": item, "qty": qty}
-        _auction_update(seller_id, {"inventory": inv, "data": blob})
-    return "ok"
-
-def auction_return_item_sync(aid: str, seller_id: int) -> bool:
-    """에스크로 기록의 아이템을 판매자에게 돌려줌 (유찰·취소)"""
-    _require_db()
-    with _inv_lock:
-        info = get_user_data(seller_id)
-        blob = get_title_blob(info)
-        rec = (blob.get("auction_item") or {}).pop(aid, None)
-        if not rec:
-            return False
-        inv = dict(info.get("inventory") or {})
-        inv[rec["item"]] = inv.get(rec["item"], 0) + int(rec["qty"])
-        _auction_update(seller_id, {"inventory": inv, "data": blob})
-    return True
-
-def auction_bid_sync(aid: str, bidder_id: int, amount: int, prev_id, prev_amount: int):
-    """새 입찰자의 돈을 먼저 차감(에스크로)하고, 이전 최고 입찰자에게 전액 환불. 반환: (상태, 값)"""
-    _require_db()
-    with _inv_lock:
-        info = get_user_data(bidder_id)
-        money = int(info.get("money", 0) or 0)
-        if money < amount:
-            return "no_money", money
-        blob = get_title_blob(info)
-        blob.setdefault("auction_escrow", {})[aid] = amount
-        _auction_update(bidder_id, {"money": money - amount, "data": blob})
-        if prev_id:
-            try:
-                p_info = get_user_data(prev_id)
-                p_blob = get_title_blob(p_info)
-                (p_blob.get("auction_escrow") or {}).pop(aid, None)
-                _auction_update(prev_id, {"money": int(p_info.get("money", 0) or 0) + prev_amount, "data": p_blob})
-            except Exception as e:
-                # 환불이 실패해도 이전 입찰자의 에스크로 기록이 남아 있어 다음 봇 시작 때 자동 환불됩니다.
-                print(f"[경매 환불 실패 → 재시작 시 복구] aid={aid} user={prev_id}: {e}")
-        return "ok", money - amount
-
-def auction_settle_sync(s: "AuctionSession") -> int:
-    """낙찰 정산: 낙찰자에게 아이템, 판매자에게 대금. 반환: 판매자가 받은 금액"""
-    _require_db()
-    fee = int(s.current * AUCTION_FEE_RATE)
-    payout = s.current - fee
-    with _inv_lock:
-        w_info = get_user_data(s.high_id)
-        w_blob = get_title_blob(w_info)
-        (w_blob.get("auction_escrow") or {}).pop(s.id, None)
-        w_inv = dict(w_info.get("inventory") or {})
-        w_inv[s.item] = w_inv.get(s.item, 0) + s.qty
-        _auction_update(s.high_id, {"inventory": w_inv, "data": w_blob})
-
-        s_info = get_user_data(s.seller_id)
-        s_blob = get_title_blob(s_info)
-        (s_blob.get("auction_item") or {}).pop(s.id, None)
-        _auction_update(s.seller_id, {"money": int(s_info.get("money", 0) or 0) + payout, "data": s_blob})
-    return payout
-
-def auction_recover_sync():
-    """봇 시작 시: 이전 실행에서 끝나지 못한 경매의 에스크로(아이템·입찰금)를 모두 되돌림. 반환: (아이템 건수, 환불 인원)"""
-    if not supabase:
-        return 0, 0
-    n_items = n_refunds = 0
-    start = 0
-    while True:
-        rows = supabase.table("user_data").select("user_id,data").range(start, start + 999).execute().data or []
-        for row in rows:
-            raw = row.get("data")
-            if not isinstance(raw, dict) or not (raw.get("auction_escrow") or raw.get("auction_item")):
-                continue
-            with _inv_lock:
-                info = get_user_data(row["user_id"])
-                blob = get_title_blob(info)
-                esc = blob.pop("auction_escrow", None) or {}
-                itm = blob.pop("auction_item", None) or {}
-                payload = {"data": blob}
-                if esc:
-                    payload["money"] = int(info.get("money", 0) or 0) + sum(int(v) for v in esc.values())
-                    n_refunds += 1
-                if itm:
-                    inv = dict(info.get("inventory") or {})
-                    for rec in itm.values():
-                        inv[rec["item"]] = inv.get(rec["item"], 0) + int(rec["qty"])
-                        n_items += 1
-                    payload["inventory"] = inv
-                _auction_update(row["user_id"], payload)
-        if len(rows) < 1000:
-            break
-        start += 1000
-    return n_items, n_refunds
-
-_auction_recover_state = {"done": False}
-
-@bot.listen("on_ready")
-async def _auction_recover_on_ready():
-    if _auction_recover_state["done"]:       # 재연결로 on_ready 가 또 불려도 진행 중인 경매를 건드리지 않도록 한 번만
-        return
-    _auction_recover_state["done"] = True
-    try:
-        n_items, n_refunds = await asyncio.to_thread(auction_recover_sync)
-        print(f"경매 에스크로 복구: 아이템 {n_items}건 반환 / 입찰금 {n_refunds}명 환불")
-    except Exception as e:
-        print(f"경매 에스크로 복구 실패: {e}")
-
-# ── 경매 진행 상태 ────────────────────────────────────────────────────────
-class AuctionSession:
-    def __init__(self, aid: str, guild_id: int, seller, item: str, qty: int, start_price: int):
-        self.id, self.guild_id = aid, guild_id
-        self.seller_id, self.seller_name = seller.id, seller.display_name
-        self.item, self.qty, self.start_price = item, qty, start_price
-        self.current = start_price
-        self.high_id = None
-        self.high_name = ""
-        self.bids = []                          # [(이름, 금액)]
-        self.deadline = time.monotonic() + AUCTION_OPEN_SEC
-        self.deadline_epoch = int(time.time()) + AUCTION_OPEN_SEC
-        self.ended = False
-        self.cancelled = False
-        self.result = None                      # sold / unsold / cancelled / error
-        self.payout = 0
-        self.lock = asyncio.Lock()              # 입찰·종료 판정을 한 줄로 세우는 잠금
-        self.edit_lock = asyncio.Lock()         # 메시지 갱신 순서 보장
-        self.channel = None
-        self.message = None                     # PartialMessage (채널 권한으로 수정)
-        self.message_hook = None                # 슬래시 명령 응답 메시지 (예비 수단)
-        self.view = None
-
-def _auction_item_text(s: AuctionSession) -> str:
-    return f"{s.item} x{s.qty}" if s.qty > 1 else s.item
-
-def auction_min_bid(s: AuctionSession) -> int:
-    return s.current if s.high_id is None else s.current + AUCTION_MIN_RAISE
-
-def auction_embed(s: AuctionSession) -> discord.Embed:
-    item_txt = _auction_item_text(s)
-    if not s.ended:
-        embed = discord.Embed(
-            title=f"[경매] {item_txt}",
-            color=discord.Color.gold() if s.high_id else discord.Color.blurple()
-        )
-        embed.add_field(name="판매자", value=f"<@{s.seller_id}>", inline=True)
-        embed.add_field(name="현재 최고가" if s.high_id else "시작가", value=f"`${s.current:,}`", inline=True)
-        embed.add_field(name="최고 입찰자", value=f"<@{s.high_id}>" if s.high_id else "없음", inline=True)
-        if s.high_id:
-            timing = f"<t:{s.deadline_epoch}:R> 까지 아무도 레이즈하지 않으면 **낙찰**됩니다."
-        else:
-            timing = f"<t:{s.deadline_epoch}:R> 까지 입찰이 없으면 **유찰**됩니다."
-        embed.add_field(name="진행", value=timing + f"\n입찰이 들어올 때마다 **{AUCTION_BID_SEC}초**로 다시 시작합니다. (입찰 상한 없음)", inline=False)
-        embed.set_footer(text="입찰금은 즉시 차감되고, 더 높은 입찰이 들어오면 전액 환불됩니다.")
-    else:
-        if s.result == "sold":
-            embed = discord.Embed(title=f"[경매 낙찰] {item_txt}", color=discord.Color.green(),
-                                  description=f"<@{s.high_id}> 님이 `${s.current:,}` 에 낙찰받았습니다!\n"
-                                              f"판매자 <@{s.seller_id}> 님은 `${s.payout:,}` 를 받았습니다.")
-        elif s.result == "cancelled":
-            embed = discord.Embed(title=f"[경매 취소] {item_txt}", color=discord.Color.dark_grey(),
-                                  description="판매자가 경매를 취소했습니다. 아이템은 판매자에게 돌아갔습니다.")
-        elif s.result == "error":
-            embed = discord.Embed(title=f"[경매 오류] {item_txt}", color=discord.Color.red(),
-                                  description="정산 중 오류가 발생했습니다. 아이템과 입찰금은 봇이 다시 시작될 때 자동으로 되돌려집니다.\n"
-                                              "급하면 관리자에게 문의해 주세요.")
-        else:
-            embed = discord.Embed(title=f"[경매 유찰] {item_txt}", color=discord.Color.dark_grey(),
-                                  description="입찰이 없어 유찰되었습니다. 아이템은 판매자에게 돌아갔습니다.")
-    if s.bids:
-        embed.add_field(name="최근 입찰", value="\n".join(f"• {n} `${a:,}`" for n, a in s.bids[-5:][::-1]), inline=False)
-    return embed
-
-async def auction_refresh(s: AuctionSession):
-    """현재 상태 그대로 경매 메시지를 갱신 (항상 최신 상태로 그려지도록 잠금 안에서 만든다)"""
-    async with s.edit_lock:
-        if s.view:
-            s.view.sync_labels()
-        kwargs = {"embed": auction_embed(s), "view": None if s.ended else s.view}
-        last = None
-        for target in (s.message, s.message_hook):
-            if target is None:
-                continue
-            try:
-                await target.edit(**kwargs)
-                return
-            except (discord.Forbidden, discord.NotFound, discord.HTTPException) as e:
-                last = e
-        print(f"[경매 메시지 갱신 실패] aid={s.id}: {last}")
-
-async def auction_place_bid(s: AuctionSession, user: discord.abc.User, amount: int):
-    """입찰 처리. 실패하면 사유 문자열, 성공하면 None"""
-    if user.id == s.seller_id:
-        return "자신이 올린 경매에는 입찰할 수 없습니다."
-    if user.id == s.high_id:
-        return "이미 최고 입찰자입니다. 다른 사람이 더 높게 부르면 다시 도전하세요."
-    if amount > AUCTION_PRICE_MAX:
-        return f"입찰 금액이 너무 큽니다. (최대 `${AUCTION_PRICE_MAX:,}`)"
-
-    async with s.lock:
-        if s.ended or time.monotonic() >= s.deadline:
-            return "이미 종료된 경매입니다."
-        need = auction_min_bid(s)
-        if amount < need:
-            return f"현재 최소 입찰액은 `${need:,}` 입니다."
-        prev_id, prev_amount = s.high_id, (s.current if s.high_id else 0)
-        try:
-            status, val = await asyncio.to_thread(auction_bid_sync, s.id, user.id, amount, prev_id, prev_amount)
-        except Exception as e:
-            print(f"[경매 입찰 오류] aid={s.id}: {e}")
-            return "입찰을 처리하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
-        if status == "no_money":
-            return f"자금이 부족합니다. (보유 `${val:,}` / 입찰 `${amount:,}`)"
-        s.current, s.high_id, s.high_name = amount, user.id, user.display_name
-        s.bids.append((user.display_name, amount))
-        s.deadline = time.monotonic() + AUCTION_BID_SEC          # 레이즈가 들어올 때마다 10초 다시 시작
-        s.deadline_epoch = int(time.time()) + AUCTION_BID_SEC
-    await auction_refresh(s)
-    return None
-
-async def auction_precheck(interaction: discord.Interaction) -> bool:
-    """점검 / 가입(조직원·경찰) / 수감 여부. 실패하면 직접 안내를 보내므로 호출 전에 응답하지 않은 상태여야 한다."""
-    if not await check_maintenance(interaction): return False
-    if not await check_membership(interaction): return False
-    if await check_jail(interaction): return False
-    return True
-
-# ── 버튼 / 입력창 ────────────────────────────────────────────────────────
-class _AuctionBidButton(discord.ui.Button):
-    def __init__(self, s: AuctionSession, **kw):
-        super().__init__(**kw)
-        self.s = s
-
-    def amount(self) -> int:
-        raise NotImplementedError
-
-    async def callback(self, interaction: discord.Interaction):
-        s = self.s
-        if s.ended:
-            await interaction.response.send_message("이미 종료된 경매입니다.", ephemeral=True)
-            return
-        if not await auction_precheck(interaction): return
-        await interaction.response.defer()
-        msg = await auction_place_bid(s, interaction.user, self.amount())
-        if msg:
-            await interaction.followup.send(msg, ephemeral=True)
-
-class AuctionMinButton(_AuctionBidButton):
-    def __init__(self, s):
-        super().__init__(s, label="입찰", style=discord.ButtonStyle.success, row=0)
-    def amount(self): return auction_min_bid(self.s)
-
-class AuctionRaiseButton(_AuctionBidButton):
-    def __init__(self, s, step: int):
-        super().__init__(s, label=f"+${step:,}", style=discord.ButtonStyle.primary, row=0)
-        self.step = step
-    def amount(self): return self.s.current + self.step
-
-class AuctionBidModal(discord.ui.Modal, title="입찰 금액 입력"):
-    amount_input = discord.ui.TextInput(label="입찰 금액 ($)", placeholder="예: 25000", min_length=1, max_length=14)
-
-    def __init__(self, s: AuctionSession):
-        super().__init__()
-        self.s = s
-
-    async def on_submit(self, interaction: discord.Interaction):
-        raw = re.sub(r"[,\s$]", "", str(self.amount_input.value))
-        if not raw.isdigit():
-            await interaction.response.send_message("숫자만 입력해 주세요.", ephemeral=True)
-            return
-        amount = int(raw)
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        msg = await auction_place_bid(self.s, interaction.user, amount)
-        await interaction.followup.send(msg or f"`${amount:,}` 입찰 완료!", ephemeral=True)
-
-class AuctionCustomButton(discord.ui.Button):
-    def __init__(self, s):
-        super().__init__(label="직접 입력", style=discord.ButtonStyle.secondary, row=0)
-        self.s = s
-
-    async def callback(self, interaction: discord.Interaction):
-        if self.s.ended:
-            await interaction.response.send_message("이미 종료된 경매입니다.", ephemeral=True)
-            return
-        if not await auction_precheck(interaction): return
-        await interaction.response.send_modal(AuctionBidModal(self.s))
-
-class AuctionCancelButton(discord.ui.Button):
-    def __init__(self, s):
-        super().__init__(label="경매 취소 (판매자)", style=discord.ButtonStyle.danger, row=1)
-        self.s = s
-
-    async def callback(self, interaction: discord.Interaction):
-        s = self.s
-        if interaction.user.id != s.seller_id:
-            await interaction.response.send_message("판매자만 취소할 수 있습니다.", ephemeral=True)
-            return
-        async with s.lock:
-            if s.ended:
-                err = "이미 종료된 경매입니다."
-            elif s.high_id:
-                err = "이미 입찰이 들어와 취소할 수 없습니다."
-            else:
-                err = None
-                s.cancelled = True
-                s.deadline = 0          # 진행 루프가 바로 종료 처리
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-        else:
-            await interaction.response.defer()
-
-class AuctionView(discord.ui.View):
-    def __init__(self, s: AuctionSession):
-        super().__init__(timeout=None)
-        self.s = s
-        self.min_btn = AuctionMinButton(s)
-        self.cancel_btn = AuctionCancelButton(s)
-        self.add_item(self.min_btn)
-        for step in AUCTION_RAISE_STEPS:
-            self.add_item(AuctionRaiseButton(s, step))
-        self.add_item(AuctionCustomButton(s))
-        self.add_item(self.cancel_btn)
-        self.sync_labels()
-
-    def sync_labels(self):
-        need = auction_min_bid(self.s)
-        self.min_btn.label = f"시작가 ${need:,} 입찰" if self.s.high_id is None else f"최소 ${need:,} 입찰"
-        self.cancel_btn.disabled = bool(self.s.high_id)      # 입찰이 들어오면 취소 불가
-
-# ── 진행 / 종료 ──────────────────────────────────────────────────────────
-async def auction_finish(s: AuctionSession):
-    if s.cancelled or s.high_id is None:
-        s.result = "cancelled" if s.cancelled else "unsold"
-        try:
-            await asyncio.to_thread(auction_return_item_sync, s.id, s.seller_id)
-        except Exception as e:
-            print(f"[경매 아이템 반환 실패 → 재시작 시 복구] aid={s.id}: {e}")
-            s.result = "error"
-    else:
-        try:
-            s.payout = await asyncio.to_thread(auction_settle_sync, s)
-            s.result = "sold"
-        except Exception as e:
-            print(f"[경매 정산 실패 → 재시작 시 복구] aid={s.id}: {e}")
-            s.result = "error"
-    await auction_refresh(s)
-
-    if s.result == "sold" and s.channel is not None:       # 낙찰자·판매자에게 알림
-        try:
-            await s.channel.send(f"<@{s.high_id}> 님이 **{_auction_item_text(s)}** 을(를) `${s.current:,}` 에 낙찰받았습니다! (판매자 <@{s.seller_id}>)")
-        except discord.HTTPException:
-            pass
-
-async def run_auction(s: AuctionSession):
-    try:
-        while True:
-            async with s.lock:
-                remaining = s.deadline - time.monotonic()
-                if remaining <= 0:
-                    s.ended = True          # 종료 판정은 잠금 안에서 → 이 순간부터 새 입찰은 거절됨
-                    break
-            await asyncio.sleep(min(max(remaining, 0.05), 1.0))
-        await auction_finish(s)
-    except Exception as e:
-        print(f"[경매 진행 오류] aid={s.id}: {type(e).__name__}: {e}")
-        s.ended = True
-        s.result = "error"
-        try:
-            await auction_refresh(s)
-        except Exception:
-            pass
-    finally:
-        active_auctions.pop(s.id, None)
-        if auction_by_seller.get(s.seller_id) == s.id:
-            auction_by_seller.pop(s.seller_id, None)
-
-# ── 슬래시 명령어 ────────────────────────────────────────────────────────
-async def _auction_item_autocomplete(interaction: discord.Interaction, current: str):
-    try:
-        info = await asyncio.to_thread(get_user_data, interaction.user.id)
-    except Exception:
-        return []
-    inv = info.get("inventory") or {}
-    cur = current.strip().lower()
-    out = []
-    for name, cnt in inv.items():
-        if int(cnt or 0) <= 0 or auction_blocked_reason(name):
-            continue
-        if cur and cur not in name.lower():
-            continue
-        label = f"{name} (x{cnt})" if int(cnt) > 1 else name
-        out.append(app_commands.Choice(name=label[:100], value=name[:100]))
-        if len(out) >= 25:
-            break
-    return out
-
-@bot.tree.command(name="경매", description="[공용] 인벤토리의 아이템·장비를 경매에 올립니다. 누구나 입찰할 수 있어요.")
-@app_commands.describe(아이템="경매에 올릴 아이템 (목록에서 선택)",
-                       수량="올릴 개수 (재료·소모품만 여러 개 가능, 기본 1)",
-                       시작가=f"시작 금액 (최소 ${AUCTION_START_MIN:,}, 기본 ${AUCTION_START_MIN:,})")
-@app_commands.autocomplete(아이템=_auction_item_autocomplete)
-async def auction_command(interaction: discord.Interaction, 아이템: str,
-                          수량: app_commands.Range[int, 1, 9999] = 1,
-                          시작가: app_commands.Range[int, AUCTION_START_MIN, AUCTION_PRICE_MAX] = AUCTION_START_MIN):
-    if not await auction_precheck(interaction): return
-
-    user = interaction.user
-    now_dt = datetime.now()
-    if any(int(k) == int(user.id) and now_dt <= exp for k, exp in list(wanted_list.items())):
-        # 수배 중에 경매로 아이템을 빼돌려 /검거 압류를 피하는 것을 막습니다. (입찰은 가능)
-        await interaction.response.send_message("**지명수배 중에는 경매에 물건을 올릴 수 없습니다.** 수배가 풀린 뒤에 다시 시도해 주세요.", ephemeral=True)
-        return
-    reason = auction_blocked_reason(아이템)
-    if reason:
-        await interaction.response.send_message(reason, ephemeral=True)
-        return
-    if auction_by_seller.get(user.id) in active_auctions:
-        await interaction.response.send_message("이미 진행 중인 내 경매가 있습니다. 끝난 뒤에 다시 올려주세요.", ephemeral=True)
-        return
-    gid = interaction.guild_id
-    if sum(1 for a in active_auctions.values() if a.guild_id == gid) >= AUCTION_MAX_PER_GUILD:
-        await interaction.response.send_message(f"이 서버에서는 동시에 {AUCTION_MAX_PER_GUILD}개까지만 경매를 열 수 있습니다. 잠시 후 다시 시도해 주세요.", ephemeral=True)
-        return
-
-    await interaction.response.defer()
-    import uuid
-    aid = uuid.uuid4().hex[:8]
-    try:
-        status = await asyncio.to_thread(auction_list_sync, aid, user.id, 아이템, 수량)
-    except Exception as e:
-        print(f"[경매 등록 오류] {e}")
-        await interaction.followup.send("경매를 등록하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.", ephemeral=True)
-        return
-    if status == "no_item":
-        await interaction.followup.send("해당 아이템을 그만큼 보유하고 있지 않습니다.", ephemeral=True)
-        return
-
-    s = AuctionSession(aid, gid, user, 아이템, 수량, 시작가)
-    s.channel = interaction.channel
-    s.view = AuctionView(s)
-    active_auctions[aid] = s
-    auction_by_seller[user.id] = aid
-    try:
-        msg = await interaction.followup.send(embed=auction_embed(s), view=s.view, wait=True)
-    except Exception as e:                       # 메시지를 못 보냈으면 경매를 열지 않고 아이템 반환
-        print(f"[경매 메시지 전송 실패] {e}")
-        active_auctions.pop(aid, None)
-        auction_by_seller.pop(user.id, None)
-        await asyncio.to_thread(auction_return_item_sync, aid, user.id)
-        return
-    s.message_hook = msg
-    if interaction.channel is not None and hasattr(interaction.channel, "get_partial_message"):
-        s.message = interaction.channel.get_partial_message(msg.id)
-
-    task = asyncio.create_task(run_auction(s))
-    _auction_tasks.add(task)
-    task.add_done_callback(_auction_tasks.discard)
-#@@@@ FILE: mafia/family.py
+# ########################## [모듈: family] ##########################
 """조직(패밀리)과 레이드
 
 합친 모듈: family.py, raid.py
@@ -6463,16 +5180,6 @@ import time
 from datetime import datetime, timedelta
 from discord import app_commands
 
-from .core import bot, inc_money, jail_list, keep_task, supabase
-from .status import (
-    _check_updated,
-    bump_user_stats_sync,
-    check_jail,
-    compute_combat_stats,
-    get_user_data,
-    update_user_stats,
-)
-from .admin import check_maintenance, check_membership
 
 
 # ==========================================================================
@@ -6903,7 +5610,7 @@ class FamilyDisbandView(discord.ui.View):
 
     @discord.ui.button(label="정말 해산합니다", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        from .territory import war_family_map  # 순환 import 방지: 호출 시점에 가져옴
+        pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
         if interaction.user.id != self.owner.id:
             await interaction.response.send_message("조직장만 누를 수 있습니다.", ephemeral=True)
             return
@@ -7234,8 +5941,8 @@ def raid_do_aoe(s: RaidSession):
 
 def _raid_settle_sync(s: RaidSession, win: bool):
     """보상 지급 + 조직 갱신 (동기 DB 작업이라 to_thread 로 실행). 반환: [(RaidPlayer, money, honor)], total_money"""
-    from .economy import grant_materials_sync, roll_material_drops  # 순환 import 방지: 호출 시점에 가져옴
-    from .territory import family_stat_inc  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     t = s.tier
     s.material_drops = {}   # {user_id: {재료: 개수}}  (정산 결과 화면에 표시)
     attackers = [p for p in s.players.values() if p.dmg_done > 0]
@@ -7295,7 +6002,7 @@ def _raid_refund_sync(s: RaidSession):
 
 
 async def run_raid(s: RaidSession):
-    from .economy import format_material_drops  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     try:
         # ── 1) 모집
         try:
@@ -7477,7 +6184,9 @@ async def raid_info_cmd(interaction: discord.Interaction):
         color=discord.Color.orange()
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
-#@@@@ FILE: mafia/market.py
+
+
+# ########################## [모듈: market] ##########################
 """사업·주식 시장과 봇 이벤트(on_ready)
 
 합친 모듈: biz_stock.py, events.py
@@ -7492,16 +6201,6 @@ import traceback as _traceback
 from datetime import datetime, timezone
 from discord import app_commands
 
-from .core import bot, inc_money, keep_task, load_boss_state_sync, supabase
-from .status import (
-    _check_updated,
-    _require_db,
-    check_jail,
-    get_user_data,
-    load_status_sync,
-    update_user_stats,
-)
-from .admin import _loop_exception_handler, check_maintenance, check_membership
 
 
 # ==========================================================================
@@ -8354,7 +7053,6 @@ async def stock_portfolio_cmd(interaction: discord.Interaction):
 # [합친 모듈] events.py
 #   봇 이벤트 (on_ready 등)
 # ==========================================================================
-from . import core as _core
 
 _status_loaded = False
 _tree_synced = False   # 명령어 동기화는 프로세스당 한 번만 (재연결 때마다 하면 API 제한에 걸릴 수 있음)
@@ -8391,787 +7089,1148 @@ async def on_ready():
             print(e)
     print(f'로그인 완료: {bot.user.name}')
 _stock_loop_started = False
-#@@@@ FILE: mafia/misc.py
-"""정보 검색, /능력치, /도움말, /탈옥
 
-합친 모듈: info.py, stats.py, help.py, jailbreak.py
+
+# ########################## [모듈: economy] ##########################
+"""경제: /제작, /프로필 /인벤토리, /경매
+
+합친 모듈: crafting.py, profile.py, auction.py
 """
 
 import asyncio
 import discord
+import io
+import os
 import random
 import re
+import threading as _threading
 import time
+import unicodedata
+from datetime import datetime
 from discord import app_commands
+from functools import lru_cache
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from .core import bot, GuardedView, jail_list
-from .status import (
-    ATTENDANCE_TITLE_STACKS,
-    check_jail,
-    compute_combat_stats,
-    CORRUPT_ARREST_BONUS_HONOR,
-    CORRUPT_ARREST_JAIL_SEC,
-    CRAFT_RECIPES,
-    DAILY_QUESTS,
-    DONATE_UNIT,
-    ELITE_TROPHY_STATS,
-    get_user_data,
-    join_requirement_text,
-    KARMA_EVIL_MAX,
-    KARMA_GOOD_MIN,
-    PARTTIME_KARMA,
-    PICKPOCKET_KARMA_FAIL,
-    PICKPOCKET_KARMA_OK,
-    save_status,
-    SERVICE_KARMA,
-    TITLES,
-    update_user_location,
-    WEAPON_TIERS,
-    WEEKLY_ALL_CLEAR_BONUS,
-    WEEKLY_QUESTS,
-    WEEKLY_TITLE_WEEKS,
-)
-from .admin import check_maintenance, check_membership
-from .battle import (
-    boss_chance_text,
-    boss_reward_text,
-    SKILL_FINISHER_MIN_TURN,
-    SKILL_FINISHER_MULT,
-    SKILL_RALLY_BONUS,
-    SKILL_RALLY_CD,
-    SKILL_RALLY_TURNS,
-    SKILL_SMASH_CD,
-    SKILL_SMASH_MULT,
-)
-from .economy import CRAFT_PREFIX, crafted_gear_best, POLICE_SHOP_ITEMS
-from .family import _is_jailed, _is_mafia, FAMILY_CREATE_MIN_HONOR
-from .police import (
-    POLICE_BADGE_HONOR_BONUS,
-    POLICE_BADGE_NAME,
-    POLICE_INSIGNIA_HONOR_BONUS,
-    POLICE_INSIGNIA_NAME,
-    POLICE_RADIO_ARREST_BONUS,
-    POLICE_RADIO_NAME,
-    POLICE_RADIO_OP_BONUS,
-    POLICE_TERMINAL_COST_DISCOUNT,
-    POLICE_TERMINAL_NAME,
-    POLICE_TERMINAL_PRIZE_BONUS,
-    SMUGGLE_COOLDOWN_SEC,
-    SMUGGLE_IMMUNITY_SEC,
-    SMUGGLE_MAX_BRIBE,
-    SMUGGLE_MIN_BRIBE,
-    SMUGGLE_REJECT_FINE,
-    SMUGGLE_REJECT_HONOR_LOSS,
-    SMUGGLE_REJECT_WANTED_SEC,
-)
 
 
 # ==========================================================================
-# [합친 모듈] info.py
-#   /정보
+# [합친 모듈] crafting.py
+#   제작 시스템 (/제작)
 # ==========================================================================
-# === [공용] 통합 `/정보` 명령어 (확장판) ===
-@bot.tree.command(name="정보", description="[공용] 특정 명령어, 아이템 또는 세계관 설정을 상세하게 검색합니다.")
-@app_commands.describe(keyword="알고 싶은 항목 (예: 전투, 보스, 슬롯, 칭호, 유토피아 오브 에덴)")
-@app_commands.choices(keyword=[
-    app_commands.Choice(name="전투 & 보스 시스템", value="전투"),
-    app_commands.Choice(name="히든 보스 (/보스)", value="보스"),
-    app_commands.Choice(name="카지노 & 도박 (/도박)", value="도박"),
-    app_commands.Choice(name="칭호 시스템 (/칭호)", value="칭호"),
-    app_commands.Choice(name="일일 의뢰 (/일퀘)", value="일퀘"),
-    app_commands.Choice(name="주간 의뢰 (/주간)", value="주간"),
-    app_commands.Choice(name="성향 · 전직 조건 · 부패 경찰", value="성향"),
-    app_commands.Choice(name="경찰 상점 (/경찰상점)", value="경찰상점"),
-    app_commands.Choice(name="통합 설정 (/설정)", value="설정"),
-    app_commands.Choice(name="네임드 몬스터 (/네임드)", value="네임드"),
-    app_commands.Choice(name="밀수 거래 (/밀수)", value="밀수"),
-    app_commands.Choice(name="조직(패밀리) (/조직)", value="조직"),
-    app_commands.Choice(name="조직 레이드 (/레이드)", value="레이드"),
-    app_commands.Choice(name="Utopia Of Eden (세계관)", value="유토피아 오브 에덴")
-])
-async def info_command(interaction: discord.Interaction, keyword: str):
-    from .family import FAMILY_CREATE_COST, FAMILY_CREATE_MIN_HONOR, FAMILY_MAX_MEMBERS  # 순환 import 방지: 호출 시점에 가져옴
-    if not await check_maintenance(interaction): return
+CRAFT_PREFIX = "[제작] "
 
-    kw = keyword.strip()
+# 재료 → 획득처 안내 (/제작 화면에 표시)
+MATERIAL_SOURCES = {
+    M_SCRAP:   "/전투: 골목길 깡패·배신자·거상",
+    M_STEEL:   "/전투: 배신자·거상·수배자·암살자 / 네임드",
+    M_ALLOY:   "/전투: 수배자·암살자 / 네임드·보스·레이드",
+    M_MARCO:   "/네임드: 백정 마르코",
+    M_BIANCA:  "/네임드: 독사 비앙카",
+    M_BORONIN: "/네임드: 철의 장군 보로닌",
+    M_EXEC:    "/네임드: 붉은 달의 처형자",
+    M_DARK:    "/보스: 어둠의 지배자",
+    M_EDEN:    "/보스: 에칼 데 페스토",
+    M_ORIGIN:  "/보스: 태초의 파괴자",
+    M_RAT:     "/레이드: 하수구의 쥐왕",
+    M_BULL:    "/레이드: 부두 항만의 폭군",
+    M_KING:    "/레이드: 칼렌데 지하 황제",
+}
 
-    # 1. 시스템 및 명령어 정보 사전
-    command_infos = {
-        "네임드": {
-            "title": "시스템: /네임드 [몬스터]",
-            "desc": "일반 NPC보다 훨씬 강한 강화 몬스터에 도전합니다.\n"
-                    "• **입장 조건:** 마르코 500pt / 비앙카 1,500pt / 보로닌 2,500pt / 처형자 4,000pt (명예)\n"
-                    "• **특징:** 12턴 제한, 체력이 절반 아래가 되면 **격노**하여 공격력이 크게 오릅니다.\n"
-                    "• **보상:** 많은 자금 + 소량의 명예, 최초 처치 시 고유 전리품 (칭호 해금)\n"
-                    "• **쿨타임:** 없음 (전투가 끝나면 바로 다시 도전할 수 있습니다)",
-        },
-        "전투": {
-            "title": "시스템: /전투 [npc이름]",
-            "desc": "지정한 NPC와 1:1 턴제 결투를 벌입니다.\n"
-                    "• **특징:** 제한 턴(10턴) 내에 처치해야 승리하며, 패배 시 치료비 패널티가 발생합니다.\n"
-                    f"• **행동:** `공격하기` 외에 스킬 3가지를 쓸 수 있습니다. (스킬을 쓰면 그 턴의 기본 공격을 대신합니다)\n"
-                    f"  - **강타:** 대미지 x{SKILL_SMASH_MULT} (사용 후 {SKILL_SMASH_CD}번째 행동부터 재사용)\n"
-                    f"  - **전투 함성:** 이후 {SKILL_RALLY_TURNS}번의 행동 동안 공격력 +{int(SKILL_RALLY_BONUS * 100)}% (재사용 {SKILL_RALLY_CD}행동 뒤)\n"
-                    f"  - **필살 일격:** 대미지 x{SKILL_FINISHER_MULT}, {SKILL_FINISHER_MIN_TURN}턴째부터 전투당 1회\n"
-                    f"  - 스킬이 생긴 만큼 NPC·보스 체력도 늘어나 있어서, 스킬을 잘 써야 기존과 같은 난이도입니다. `/결투`에서도 같은 스킬을 씁니다.\n"
-                    "• **쿨타임:** 없음 (전투가 끝나면 바로 다음 전투를 시작할 수 있습니다)\n"
-                    f"• **히든 이벤트:** 전투 승리 시 낮은 확률로 보스가 서버에 출현합니다! ({boss_chance_text()} / 한 번에 한 마리)",
-        },
-        "보스": {
-            "title": "시스템: /보스 (히든 보스 토벌)",
-            "desc": "전투 후 살기가 감지되었을 때 출현하는 최종 히든 보스전입니다.\n"
-                    f"• **출현 조건:** 일반 `/전투` 승리 시 보스마다 각각 확률로 경보가 발생해야 입장 가능합니다. ({boss_chance_text()})\n"
-                    "• **보스는 누군가 처치할 때까지 서버에 남습니다.** 도전에 실패해도 사라지지 않으며, 도전할 때마다 보스 체력은 가득 찬 상태로 시작합니다. 보스전은 한 번에 한 명만 도전할 수 있습니다.\n"
-                    f"• **보상:** 격퇴 성공 시 막대한 자금과 명예, 제작 재료를 획득!\n{boss_reward_text()}\n"
-                    "• **강화 보스:** 보스마다 0.3% 확률로 훨씬 강한 강화판이 출현합니다. 체력·공격력·방어력이 매우 높고 격노하지만, "
-                    "자금·명예·제작 재료가 크게 늘고 능력치가 오르는 전용 전리품과 칭호·업적을 얻습니다.\n"
-                    "• **권장:** 명예 약 5,000pt + 수상한 주사기 / 슈퍼 울트라 주먹",
-        },
-        "도박": {
-            "title": "시스템: /도박 [슬롯/동전/블랙잭/규칙]",
-            "desc": "보유 자금을 걸고 한판 승부를 벌입니다.\n"
-                    "• **슬롯:** 3개 일치 시 고배당, 잭팟(7⃣7⃣7⃣) 시 100배 지급\n"
-                    "• **동전:** 48% 확률로 베팅금의 2배 획득\n"
-                    "• **블랙잭:** 딜러와 21에 가까운 수로 겨루는 카드 게임 (블랙잭 2.5배)",
-        },
-        "칭호": {
-            "title": "시스템: /칭호",
-            "desc": "조건을 달성하여 업적 칭호를 획득하고 프로필에 장착합니다.\n"
-                    "• **효과:** `/프로필` 명령어 실행 시 내 아날로그 증명서에 장착된 칭호가 예쁘게 각인됩니다.",
-        },
-        "일퀘": {
-            "title": "시스템: /일퀘",
-            "desc": "매일 주어지는 일일 의뢰 4개를 모두 완료하면 **출석 1스택**이 쌓입니다.\n"
-                    + "".join(f"• {q['name']} {q['target']}회 ({q['hint']})\n" for q in DAILY_QUESTS)
-                    + "• **쿨타임:** 4개를 모두 완료한 시각부터 24시간 뒤에 새 의뢰가 열립니다.\n"
-                    f"• **보상:** 출석 {ATTENDANCE_TITLE_STACKS}스택 달성 시 {TITLES['attendance_month']['name']} 칭호",
-        },
-        "주간": {
-            "title": "시스템: /주간",
-            "desc": "매주 월요일 00:00(한국 시간)에 초기화되는 주간 의뢰입니다. 이번 주에 한 활동만 집계되며, 완료한 의뢰는 `/주간` 의 버튼으로 보상을 받습니다.\n"
-                    "**마피아**\n" + "".join(f"• {q['name']} {q['target']}회 → ${q['money']:,}" + (f" / 명예 +{q['honor']}" if q['honor'] else "") + "\n" for q in WEEKLY_QUESTS["mafia"])
-                    + "**경찰**\n" + "".join(f"• {q['name']} {q['target']}회 → ${q['money']:,}" + (f" / 명예 +{q['honor']}" if q['honor'] else "") + "\n" for q in WEEKLY_QUESTS["police"])
-                    + f"• **전부 완료 보너스:** ${WEEKLY_ALL_CLEAR_BONUS['money']:,} / 명예 +{WEEKLY_ALL_CLEAR_BONUS['honor']}\n"
-                    f"• **칭호:** 모든 의뢰를 완료한 주가 {WEEKLY_TITLE_WEEKS}주가 되면 {TITLES['weekly_master']['name']}",
-        },
-        "성향": {
-            "title": "시스템: 성향(선/악) · 전직 조건 · 부패 경찰",
-            "desc": f"시민은 활동에 따라 성향 점수가 쌓입니다. (선 {KARMA_GOOD_MIN}점 이상 / 악 {KARMA_EVIL_MAX}점 이하 / 그 사이는 중립, `/프로필` 에서 확인)\n"
-                    f"• **선한 활동:** `/아르바이트`(+{PARTTIME_KARMA}) `/봉사`(+{SERVICE_KARMA}) `/기부`(${DONATE_UNIT:,}당 +1)\n"
-                    f"• **악한 활동:** `/소매치기`(성공 {PICKPOCKET_KARMA_OK}, 실패 {PICKPOCKET_KARMA_FAIL} + 수배)\n\n"
-                    + join_requirement_text() + "\n\n"
-                    "**부패 경찰**\n"
-                    f"• `/검거` 로 수배 중이 아닌 시민도 체포(수감 {CORRUPT_ARREST_JAIL_SEC // 60}분, 벌금 갈취), `/갈취` 로 시민의 돈을 뜯어낼 수 있습니다.\n"
-                    f"• 들키면 민원이 접수되어 수배되고, 정식 경찰이 검거하면 추가 명예(+{CORRUPT_ARREST_BONUS_HONOR})를 받습니다.\n"
-                    "• 프로필에 '부패 경찰'로 표시됩니다.",
-        },
-        "설정": {
-            "title": "시스템: /설정",
-            "desc": "임무 실패 방지권 자동 사용 여부, 이벤트 긴급 알림 등 내 플레이 환경을 직접 커스텀할 수 있는 설정 창입니다.",
-        },
-        "이동": {
-            "title": "시스템: /이동 [지역명]",
-            "desc": "레벤하임(수도), 던베르크(공업), 블랙워드(빈민가), 에르느코항(항구), 로젠펠트(유흥가) 등 5대 거점으로 이동합니다.\n"
-                    "• 거점마다 암시장에서 판매하는 아이템 종류가 달라집니다.",
-        },
-        "아르바이트": {
-            "title": "시스템: /아르바이트",
-            "desc": "시민/공용 전용 안전 자금 수급처입니다. 위험 부담 없이 정직한 노동으로 소량의 돈을 획득합니다.",
-        },
-        "송금": {
-            "title": "명령어: /송금 [대상] [금액]",
-            "desc": "보유 자금을 다른 조직원에게 안전하게 이체합니다. (자기 자신 송금 불가)",
-        },
-        "검거": {
-            "title": "명령어: /검거 [대상] (경찰 전용)",
-            "desc": "지명수배 중인 마피아를 현장에서 체포하여 감옥에 5분간 수감하고 포상금을 획득합니다. 체포 시 대상 조직원의 아이템 중 랜덤 1~2종(각 1개)을 압류해 내 인벤토리로 가져옵니다. (재료와 네임드 전리품 등 거래 불가 아이템은 제외)",
-        },
-        "밀수": {
-            "title": "명령어: /밀수 [경찰] [뇌물] (조직원 전용)",
-            "desc": f"경찰에게 뇌물(${SMUGGLE_MIN_BRIBE:,}~${SMUGGLE_MAX_BRIBE:,})을 제안합니다. 경찰이 **수락**하면 뇌물이 경찰에게 넘어가고 {SMUGGLE_IMMUNITY_SEC // 60}분간 그 경찰은 나를 `/검거`할 수 없습니다. "
-                    f"**거절**하면 {SMUGGLE_REJECT_WANTED_SEC}초 지명수배 + 벌금 ${SMUGGLE_REJECT_FINE:,} + 명예 -{SMUGGLE_REJECT_HONOR_LOSS}pt 패널티를 받습니다. 쿨타임 {SMUGGLE_COOLDOWN_SEC // 60}분.",
-        },
-        "조직": {
-            "title": "명령어: /조직 [생성·초대·정보·기부·탈퇴·추방·위임·해산·목록]",
-            "desc": f"마피아 조직원끼리 **조직(클럽)** 을 만들어 단체 활동을 합니다.\n"
-                    f"• **/조직 생성:** 명예 {FAMILY_CREATE_MIN_HONOR}pt 이상 + ${FAMILY_CREATE_COST:,} 필요, 최대 {FAMILY_MAX_MEMBERS}명\n"
-                    "• **/조직 초대:** 조직장이 조직원을 초대 (상대가 수락해야 가입)\n"
-                    "• **/조직 기부:** 금고에 자금 기부 → 레이드 작전비로 사용\n"
-                    "• **/조직 목록:** 레이드 점수 랭킹 TOP 10",
-        },
-        "레이드": {
-            "title": "명령어: /레이드 [시작·정보]",
-            "desc": "조직원이 함께 레이드 보스를 잡는 협동 콘텐츠입니다. `/레이드 정보` 에서 보스별 조건·보상과 전투 방법을 볼 수 있습니다.\n"
-                    "공격 / 응급처치 / 전투 함성 3가지 버튼으로 진행하며, 보상은 참여도(딜량)에 따라 나뉩니다.",
-        },
-        "경찰상점": {
-            "title": "명령어: /경찰상점 (경찰 전용)",
-            "desc": "치안국 전용 보급품을 구매합니다. 보유만 해도 효과가 적용됩니다.\n"
-                    "• **치안국 강화 방탄복:** 방어력 +35\n"
-                    "• **기동타격대 무전기:** `/검거` 포상금 +20% / `/작전` 성공률 +5%\n"
-                    "• **특급 수사관 황금 배지:** 방어력 +50 / `/검거`·`/순찰`·`/심문`·`/작전` 명예 실적 +20%\n"
-                    "• **전술 방탄 헬멧:** 방어력 +25 / 체력 +1,500\n"
-                    "• **치안국 제식 돌격소총:** 공격력 +200\n"
-                    "• **특수작전 중장갑 전투복:** 방어력 +90 / 체력 +3,000\n"
-                    "• **광역 수사망 단말기:** `/구역 탈환` 포상금 +25% / 비용 50% 할인\n"
-                    "• **대테러 저격 소총:** 공격력 +350\n"
-                    "• **치안총감 지휘 휘장:** 방어력 +60 / 체력 +2,000 / 명예 실적 +15%\n"
-                    "능력치는 `/능력치`에서 확인할 수 있습니다.",
-        },
-        "무기상점": {
-            "title": "명령어: /무기상점",
-            "desc": "전투력을 대폭 높여주는 특수 무기(슈퍼 울트라 주먹, 주사기 등)를 구매합니다.",
-        },
-        "프로필": {
-            "title": "명령어: /프로필 [유저]",
-            "desc": "본인 또는 타 유저의 직급, 명예, 자금, 거점 상태가 담긴 아날로그 종이 증명서 이미지를 생성합니다.",
-        }
-    }
+# 드랍 표: {처치한 대상 이름: [(재료, 확률, (최소, 최대)), ...]}   — 승리했을 때만 지급
+MATERIAL_DROPS = {
+    # /전투
+    "골목길 깡패":      [(M_SCRAP, 0.70, (1, 2))],
+    "조직의 배신자":    [(M_SCRAP, 1.00, (1, 3)), (M_STEEL, 0.25, (1, 1))],
+    "암시장 악덕 거상": [(M_STEEL, 0.80, (1, 2)), (M_SCRAP, 0.50, (1, 3))],
+    "지명수배자 보스":  [(M_STEEL, 1.00, (1, 3)), (M_ALLOY, 0.25, (1, 1))],
+    "칼렌데 암살자":    [(M_ALLOY, 0.70, (1, 2)), (M_STEEL, 0.50, (1, 2))],
+    # /네임드
+    "[네임드] 백정 마르코":        [(M_MARCO, 1.00, (1, 2)), (M_STEEL, 1.00, (1, 3))],
+    "[네임드] 독사 비앙카":        [(M_BIANCA, 1.00, (1, 2)), (M_STEEL, 1.00, (1, 3)), (M_ALLOY, 0.30, (1, 1))],
+    "[네임드] 철의 장군 보로닌":   [(M_BORONIN, 1.00, (1, 2)), (M_ALLOY, 1.00, (1, 2))],
+    "[네임드] 붉은 달의 처형자":   [(M_EXEC, 1.00, (1, 2)), (M_ALLOY, 1.00, (2, 3))],
+    # /보스
+    "[히든보스] 어둠의 지배자":    [(M_DARK, 1.00, (2, 3)), (M_ALLOY, 1.00, (2, 4))],
+    "[테러보스] 에칼 데 페스토":   [(M_EDEN, 1.00, (2, 3)), (M_ALLOY, 1.00, (3, 4))],
+    "[심판보스] 침묵의 심판자":    [(M_EDEN, 1.00, (2, 3)), (M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (3, 5))],
+    "[최강보스] 태초의 파괴자":    [(M_ORIGIN, 1.00, (2, 3)), (M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (3, 5))],
+    # 강화 보스: 일반 보스보다 재료를 훨씬 많이, 특수 합금은 확정으로 줍니다
+    "[강화보스] 심연을 삼킨 어둠의 지배자":      [(M_DARK, 1.00, (5, 8)), (M_ALLOY, 1.00, (6, 10))],
+    "[강화보스] 대재앙의 화신 에칼 데 페스토":    [(M_EDEN, 1.00, (5, 8)), (M_ALLOY, 1.00, (7, 11))],
+    "[강화보스] 모든 소리를 삼킨 침묵의 심판자":  [(M_EDEN, 1.00, (5, 8)), (M_DARK, 1.00, (3, 5)), (M_ALLOY, 1.00, (8, 11))],
+    "[강화보스] 종말을 선고하는 태초의 파괴자":   [(M_ORIGIN, 1.00, (5, 8)), (M_DARK, 1.00, (3, 5)), (M_ALLOY, 1.00, (8, 12))],
+    # /레이드 (RAID_TIERS 의 name)
+    "하수구의 쥐왕":      [(M_RAT, 1.00, (1, 3)), (M_SCRAP, 1.00, (3, 5))],
+    "부두 항만의 폭군":   [(M_BULL, 1.00, (1, 3)), (M_STEEL, 1.00, (2, 4))],
+    "칼렌데 지하 황제":   [(M_KING, 1.00, (1, 3)), (M_ALLOY, 1.00, (2, 3))],
+}
+ACH_BY_ID["a_craft_all"]["goal"] = _CRAFT_ALL_GOAL   # 업적 '완전한 장인' 목표를 실제 레시피 수에 맞춤
+CRAFT_BY_ID = {r["id"]: r for r in CRAFT_RECIPES}
+CRAFT_BY_ITEM = {CRAFT_PREFIX + r["name"]: r for r in CRAFT_RECIPES}
+CRAFT_SLOT_LABEL = {"weapon": "무기", "armor": "방어구"}
 
-    # 2. 아이템 정보 사전
-    item_infos = {
-        "슈퍼 울트라 주먹": {
-            "title": "아이템: 슈퍼 울트라 주먹",
-            "desc": "• **분류:** 무기 (최상급)\n• **효과:** 공격력 +500, 최대 체력 +2,000\n• **설명:** 패밀리 최고의 파괴력을 자랑하는 전설의 주먹입니다.",
-        },
-        "수상한 주사기": {
-            "title": "아이템: 수상한 주사기",
-            "desc": "• **분류:** 무기 (특수)\n• **효과:** 공격력 +300, 체력 +1,000\n• **설명:** 신체 능력을 극단적으로 끌어올리는 위험한 약물입니다.",
-        },
-        "임무 실패 방지권": {
-            "title": "아이템: 임무 실패 방지권",
-            "desc": "• **분류:** 방어구/유틸리티\n• **효과:** 방어력 +20, 임무 실패 시 수배 자동 방어\n• **설명:** 위기 상황에서 감옥행을 모면하게 해주는 티켓입니다.",
-        },
-        "시간 정지 회중시계": {
-            "title": "아이템: 시간 정지 회중시계",
-            "desc": "• **분류:** 유틸리티\n• **효과:** 임무 쿨타임 완전 제거 (영구)\n• **설명:** 멈춘 시간 속에서 쉬지 않고 작전을 이어갈 수 있게 해주는 신비한 회중시계입니다.",
-        },
-    }
-
-    # 3. 세계관 정보 사전
-    world_infos = {
-        "유토피아 오브 에덴": {
-            "title": "세계관: Utopia Of Eden (유토피아 오브 에덴)",
-            "desc": (
-                "**“모두가 평등한 세상. 그곳에 불평등한 자는 존재할 수 없다.”**\n\n"
-                "**기본 정보**\n"
-                "• **조직 분류:** 테러조직 | **활동 국가:** 칼렌데 공화국\n"
-                "• **창립자:** 에칼 데 페스토 | **주요 사상:** 공산주의\n"
-                "• **주요 활동:** 선전물 제작 및 배포, 극단적 테러 활동\n"
-                "• **대립 관계:** 칼렌데 중앙치안국 및 기타 세력\n\n"
-                "**주요 사건: 예노호 테러 사건**\n"
-                "데이브 니스코프가 여객선 예노호를 통제 불능으로 만들고 침몰시킨 참사 (사망 120명, 실종 1명)."
-            )
-        }
-    }
-
-    # 4. 통합 검색 매칭
-    target_info = None
-    combined_dict = {**command_infos, **item_infos, **world_infos}
-
-    if kw in combined_dict:
-        target_info = combined_dict[kw]
-    else:
-        for name, data in combined_dict.items():
-            if kw in name:
-                target_info = data
-                break
-
-    if not target_info:
-        available_keys = list(combined_dict.keys())
-        keys_str = ", ".join([f"`{k}`" for k in available_keys])
-        
-        await interaction.response.send_message(
-            f"**[{kw}]**에 대한 정보를 찾을 수 없습니다.\n\n"
-            f"**검색 가능한 전체 목록:**\n{keys_str}",
-            ephemeral=True
-        )
-        return
-
-    # 5. 임베드 생성 및 전송
-    embed = discord.Embed(
-        title=target_info["title"],
-        description=target_info["desc"],
-        color=discord.Color.dark_red()
-    )
-    embed.set_footer(text="마피아 RPG 패밀리 GM 통합 정보 시스템")
-
-    if interaction.user.avatar:
-        embed.set_thumbnail(url=interaction.user.avatar.url)
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+_inv_lock = _threading.Lock()   # 재료 지급·제작처럼 인벤토리를 읽고 다시 쓰는 작업이 서로 덮어쓰지 않도록
 
 
-# ==========================================================================
-# [합친 모듈] stats.py
-#   /능력치
-# ==========================================================================
-# ==========================================================================
-# [/능력치]  전투 능력치 확인 (체력/공격력/방어력 + 구성 내역)
-#   - 실제 전투에 쓰이는 compute_combat_stats 결과를 그대로 보여주고, 어디서 얼마가 붙었는지 풀어서 설명합니다.
-# ==========================================================================
-def combat_stats_breakdown(honor: int, inventory: dict) -> dict:
-    inventory = inventory or {}
-    # 상점 무기 (먼저 보유한 하나)
-    shop_name, shop = None, (0, 0)
-    for name, a, h in WEAPON_TIERS:
-        if name in inventory:
-            shop_name, shop = name, (a, h)
-            break
-    craft_w, craft_a = crafted_gear_best(inventory)
-
-    if craft_w and (craft_w["atk"], craft_w["hp"]) > shop:
-        weapon = {"name": craft_w["name"], "src": "제작", "atk": craft_w["atk"], "hp": craft_w["hp"]}
-    elif shop_name:
-        weapon = {"name": shop_name, "src": "상점", "atk": shop[0], "hp": shop[1]}
-    else:
-        weapon = None
-    armor = {"name": craft_a["name"], "def": craft_a["def"], "hp": craft_a["hp"]} if craft_a else None
-
-    # 보유했지만 적용되지 않는 장비
-    unused = []
-    for name, a, h in WEAPON_TIERS:
-        if name in inventory and not (weapon and weapon["src"] == "상점" and weapon["name"] == name):
-            unused.append(f"{name} (무기)")
-    for r in CRAFT_RECIPES:
-        if (CRAFT_PREFIX + r["name"]) not in inventory:
+def crafted_gear_best(inventory: dict):
+    """보유한 제작 장비 중 가장 강한 (무기, 방어구) 레시피. 없으면 None."""
+    best_w, best_a = None, None
+    for key, r in CRAFT_BY_ITEM.items():
+        if key not in (inventory or {}):
             continue
-        if r["slot"] == "weapon" and not (weapon and weapon["src"] == "제작" and weapon["name"] == r["name"]):
-            unused.append(f"{r['name']} (무기)")
-        if r["slot"] == "armor" and not (armor and armor["name"] == r["name"]):
-            unused.append(f"{r['name']} (방어구)")
-
-    return {
-        "base_hp": 1000 + honor * 5,
-        "base_atk": 100 + int(honor * 0.5),
-        "base_def": 10,
-        "weapon": weapon,
-        "armor": armor,
-        "ticket": "임무 실패 방지권" in inventory,
-        "police": [(it["name"], it.get("atk_bonus", 0), it.get("hp_bonus", 0), it.get("def_bonus", 0))
-                   for it in POLICE_SHOP_ITEMS if it["name"] in inventory and (it.get("atk_bonus") or it.get("hp_bonus") or it.get("def_bonus"))],
-        "elite": [(n, a, h, d) for n, (a, h, d) in ELITE_TROPHY_STATS.items() if n in inventory],
-        "unused": unused,
-        "total": compute_combat_stats(honor, inventory),   # 실제 전투에서 쓰는 값
-    }
+        if r["slot"] == "weapon":
+            if best_w is None or (r["atk"], r["hp"]) > (best_w["atk"], best_w["hp"]):
+                best_w = r
+        else:
+            if best_a is None or (r["def"], r["hp"]) > (best_a["def"], best_a["hp"]):
+                best_a = r
+    return best_w, best_a
 
 
-def build_stats_embed(target: discord.abc.User, data: dict) -> discord.Embed:
-    honor = int(data.get("honor", 0) or 0)
-    money = int(data.get("money", 0) or 0)
+def _mat_short(name: str) -> str:
+    return name[len(MATERIAL_PREFIX):] if name.startswith(MATERIAL_PREFIX) else name
+
+
+def roll_material_drops(source_name: str) -> dict:
+    """처치한 대상 이름으로 드랍 판정 → {재료: 개수}"""
+    drops = {}
+    for mat, chance, (lo, hi) in MATERIAL_DROPS.get(source_name, []):
+        if random.random() < chance:
+            drops[mat] = drops.get(mat, 0) + random.randint(lo, hi)
+    return drops
+
+
+def add_materials(inventory: dict, drops: dict) -> dict:
+    for mat, n in drops.items():
+        inventory[mat] = inventory.get(mat, 0) + n
+    return inventory
+
+
+def format_material_drops(drops: dict) -> str:
+    return ", ".join(f"{_mat_short(k)} x{v}" for k, v in drops.items())
+
+
+def grant_materials_sync(user_id: int, drops: dict):
+    """(레이드 정산 등) 인벤토리에 재료를 더해 DB 에 저장"""
+    if not drops:
+        return
+    _require_db()
+    with _inv_lock:
+        data = get_user_data(user_id)
+        inv = dict(data.get("inventory") or {})
+        add_materials(inv, drops)
+        res = supabase.table("user_data").update({"inventory": inv}).eq("user_id", str(user_id)).execute()
+        _check_updated(res, "grant_materials")
+
+
+def craft_missing(inv: dict, money: int, r: dict) -> list:
+    """부족한 항목 설명 목록 (비어 있으면 제작 가능)"""
+    lacks = [f"{_mat_short(m)} {need - inv.get(m, 0)}개" for m, need in r["mats"].items() if inv.get(m, 0) < need]
+    if money < r["money"]:
+        lacks.append(f"제작비 ${r['money'] - money:,}")
+    return lacks
+
+
+def craft_sync(user_id: int, recipe_id: str):
+    """제작 실행. 반환: (성공 여부, 메시지, 남은 자금)"""
+    r = CRAFT_BY_ID.get(recipe_id)
+    if not r:
+        return False, "존재하지 않는 제작법입니다.", None
+    _require_db()
+    with _inv_lock:
+        data = get_user_data(user_id)
+        inv = dict(data.get("inventory") or {})
+        money = int(data.get("money") or 0)
+        item = CRAFT_PREFIX + r["name"]
+        if item in inv:
+            return False, "이미 보유한 장비입니다.", money
+        lacks = craft_missing(inv, money, r)
+        if lacks:
+            return False, "부족한 항목: " + ", ".join(lacks), money
+        for m, need in r["mats"].items():
+            inv[m] -= need
+            if inv[m] <= 0:
+                del inv[m]
+        inv[item] = 1
+        money -= r["money"]
+        res = supabase.table("user_data").update({"money": money, "inventory": inv}).eq("user_id", str(user_id)).execute()
+        _check_updated(res, "craft")
+        return True, "", money
+
+
+def craft_stat_text(r: dict) -> str:
+    parts = []
+    if r["atk"]: parts.append(f"공격력 +{r['atk']:,}")
+    if r["def"]: parts.append(f"방어력 +{r['def']:,}")
+    if r["hp"]:  parts.append(f"체력 +{r['hp']:,}")
+    return " / ".join(parts)
+
+
+# ---------------------------------------------------------------- UI
+def craft_main_embed(user: discord.Member, data: dict, note: str = "") -> discord.Embed:
     inv = data.get("inventory") or {}
-    b = combat_stats_breakdown(honor, inv)
-    t = b["total"]
+    money = int(data.get("money") or 0)
+    embed = discord.Embed(title="[제작소] 장비 제작", color=discord.Color.dark_orange())
+    desc = ("전투에서 모은 **재료**로 무기와 방어구를 만들 수 있습니다. 아래 목록에서 제작할 장비를 고르세요.\n"
+            "무기·방어구는 각각 **가장 강한 1개만** 전투 능력치에 적용됩니다. (상점 무기와도 비교해 더 강한 쪽 적용)")
+    if note:
+        desc = f"{note}\n\n{desc}"
+    embed.description = desc
 
-    embed = discord.Embed(title=f"[{target.display_name} 님의 전투 능력치]", color=discord.Color.dark_teal())
-    embed.description = (f"**체력** `{t['hp']:,}`\n**공격력** `{t['atk']:,}`\n**방어력** `{t['def']:,}`\n\n"
-                         f"명예 `{honor:,} pt` · 보유 자금 `${money:,}`")
+    mats = [(m, inv.get(m, 0)) for m in MATERIAL_SOURCES]
+    lines = [f"• **{_mat_short(m)}** x{n} — *{MATERIAL_SOURCES[m]}*" for m, n in mats]
+    embed.add_field(name="재료 보유 현황 / 획득처", value="\n".join(lines), inline=False)
 
-    lines = [f"• **기본** (명예 반영): 체력 +{b['base_hp']:,} / 공격력 +{b['base_atk']:,} / 방어력 +{b['base_def']}"]
-    w = b["weapon"]
-    if w:
-        parts = [f"공격력 +{w['atk']:,}"] + ([f"체력 +{w['hp']:,}"] if w["hp"] else [])
-        lines.append(f"• **무기** [{w['src']}] {w['name']}: " + " / ".join(parts))
-    else:
-        lines.append("• **무기**: 없음")
-    a = b["armor"]
-    if a:
-        lines.append(f"• **방어구** [제작] {a['name']}: 방어력 +{a['def']:,} / 체력 +{a['hp']:,}")
-    else:
-        lines.append("• **방어구**: 없음 (`/제작`에서 만들 수 있습니다)")
-    if b["ticket"]:
-        lines.append("• **임무 실패 방지권**: 방어력 +20")
-    for ename, eatk, ehp, edef in b["elite"]:
-        lines.append(f"• **강화 보스 전리품** {ename.split('] ', 1)[-1]}: 공격력 +{eatk:,} / 방어력 +{edef:,} / 체력 +{ehp:,}")
-    for pname, patk, php, pdef in b["police"]:
-        parts = ([f"공격력 +{patk:,}"] if patk else []) + ([f"방어력 +{pdef:,}"] if pdef else []) + ([f"체력 +{php:,}"] if php else [])
-        lines.append(f"• **치안국 보급품** {pname}: " + " / ".join(parts))
-    if POLICE_RADIO_NAME in inv:
-        lines.append(f"• **{POLICE_RADIO_NAME}**: /검거 포상금 +{round(POLICE_RADIO_ARREST_BONUS * 100)}% · /작전 성공률 +{POLICE_RADIO_OP_BONUS}%")
-    if POLICE_BADGE_NAME in inv:
-        lines.append(f"• **{POLICE_BADGE_NAME}**: 검거·순찰·심문·작전 명예 실적 +{round(POLICE_BADGE_HONOR_BONUS * 100)}%")
-    if POLICE_INSIGNIA_NAME in inv:
-        lines.append(f"• **{POLICE_INSIGNIA_NAME}**: 명예 실적 +{round(POLICE_INSIGNIA_HONOR_BONUS * 100)}%")
-    if POLICE_TERMINAL_NAME in inv:
-        lines.append(f"• **{POLICE_TERMINAL_NAME}**: 구역 탈환 포상금 +{round(POLICE_TERMINAL_PRIZE_BONUS * 100)}% / 탈환 비용 {round(POLICE_TERMINAL_COST_DISCOUNT * 100)}% 할인")
-    embed.add_field(name="능력치 구성", value="\n".join(lines), inline=False)
-
-    if b["unused"]:
-        embed.add_field(name="보유 중이지만 적용되지 않는 장비",
-                        value="\n".join(f"• {x}" for x in b["unused"])[:1000] +
-                              "\n*무기·방어구는 각각 가장 강한 1개만 적용됩니다.*", inline=False)
-    embed.set_footer(text="/전투 · /네임드 · /보스 · /결투 · 레이드 · 점령전에 모두 이 능력치가 쓰입니다.")
-    if target.avatar:
-        embed.set_thumbnail(url=target.avatar.url)
+    bw, ba = crafted_gear_best(inv)
+    applied = (f"무기: **{bw['name']}** ({craft_stat_text(bw)})" if bw else "무기: 없음") + "\n" + \
+              (f"방어구: **{ba['name']}** ({craft_stat_text(ba)})" if ba else "방어구: 없음")
+    embed.add_field(name="현재 적용 중인 제작 장비", value=applied, inline=False)
+    embed.set_footer(text=f"보유 자금 ${money:,}")
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
     return embed
 
 
-@bot.tree.command(name="능력치", description="[공용] 본인 또는 다른 유저의 전투 능력치(체력·공격력·방어력)와 구성을 확인합니다.")
-@app_commands.describe(member="조회할 유저 (비우면 본인)")
-async def stats_command(interaction: discord.Interaction, member: discord.Member = None):
+def craft_detail_embed(user: discord.Member, data: dict, r: dict, note: str = "") -> discord.Embed:
+    inv = data.get("inventory") or {}
+    money = int(data.get("money") or 0)
+    owned = (CRAFT_PREFIX + r["name"]) in inv
+    embed = discord.Embed(title=f"[제작] {r['name']}", color=discord.Color.dark_orange())
+    desc = f"*{r['desc']}*\n\n**종류:** {CRAFT_SLOT_LABEL[r['slot']]}\n**효과:** {craft_stat_text(r)}"
+    if note:
+        desc = f"{note}\n\n{desc}"
+    if owned:
+        desc += "\n\n**이미 보유 중인 장비입니다.**"
+    embed.description = desc
+    req = []
+    for m, need in r["mats"].items():
+        have = inv.get(m, 0)
+        req.append(f"{'[충족]' if have >= need else '[부족]'} {_mat_short(m)} {have}/{need}")
+    req.append(f"{'[충족]' if money >= r['money'] else '[부족]'} 제작비 ${money:,} / ${r['money']:,}")
+    embed.add_field(name="필요 재료", value="\n".join(req), inline=False)
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    return embed
+
+
+class CraftView(GuardedView):
+    def __init__(self, owner: discord.Member, data: dict, selected: str = None):
+        super().__init__(timeout=180)
+        self.owner = owner
+        self.selected = selected
+        self.message = None
+        self._build(data)
+
+    def _build(self, data: dict):
+        self.clear_items()
+        inv = data.get("inventory") or {}
+        money = int(data.get("money") or 0)
+        options = []
+        for r in CRAFT_RECIPES:
+            if (CRAFT_PREFIX + r["name"]) in inv:
+                tag = "[보유]"
+            elif not craft_missing(inv, money, r):
+                tag = "[제작 가능]"
+            else:
+                tag = "[재료 부족]"
+            desc = f"{tag} {CRAFT_SLOT_LABEL[r['slot']]} | {craft_stat_text(r)} | ${r['money']:,}"
+            options.append(discord.SelectOption(label=r["name"], value=r["id"], description=desc[:100],
+                                                default=(r["id"] == self.selected)))
+        select = discord.ui.Select(placeholder="제작할 장비를 선택하세요...", options=options, min_values=1, max_values=1)
+        select.callback = self._on_select
+        self.add_item(select)
+
+        sel = CRAFT_BY_ID.get(self.selected)
+        can = bool(sel) and (CRAFT_PREFIX + sel["name"]) not in inv and not craft_missing(inv, money, sel)
+        button = discord.ui.Button(label="제작하기", style=discord.ButtonStyle.success, disabled=not can)
+        button.callback = self._on_craft
+        self.add_item(button)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner.id:
+            await interaction.response.send_message("본인의 제작 창만 조작할 수 있습니다.", ephemeral=True)
+            return False
+        return True
+
+    async def _on_select(self, interaction: discord.Interaction):
+        self.selected = interaction.data["values"][0]
+        data = await asyncio.to_thread(get_user_data, self.owner.id)
+        self._build(data)
+        await interaction.response.edit_message(
+            embed=craft_detail_embed(self.owner, data, CRAFT_BY_ID[self.selected]), view=self)
+
+    async def _on_craft(self, interaction: discord.Interaction):
+        rid = self.selected
+        if rid not in CRAFT_BY_ID:
+            await interaction.response.send_message("먼저 제작할 장비를 선택해 주세요.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        try:
+            ok, msg, _ = await asyncio.to_thread(craft_sync, self.owner.id, rid)
+        except Exception as e:
+            print(f"DB Error (craft): {e}")
+            await interaction.followup.send("데이터베이스 오류로 제작에 실패했습니다. 재료와 자금은 차감되지 않았습니다.", ephemeral=True)
+            return
+        data = await asyncio.to_thread(get_user_data, self.owner.id)
+        r = CRAFT_BY_ID[rid]
+        self._build(data)
+        note = f"**제작 완료!** {r['name']} 을(를) 손에 넣었습니다." if ok else f"**제작 실패** — {msg}"
+        embed = craft_detail_embed(self.owner, data, r, note)
+        embed.color = discord.Color.green() if ok else discord.Color.red()
+        await interaction.edit_original_response(embed=embed, view=self)
+
+    async def on_timeout(self):
+        if self.message is not None:
+            try:
+                await self.message.edit(view=None)
+            except discord.HTTPException:
+                pass
+
+
+@bot.tree.command(name="제작", description="[조직원/경찰] 전투·네임드·보스·레이드에서 얻은 재료로 무기와 방어구를 제작합니다.")
+async def craft_command(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
 
-    target = member or interaction.user
-    if target.bot:
-        await interaction.response.send_message("봇의 능력치는 확인할 수 없습니다.", ephemeral=True)
-        return
     await interaction.response.defer()
-    data = await asyncio.to_thread(get_user_data, target.id)
-    await interaction.followup.send(embed=build_stats_embed(target, data))
+    user = interaction.user
+    data = await asyncio.to_thread(get_user_data, user.id)
+    view = CraftView(user, data)
+    view.message = await interaction.followup.send(embed=craft_main_embed(user, data), view=view)
 
 
 # ==========================================================================
-# [합친 모듈] help.py
-#   /도움말
+# [합친 모듈] profile.py
+#   /프로필 (이미지 증명서)
 # ==========================================================================
-# ==========================================================================
-# [/도움말]  전체 명령어 안내
-#   • 봇에 등록된 슬래시 명령어(bot.tree)를 실시간으로 읽어서 보여줍니다.
-#     → 새 명령어를 추가해도 따로 고칠 필요 없이 자동으로 목록에 들어갑니다. (설명은 각 명령어의 description)
-#   • 아래 HELP_CATEGORIES 에 이름을 적지 않은 명령어는 '기타' 분류에 모입니다.
-# ==========================================================================
-HELP_CATEGORIES = [
-    # (키, 표시 이름, 분류 설명, [명령어 이름 — /조직 처럼 그룹 명령어는 첫 단어만])
-    ("start",   "시작 · 정보",          "가입과 내 정보 확인, 설정, 랭킹 등 기본이 되는 명령어입니다.",
-     ["도움말", "가입", "탈퇴", "프로필", "정보", "설정", "일퀘", "주간", "칭호", "업적", "랭킹"]),
-    ("economy", "이동 · 상점 · 경제",   "거점 이동, 장비 구매, 자금 이체, 제작 등 돈과 장비에 관한 명령어입니다.",
-     ["이동", "암시장", "무기상점", "백화점", "인벤토리", "송금", "제작", "경매", "사업", "주식"]),
-    ("citizen", "시민 활동",         "가입 전 시민의 활동입니다. 좋은 활동은 선, 나쁜 활동은 악 성향이 쌓이고 전직 조건에 영향을 줍니다.",
-     ["아르바이트", "봉사", "기부", "소매치기"]),
-    ("mafia",   "마피아 활동",          "비밀 임무 수행, 경찰 매수, 탈옥 등 조직원의 범죄 활동입니다.",
-     ["임무", "밀수", "탈옥"]),
-    ("battle",  "전투 · 능력치",        "NPC·네임드·보스 토벌과 결투, 전투 능력치 확인입니다.",
-     ["능력치", "전투", "네임드", "보스", "결투"]),
-    ("casino",  "카지노",               "자금을 걸고 즐기는 도박입니다. (`/도박 규칙` 에서 배당표 확인)",
-     ["도박"]),
-    ("police",  "경찰",                 "경찰 소속 전용 명령어입니다.",
-     ["작전", "검거", "순찰", "심문", "월급", "경찰상점", "수사팀", "갈취"]),
-    ("family",  "조직 · 레이드 · 구역", "조직(패밀리)을 만들어 함께하는 협동·점령 콘텐츠입니다.",
-     ["조직", "레이드", "구역"]),
-    ("admin",   "관리자",               "서버 관리자 전용 명령어입니다.",
-     ["추방", "관리"]),
+# === [공용] `/프로필` 명령어 (이미지 증명서 - 아날로그 종이 테마) ===
+# 필요한 파일(봇 파일과 같은 폴더 또는 assets 폴더): paper_background.jpg, font_1.ttf (또는 font_fallback.otf)
+PROFILE_BG_NAMES = ("paper_background.jpg",)
+PROFILE_FONT_NAMES = ("font_1.ttf", "font.ttf", "font_fallback.otf")   # 앞에서부터 시도, 안 되면 다음 폰트
+PROFILE_AREA = (70, 60, 468, 330)      # 배경(543x394) 안쪽 점선 테두리 안에서 글씨를 쓸 영역 (x1, y1, x2, y2)
+PROFILE_SCALE = 2                      # 배경이 작아서 2배로 키워 그림 (글씨가 선명해짐)
+PROFILE_INK = (60, 40, 20)             # 짙은 세피아 잉크색
+PROFILE_MUTED = (125, 98, 66)          # 라벨·하단 문구용 옅은 갈색
+PROFILE_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 프로젝트 루트 (assets 폴더 기준)
+
+def _asset_paths(names):
+    """봇 폴더 → assets 폴더 순서로 실제 존재하는 파일 경로를 하나씩 반환"""
+    for folder in (PROFILE_BASE_DIR, os.path.join(PROFILE_BASE_DIR, "assets")):
+        for name in names:
+            path = os.path.join(folder, name)
+            if os.path.isfile(path):
+                yield path
+
+def _draws_hangul(font, size: int) -> bool:
+    """폰트가 한글을 실제로 그리는지 확인 (한글이 없으면 '가'와 '힣'이 똑같은 빈칸 모양으로 나옴)"""
+    def glyph(ch):
+        img = Image.new("L", (size * 2, size * 2), 0)
+        ImageDraw.Draw(img).text((size // 4, size // 4), ch, fill=255, font=font)
+        return img.tobytes()
+    return glyph("가") != glyph("힣")
+
+@lru_cache(maxsize=1)
+def _profile_font_path():
+    """한글이 실제로 그려지는 첫 번째 폰트 파일 (손상된 파일/한글 없는 폰트는 건너뜀). 처음 한 번만 검사"""
+    for path in _asset_paths(PROFILE_FONT_NAMES):
+        try:
+            if _draws_hangul(ImageFont.truetype(path, 40), 40):
+                return path
+            print(f"한글 글자가 없는 폰트라 건너뜁니다: {path}")
+        except OSError:
+            print(f"폰트를 불러올 수 없어 건너뜁니다 (파일 손상?): {path}")
+    print("사용 가능한 한글 폰트가 없습니다! font_1.ttf 또는 font_fallback.otf 를 봇 폴더에 넣어주세요.")
+    return None
+
+@lru_cache(maxsize=None)
+def _profile_font(size: int):
+    path = _profile_font_path()
+    return ImageFont.truetype(path, size) if path else ImageFont.load_default(size)
+
+def _clean_text(text) -> str:
+    """이미지 폰트로 그릴 수 없는 이모지·기호 제거 (예: '깡패' -> '깡패')"""
+    return "".join(
+        c for c in str(text)
+        if unicodedata.category(c) not in ("So", "Sk", "Cf", "Cs", "Co", "Cn") and c != "\ufe0f"
+    ).strip()
+
+def _fit_text(draw, text: str, font, max_width: int) -> str:
+    """글자가 칸을 넘으면 '…' 로 줄임"""
+    if draw.textlength(text, font=font) <= max_width:
+        return text
+    while text and draw.textlength(text + "…", font=font) > max_width:
+        text = text[:-1]
+    return text + "…"
+
+async def _load_avatar(member: discord.Member, size: int = 190) -> Image.Image:
+    """프로필 사진을 가져와 오래된 증명사진처럼 세피아 톤으로 변환 (실패하면 빈 사진)"""
+    try:
+        data = await member.display_avatar.replace(size=256, static_format="png").read()
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception as e:
+        print(f"Avatar load error: {e}")
+        img = Image.new("RGB", (256, 256), (185, 172, 150))
+    img = img.resize((size, size), Image.Resampling.LANCZOS)
+    return ImageOps.colorize(ImageOps.grayscale(img), black=(35, 22, 10), white=(238, 224, 196))
+
+def make_profile_image(kind: str, rows: list, user_id: int, avatar: Image.Image, stamp_text: str = "승인") -> io.BytesIO:
+    """증명서 이미지를 그려서 PNG 바이트로 반환. kind: police / mafia / citizen"""
+    S = PROFILE_SCALE
+    path = next(_asset_paths(PROFILE_BG_NAMES), None)
+    if path:
+        paper = Image.open(path).convert("RGBA")
+        paper = paper.resize((paper.width * S, paper.height * S), Image.Resampling.LANCZOS)
+    else:
+        print("paper_background.jpg 를 찾을 수 없어 기본 종이색을 사용합니다.")
+        paper = Image.new("RGBA", (543 * S, 394 * S), (234, 228, 205, 255))
+
+    draw = ImageDraw.Draw(paper)
+    x1, y1, x2, y2 = (v * S for v in PROFILE_AREA)
+    cx = (x1 + x2) // 2
+
+    # [1] 제목 + 이중선
+    title = {"police": "치안국 신분증", "mafia": "패밀리 증명서", "citizen": "시민 등록증"}[kind]
+    draw.text((cx, y1 + 8), " ".join(title), fill=PROFILE_INK, font=_profile_font(54), anchor="mt")
+    draw.line((x1 + 30, y1 + 88, x2 - 30, y1 + 88), fill=PROFILE_INK, width=3)
+    draw.line((x1 + 30, y1 + 96, x2 - 30, y1 + 96), fill=PROFILE_INK, width=1)
+    draw.text((x2 - 30, y1 + 108), f"No. {str(user_id)[-6:]}", fill=PROFILE_MUTED, font=_profile_font(24), anchor="ra")
+
+    # [2] 증명사진 (오른쪽)
+    top = y1 + 140
+    photo_x = x2 - 30 - (avatar.width + 12)
+    paper.paste(ImageOps.expand(avatar, border=6, fill=PROFILE_INK), (photo_x, top))
+
+    # [3] 인적 사항 (왼쪽): 라벨 + 값 + 밑줄
+    dense = len(rows) > 6          # 줄이 7개 이상이면 간격과 글씨를 조금 줄여서 하단 문구와 겹치지 않게 함
+    tight = len(rows) > 7          # 8줄 이상(사치품 줄까지 있는 시민)이면 한 단계 더 줄임
+    pitch = 42 if tight else 48 if dense else 58
+    f_label, f_value = _profile_font(22 if tight else 24 if dense else 26), _profile_font(27 if tight else 30 if dense else 34)
+    label_x, value_x = x1 + 30, x1 + 150
+    line_end = photo_x - 30
+    for i, (label, value) in enumerate(rows):
+        y = top + i * pitch
+        draw.text((label_x, y + 6), label, fill=PROFILE_MUTED, font=f_label)
+        draw.text((value_x, y), _fit_text(draw, value, f_value, line_end - value_x), fill=PROFILE_INK, font=f_value)
+        draw.line((label_x, y + pitch - 8, line_end, y + pitch - 8), fill=(170, 145, 110), width=1)
+
+    # [4] 붉은 도장 (사진 아래쪽에 살짝 걸치게)
+    stamp = Image.new("RGBA", (170, 170), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(stamp)
+    red = (170, 40, 40, 210)
+    sd.ellipse((6, 6, 164, 164), outline=red, width=6)
+    sd.ellipse((20, 20, 150, 150), outline=red, width=2)
+    sd.text((85, 85), stamp_text, fill=red, font=_profile_font(52), anchor="mm")
+    stamp = stamp.rotate(-14, resample=Image.Resampling.BICUBIC)
+    paper.alpha_composite(stamp, (photo_x - 20, top + avatar.height + 12 - 50))
+
+    # [5] 하단 발급 문구
+    footer = f"발급처  패밀리 GM 통합 정보국   ·   발급일  {datetime.now():%Y-%m-%d}"
+    draw.text((cx, y2 - 6), footer, fill=PROFILE_MUTED, font=_profile_font(22), anchor="mb")
+
+    buf = io.BytesIO()
+    paper.convert("RGB").save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+def make_achievement_certificate(recipient: str, ach: dict, achieved_at: int, user_id: int) -> io.BytesIO:
+    """업적 증명서 이미지 (종이 배경 + 붉은 도장). /프로필 과 같은 배경·폰트를 씁니다."""
+    S = PROFILE_SCALE
+    path = next(_asset_paths(PROFILE_BG_NAMES), None)
+    if path:
+        paper = Image.open(path).convert("RGBA")
+        paper = paper.resize((paper.width * S, paper.height * S), Image.Resampling.LANCZOS)
+    else:
+        paper = Image.new("RGBA", (543 * S, 394 * S), (234, 228, 205, 255))
+
+    draw = ImageDraw.Draw(paper)
+    x1, y1, x2, y2 = (v * S for v in PROFILE_AREA)
+    cx = (x1 + x2) // 2
+
+    # [1] 제목 + 이중선 + 번호
+    draw.text((cx, y1 + 8), "업 적 증 명 서", fill=PROFILE_INK, font=_profile_font(54), anchor="mt")
+    draw.line((x1 + 30, y1 + 88, x2 - 30, y1 + 88), fill=PROFILE_INK, width=3)
+    draw.line((x1 + 30, y1 + 96, x2 - 30, y1 + 96), fill=PROFILE_INK, width=1)
+    draw.text((x2 - 30, y1 + 106), f"No. {str(user_id)[-6:]}-{ACHIEVEMENTS.index(ach) + 1:02d}",
+              fill=PROFILE_MUTED, font=_profile_font(22), anchor="ra")
+
+    # [2] 수여 문구
+    name = _fit_text(draw, _clean_text(recipient) or "무명", _profile_font(40), 640)
+    draw.text((cx, y1 + 140), f"{name} 님", fill=PROFILE_INK, font=_profile_font(40), anchor="mt")
+    draw.text((cx, y1 + 196), "위 사람은 아래의 업적을 달성하였기에 이 증서를 수여합니다.",
+              fill=PROFILE_MUTED, font=_profile_font(24), anchor="mt")
+
+    # [3] 업적 이름 + 조건
+    draw.text((cx, y1 + 250), f"─  {ach['tier']} 업적  ─", fill=PROFILE_MUTED, font=_profile_font(28), anchor="mt")
+    title = _fit_text(draw, _clean_text(ach["name"]), _profile_font(58), 700)
+    draw.text((cx, y1 + 296), title, fill=PROFILE_INK, font=_profile_font(58), anchor="mt")
+    cond = _fit_text(draw, _clean_text(ach["desc"]), _profile_font(28), 540)
+    draw.text((cx, y1 + 372), cond, fill=PROFILE_MUTED, font=_profile_font(28), anchor="mt")
+
+    # [4] 붉은 도장 (오른쪽 아래)
+    stamp = Image.new("RGBA", (160, 160), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(stamp)
+    red = (170, 40, 40, 215)
+    sd.ellipse((5, 5, 155, 155), outline=red, width=6)
+    sd.ellipse((18, 18, 142, 142), outline=red, width=2)
+    sd.text((80, 68), "달성", fill=red, font=_profile_font(48), anchor="mm")
+    sd.text((80, 112), ach["tier"], fill=red, font=_profile_font(26), anchor="mm")
+    stamp = stamp.resize((128, 128), Image.Resampling.LANCZOS).rotate(-12, resample=Image.Resampling.BICUBIC)
+    paper.alpha_composite(stamp, (x2 - 30 - 132, y2 - 190))   # 이름 글자를 가리지 않도록 조금 작게, 아래쪽에
+
+    # [5] 하단 문구
+    ach_day = datetime.fromtimestamp(achieved_at) if achieved_at else datetime.now()
+    footer = f"달성일  {ach_day:%Y-%m-%d}   ·   발급일  {datetime.now():%Y-%m-%d}   ·   발급처  패밀리 GM 통합 정보국"
+    draw.text((cx, y2 - 6), footer, fill=PROFILE_MUTED, font=_profile_font(20), anchor="mb")
+
+    buf = io.BytesIO()
+    paper.convert("RGB").save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+@bot.tree.command(name="프로필", description="[공용] 본인 또는 다른 유저의 아날로그 증명서를 이미지로 발급합니다.")
+@app_commands.describe(member="조회할 유저 (비우면 본인)")
+async def profile_image_command(interaction: discord.Interaction, member: discord.Member = None):
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+    if not await check_maintenance(interaction): return
+    await interaction.response.defer()   # 이미지 생성 시간이 걸릴 수 있어 먼저 응답 예약
+
+    target = member or interaction.user
+    data = get_user_data(target.id)
+
+    role_names = {r.name for r in target.roles}
+    kind = "police" if "경찰" in role_names else "mafia" if "조직원" in role_names else "citizen"
+    honor = data.get("honor", 0)
+
+    pblob = get_title_blob(data)
+    corrupt = (kind == "police" and pblob["corrupt"])
+    rank_text = "시민" if kind == "citizen" else _clean_text(get_user_rank(honor, is_police=(kind == "police")))
+    if corrupt:
+        rank_text = f"부패 경찰 · {rank_text}"
+    rows = [
+        ("성 명", _clean_text(target.display_name) or _clean_text(target.name) or "무명"),
+        ("직 급", rank_text),
+        ("칭 호", _clean_text(get_equipped_title_name(data))),
+        ("거 점", _clean_text(data.get("location", "레벤하임"))),
+        ("자 금", f"${data.get('money', 0):,}"),
+        ("명 예", f"{honor:,} pt"),
+    ]
+    if kind == "citizen":
+        rows.insert(2, ("성 향", alignment_text(pblob["karma"])))   # 시민일 때만 성향 표시
+    _lux_n, _lux_total = luxury_summary(data.get("inventory") or {})
+    if _lux_n:
+        rows.append(("사치품", f"{_lux_n}점 · ${_lux_total:,}"))   # 백화점에서 산 사치품 (과시용)
+
+    try:
+        avatar = await _load_avatar(target)
+        buf = await asyncio.to_thread(make_profile_image, kind, rows, target.id, avatar, "매수" if corrupt else "승인")
+    except Exception as e:
+        print(f"Profile image error: {e}")
+        await interaction.followup.send("증명서를 발급하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
+        return
+
+    await interaction.followup.send(file=discord.File(buf, filename=f"profile_{target.id}.png"))
+
+@bot.tree.command(name="인벤토리", description="[마피아 GM] 소지한 장비를 확인합니다.")
+async def show_inventory(interaction: discord.Interaction):
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    user_stats = get_user_data(interaction.user.id)
+    inventory = user_stats.get("inventory", {})
+
+    embed = discord.Embed(title=f"[{interaction.user.name} 님의 장비 가방]", color=discord.Color.dark_green())
+    gear_keys = [k for k in inventory.keys() if not k.startswith(MATERIAL_PREFIX) and k not in LUXURY_BY_NAME]
+    inv_list = [f"• **{item}** `[보유 중]`" for item in gear_keys] if gear_keys else ["*보유 중인 장비가 없습니다.*"]
+    embed.add_field(name="보유 중인 전용 장비", value="\n".join(inv_list), inline=False)
+    mat_lines = [f"• {k[len(MATERIAL_PREFIX):]} x{v}" for k, v in inventory.items() if k.startswith(MATERIAL_PREFIX) and v > 0]
+    if mat_lines:
+        embed.add_field(name="제작 재료 (`/제작`)", value="\n".join(mat_lines), inline=False)
+    _lux = luxury_owned(inventory)
+    if _lux:
+        _lux_n, _lux_total = luxury_summary(inventory)
+        embed.add_field(name=f"사치품 ({_lux_n}점 · 정가 합계 ${_lux_total:,})",
+                        value="\n".join(f"• **{it['name']}**" for it in _lux)[:1000], inline=False)
+    
+    if interaction.user.avatar:
+        embed.set_thumbnail(url=interaction.user.avatar.url)
+
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="무기상점", description="[조직원 전용] 특수 무기(?)-장비를 판매하는 상점을 엽니다.")
+async def open_weapon_shop(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    await interaction.response.defer()
+
+    user = interaction.user
+    user_stats = get_user_data(user.id)
+    current_money = user_stats.get("money", 0)
+
+    items_desc = "\n".join([
+        f"• **{item['name']}** - `${item['price']:,}`\n  └ *{item['desc']}*"
+        for item in WEAPON_SHOP_ITEMS
+    ])
+
+    embed = discord.Embed(
+        title="[지하 무기 상점] 비밀 카탈로그",
+        description=f"**{user.mention}** 님, 환영합니다. 결투에 필요한 특수 장비들을 구매할 수 있습니다.\n\n"
+                    f"{items_desc}\n\n"
+                    f"**현재 보유 자금:** `${current_money:,}`",
+        color=discord.Color.dark_red()
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+
+    await interaction.followup.send(embed=embed, view=WeaponShopView(owner=user))
+
+    # === 경찰 전용 상점 아이템 목록 ===
+POLICE_SHOP_ITEMS = [
+    {"id": "police_shield", "name": "치안국 강화 방탄복", "price": 4000, "desc": "경찰의 방어력을 대폭 강화합니다 (방어력 +35)", "def_bonus": 35},
+    {"id": "police_radio", "name": "기동타격대 무전기", "price": 8000, "desc": "/검거 포상금 +20% · /작전 성공률 +5% (보유만 해도 자동 적용)", "bonus_type": "radio"},
+    {"id": "police_badge", "name": "특급 수사관 황금 배지", "price": 20000, "desc": "방어력 +50 / 검거·순찰·심문·작전 명예 실적 +20%", "def_bonus": 50},
+    # --- 고급 장비 (비싼 만큼 강력합니다. 공격력·방어력·체력은 모든 전투 콘텐츠에 반영되고, 서로 겹쳐서 적용됩니다) ---
+    {"id": "police_helmet", "name": "전술 방탄 헬멧", "price": 30000, "desc": "방어력 +25 / 체력 +1,500", "def_bonus": 25, "hp_bonus": 1500},
+    {"id": "police_rifle", "name": "치안국 제식 돌격소총", "price": 60000, "desc": "공격력 +200", "atk_bonus": 200},
+    {"id": "police_swat", "name": "특수작전 중장갑 전투복", "price": 90000, "desc": "방어력 +90 / 체력 +3,000", "def_bonus": 90, "hp_bonus": 3000},
+    {"id": "police_terminal", "name": "광역 수사망 단말기", "price": 120000, "desc": "구역 탈환 포상금 +25% / 탈환 비용 50% 할인", "bonus_type": "terminal"},
+    {"id": "police_sniper", "name": "대테러 저격 소총", "price": 150000, "desc": "공격력 +350", "atk_bonus": 350},
+    {"id": "police_insignia", "name": "치안총감 지휘 휘장", "price": 250000, "desc": "방어력 +60 / 체력 +2,000 / 명예 실적 +15%", "def_bonus": 60, "hp_bonus": 2000, "bonus_type": "insignia"},
 ]
 
 
-def _help_usage(cmd) -> str:
-    """'/송금 <member> <amount>' 처럼 사용법 문자열 생성 (<필수> / [선택])"""
-    parts = [f"/{cmd.qualified_name}"]
-    for prm in cmd.parameters:
-        name = getattr(prm, "display_name", None) or prm.name
-        parts.append(f"<{name}>" if prm.required else f"[{name}]")
-    return " ".join(parts)
+# ==========================================================================
+# [합친 모듈] auction.py
+#   /경매
+# ==========================================================================
+# ==========================================================================
+# [/경매]  플레이어 경매장
+#   • /경매 아이템 [수량] [시작가]  : 인벤토리의 아이템·장비를 경매에 올립니다. (시작가 최소 $1,000)
+#   • 경찰·조직원 누구나 버튼으로 입찰할 수 있습니다. 입찰 금액은 입찰 즉시 빠져나가고,
+#     다른 사람이 더 높게 부르면 즉시 전액 환불됩니다.
+#   • 마지막 입찰 후 AUCTION_BID_SEC(10초) 동안 아무도 레이즈하지 않으면 낙찰 → 낙찰자가 아이템을 받고, 판매자가 금액을 받습니다.
+#     (입찰 상한은 없습니다. 자기 자신의 입찰을 다시 올리는 것은 막아 두었습니다.)
+#   • 입찰이 없으면 유찰되어 아이템이 판매자에게 돌아옵니다. 판매자는 입찰이 들어오기 전까지 취소할 수 있습니다.
+#
+#   [안전장치]  아이템·입찰금은 user_data.data 안에 "에스크로 기록"(auction_item / auction_escrow)으로 남습니다.
+#               봇이 경매 도중 꺼지거나 재시작돼도, 켜질 때 on_ready 에서 자동으로 아이템 반환·입찰금 환불을 합니다.
+#               (봇을 동시에 두 개 이상 띄우면 안 됩니다. 한쪽이 켜질 때 다른 쪽의 진행 중 경매를 되돌려 버립니다.)
+# ==========================================================================
+AUCTION_START_MIN = 1000          # 시작가 최소 금액
+AUCTION_PRICE_MAX = 2_000_000_000 # 입력 안전 한도 (DB 정수 범위 보호용. 실질적으론 상한 없음)
+AUCTION_MIN_RAISE = 100           # 최소 레이즈 폭
+AUCTION_OPEN_SEC = 60             # 첫 입찰이 들어오기까지 기다리는 시간 (없으면 유찰)
+AUCTION_BID_SEC = 10              # 마지막 입찰 후 낙찰까지 시간
+AUCTION_RAISE_STEPS = (1000, 10000, 100000)   # [+금액] 버튼
+AUCTION_MAX_PER_GUILD = 3         # 서버당 동시 진행 경매 수
+AUCTION_FEE_RATE = 0.0            # 판매 수수료 (0.05 = 5%). 기본은 수수료 없음
 
+active_auctions = {}              # {경매id: AuctionSession}
+auction_by_seller = {}            # {판매자 user_id: 경매id}  (1인 1경매)
+_auction_tasks = set()            # 진행 중인 asyncio 작업 (가비지 컬렉션 방지)
 
-def _help_pages() -> list:
-    """현재 등록된 명령어를 분류별로 정리 → [{key, label, desc, cmds}]"""
-    by_root = {}
-    for cmd in bot.tree.walk_commands():
-        if isinstance(cmd, app_commands.Group):
-            continue   # 그룹 자체가 아니라 그 안의 하위 명령어를 나열
-        by_root.setdefault(cmd.qualified_name.split(" ")[0], []).append(cmd)
+def auction_blocked_reason(item: str):
+    """거래 불가 아이템이면 사유를, 가능하면 None"""
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+    if item.startswith(("[전리품]", "[강화보스 전리품]")):
+        return "고유 전리품은 칭호·업적과 연결되어 있어 거래할 수 없습니다."
+    if item in {it["name"] for it in POLICE_SHOP_ITEMS}:
+        return "치안국 보급품은 거래할 수 없습니다."
+    if item in LUXURY_BY_NAME:
+        return "사치품은 개인 소유물이라 거래·경매·압류할 수 없습니다."
+    return None
 
-    pages, used = [], set()
-    for key, label, desc, roots in HELP_CATEGORIES:
-        cmds = []
-        for root in roots:
-            if root in by_root:
-                cmds.extend(by_root[root])
-                used.add(root)
-        if cmds:
-            pages.append({"key": key, "label": label, "desc": desc, "cmds": cmds})
+# ── DB 작업 (동기, to_thread 로 실행) ────────────────────────────────────
+def _auction_retry(fn, *args, tries: int = 3):
+    last = None
+    for i in range(tries):
+        try:
+            return fn(*args)
+        except Exception as e:
+            last = e
+            time.sleep(0.4 * (i + 1))
+    raise last
 
-    leftover = [c for root, cs in by_root.items() if root not in used for c in cs]
-    if leftover:
-        pages.append({"key": "etc", "label": "기타", "desc": "분류되지 않은 명령어입니다.", "cmds": leftover})
-    return pages
+def _auction_update(user_id, payload: dict):
+    def _do():
+        res = supabase.table("user_data").update(payload).eq("user_id", str(user_id)).execute()
+        _check_updated(res, "auction_update")
+    _auction_retry(_do)
 
+def auction_list_sync(aid: str, seller_id: int, item: str, qty: int) -> str:
+    """판매 아이템을 인벤토리에서 빼서 에스크로 기록으로 옮김. 반환: ok / no_item"""
+    _require_db()
+    with _inv_lock:
+        info = get_user_data(seller_id)
+        inv = dict(info.get("inventory") or {})
+        have = int(inv.get(item, 0) or 0)
+        if have < qty:
+            return "no_item"
+        if have == qty:
+            inv.pop(item, None)
+        else:
+            inv[item] = have - qty
+        blob = get_title_blob(info)
+        blob.setdefault("auction_item", {})[aid] = {"item": item, "qty": qty}
+        _auction_update(seller_id, {"inventory": inv, "data": blob})
+    return "ok"
 
-def help_overview_embed(pages: list) -> discord.Embed:
-    from .police_unit import POLICE_UNIT_CREATE_MIN_HONOR  # 순환 import 방지: 호출 시점에 가져옴
-    total = sum(len(pg["cmds"]) for pg in pages)
-    lines = [f"**{pg['label']}** ({len(pg['cmds'])}개)\n└ {pg['desc']}" for pg in pages]
-    embed = discord.Embed(
-        title="[패밀리 GM 도움말]",
-        description=(f"총 **{total}개**의 명령어가 있습니다. 아래 메뉴에서 분류를 고르면 사용법과 설명을 볼 수 있습니다.\n"
-                     f"사용법 표기: `<필수>` `[선택]`  ·  설명 앞의 `[ ]` 는 사용할 수 있는 대상입니다.\n\n"
-                     + "\n\n".join(lines)),
-        color=discord.Color.blurple()
-    )
-    embed.add_field(
-        name="처음이라면",
-        value=("`/가입` 으로 조직원 또는 경찰이 되세요.\n"
-               "조직원은 `/임무` · `/전투` 로 자금과 명예를 모으고, `/무기상점` · `/암시장` · `/제작` 으로 장비를 갖춥니다.\n"
-               f"명예 {FAMILY_CREATE_MIN_HONOR}pt 이상이면 `/조직 생성` 으로 조직을 만들어 `/레이드` 와 `/구역` 에 도전할 수 있습니다.\n"
-               f"경찰은 `/순찰` · `/검거` 로 활동하고, 명예 {POLICE_UNIT_CREATE_MIN_HONOR}pt 이상이면 `/수사팀 생성` 으로 수사팀을 만들어 `/수사팀 작전` 에 도전할 수 있습니다."),
-        inline=False
-    )
-    embed.set_footer(text="수감 중에는 일부 명령어를 쓸 수 없습니다. (수감자는 /탈옥 으로 탈출을 시도할 수 있어요)")
+def auction_return_item_sync(aid: str, seller_id: int) -> bool:
+    """에스크로 기록의 아이템을 판매자에게 돌려줌 (유찰·취소)"""
+    _require_db()
+    with _inv_lock:
+        info = get_user_data(seller_id)
+        blob = get_title_blob(info)
+        rec = (blob.get("auction_item") or {}).pop(aid, None)
+        if not rec:
+            return False
+        inv = dict(info.get("inventory") or {})
+        inv[rec["item"]] = inv.get(rec["item"], 0) + int(rec["qty"])
+        _auction_update(seller_id, {"inventory": inv, "data": blob})
+    return True
+
+def auction_bid_sync(aid: str, bidder_id: int, amount: int, prev_id, prev_amount: int):
+    """새 입찰자의 돈을 먼저 차감(에스크로)하고, 이전 최고 입찰자에게 전액 환불. 반환: (상태, 값)"""
+    _require_db()
+    with _inv_lock:
+        info = get_user_data(bidder_id)
+        money = int(info.get("money", 0) or 0)
+        if money < amount:
+            return "no_money", money
+        blob = get_title_blob(info)
+        blob.setdefault("auction_escrow", {})[aid] = amount
+        _auction_update(bidder_id, {"money": money - amount, "data": blob})
+        if prev_id:
+            try:
+                p_info = get_user_data(prev_id)
+                p_blob = get_title_blob(p_info)
+                (p_blob.get("auction_escrow") or {}).pop(aid, None)
+                _auction_update(prev_id, {"money": int(p_info.get("money", 0) or 0) + prev_amount, "data": p_blob})
+            except Exception as e:
+                # 환불이 실패해도 이전 입찰자의 에스크로 기록이 남아 있어 다음 봇 시작 때 자동 환불됩니다.
+                print(f"[경매 환불 실패 → 재시작 시 복구] aid={aid} user={prev_id}: {e}")
+        return "ok", money - amount
+
+def auction_settle_sync(s: "AuctionSession") -> int:
+    """낙찰 정산: 낙찰자에게 아이템, 판매자에게 대금. 반환: 판매자가 받은 금액"""
+    _require_db()
+    fee = int(s.current * AUCTION_FEE_RATE)
+    payout = s.current - fee
+    with _inv_lock:
+        w_info = get_user_data(s.high_id)
+        w_blob = get_title_blob(w_info)
+        (w_blob.get("auction_escrow") or {}).pop(s.id, None)
+        w_inv = dict(w_info.get("inventory") or {})
+        w_inv[s.item] = w_inv.get(s.item, 0) + s.qty
+        _auction_update(s.high_id, {"inventory": w_inv, "data": w_blob})
+
+        s_info = get_user_data(s.seller_id)
+        s_blob = get_title_blob(s_info)
+        (s_blob.get("auction_item") or {}).pop(s.id, None)
+        _auction_update(s.seller_id, {"money": int(s_info.get("money", 0) or 0) + payout, "data": s_blob})
+    return payout
+
+def auction_recover_sync():
+    """봇 시작 시: 이전 실행에서 끝나지 못한 경매의 에스크로(아이템·입찰금)를 모두 되돌림. 반환: (아이템 건수, 환불 인원)"""
+    if not supabase:
+        return 0, 0
+    n_items = n_refunds = 0
+    start = 0
+    while True:
+        rows = supabase.table("user_data").select("user_id,data").range(start, start + 999).execute().data or []
+        for row in rows:
+            raw = row.get("data")
+            if not isinstance(raw, dict) or not (raw.get("auction_escrow") or raw.get("auction_item")):
+                continue
+            with _inv_lock:
+                info = get_user_data(row["user_id"])
+                blob = get_title_blob(info)
+                esc = blob.pop("auction_escrow", None) or {}
+                itm = blob.pop("auction_item", None) or {}
+                payload = {"data": blob}
+                if esc:
+                    payload["money"] = int(info.get("money", 0) or 0) + sum(int(v) for v in esc.values())
+                    n_refunds += 1
+                if itm:
+                    inv = dict(info.get("inventory") or {})
+                    for rec in itm.values():
+                        inv[rec["item"]] = inv.get(rec["item"], 0) + int(rec["qty"])
+                        n_items += 1
+                    payload["inventory"] = inv
+                _auction_update(row["user_id"], payload)
+        if len(rows) < 1000:
+            break
+        start += 1000
+    return n_items, n_refunds
+
+_auction_recover_state = {"done": False}
+
+@bot.listen("on_ready")
+async def _auction_recover_on_ready():
+    if _auction_recover_state["done"]:       # 재연결로 on_ready 가 또 불려도 진행 중인 경매를 건드리지 않도록 한 번만
+        return
+    _auction_recover_state["done"] = True
+    try:
+        n_items, n_refunds = await asyncio.to_thread(auction_recover_sync)
+        print(f"경매 에스크로 복구: 아이템 {n_items}건 반환 / 입찰금 {n_refunds}명 환불")
+    except Exception as e:
+        print(f"경매 에스크로 복구 실패: {e}")
+
+# ── 경매 진행 상태 ────────────────────────────────────────────────────────
+class AuctionSession:
+    def __init__(self, aid: str, guild_id: int, seller, item: str, qty: int, start_price: int):
+        self.id, self.guild_id = aid, guild_id
+        self.seller_id, self.seller_name = seller.id, seller.display_name
+        self.item, self.qty, self.start_price = item, qty, start_price
+        self.current = start_price
+        self.high_id = None
+        self.high_name = ""
+        self.bids = []                          # [(이름, 금액)]
+        self.deadline = time.monotonic() + AUCTION_OPEN_SEC
+        self.deadline_epoch = int(time.time()) + AUCTION_OPEN_SEC
+        self.ended = False
+        self.cancelled = False
+        self.result = None                      # sold / unsold / cancelled / error
+        self.payout = 0
+        self.lock = asyncio.Lock()              # 입찰·종료 판정을 한 줄로 세우는 잠금
+        self.edit_lock = asyncio.Lock()         # 메시지 갱신 순서 보장
+        self.channel = None
+        self.message = None                     # PartialMessage (채널 권한으로 수정)
+        self.message_hook = None                # 슬래시 명령 응답 메시지 (예비 수단)
+        self.view = None
+
+def _auction_item_text(s: AuctionSession) -> str:
+    return f"{s.item} x{s.qty}" if s.qty > 1 else s.item
+
+def auction_min_bid(s: AuctionSession) -> int:
+    return s.current if s.high_id is None else s.current + AUCTION_MIN_RAISE
+
+def auction_embed(s: AuctionSession) -> discord.Embed:
+    item_txt = _auction_item_text(s)
+    if not s.ended:
+        embed = discord.Embed(
+            title=f"[경매] {item_txt}",
+            color=discord.Color.gold() if s.high_id else discord.Color.blurple()
+        )
+        embed.add_field(name="판매자", value=f"<@{s.seller_id}>", inline=True)
+        embed.add_field(name="현재 최고가" if s.high_id else "시작가", value=f"`${s.current:,}`", inline=True)
+        embed.add_field(name="최고 입찰자", value=f"<@{s.high_id}>" if s.high_id else "없음", inline=True)
+        if s.high_id:
+            timing = f"<t:{s.deadline_epoch}:R> 까지 아무도 레이즈하지 않으면 **낙찰**됩니다."
+        else:
+            timing = f"<t:{s.deadline_epoch}:R> 까지 입찰이 없으면 **유찰**됩니다."
+        embed.add_field(name="진행", value=timing + f"\n입찰이 들어올 때마다 **{AUCTION_BID_SEC}초**로 다시 시작합니다. (입찰 상한 없음)", inline=False)
+        embed.set_footer(text="입찰금은 즉시 차감되고, 더 높은 입찰이 들어오면 전액 환불됩니다.")
+    else:
+        if s.result == "sold":
+            embed = discord.Embed(title=f"[경매 낙찰] {item_txt}", color=discord.Color.green(),
+                                  description=f"<@{s.high_id}> 님이 `${s.current:,}` 에 낙찰받았습니다!\n"
+                                              f"판매자 <@{s.seller_id}> 님은 `${s.payout:,}` 를 받았습니다.")
+        elif s.result == "cancelled":
+            embed = discord.Embed(title=f"[경매 취소] {item_txt}", color=discord.Color.dark_grey(),
+                                  description="판매자가 경매를 취소했습니다. 아이템은 판매자에게 돌아갔습니다.")
+        elif s.result == "error":
+            embed = discord.Embed(title=f"[경매 오류] {item_txt}", color=discord.Color.red(),
+                                  description="정산 중 오류가 발생했습니다. 아이템과 입찰금은 봇이 다시 시작될 때 자동으로 되돌려집니다.\n"
+                                              "급하면 관리자에게 문의해 주세요.")
+        else:
+            embed = discord.Embed(title=f"[경매 유찰] {item_txt}", color=discord.Color.dark_grey(),
+                                  description="입찰이 없어 유찰되었습니다. 아이템은 판매자에게 돌아갔습니다.")
+    if s.bids:
+        embed.add_field(name="최근 입찰", value="\n".join(f"• {n} `${a:,}`" for n, a in s.bids[-5:][::-1]), inline=False)
     return embed
 
+async def auction_refresh(s: AuctionSession):
+    """현재 상태 그대로 경매 메시지를 갱신 (항상 최신 상태로 그려지도록 잠금 안에서 만든다)"""
+    async with s.edit_lock:
+        if s.view:
+            s.view.sync_labels()
+        kwargs = {"embed": auction_embed(s), "view": None if s.ended else s.view}
+        last = None
+        for target in (s.message, s.message_hook):
+            if target is None:
+                continue
+            try:
+                await target.edit(**kwargs)
+                return
+            except (discord.Forbidden, discord.NotFound, discord.HTTPException) as e:
+                last = e
+        print(f"[경매 메시지 갱신 실패] aid={s.id}: {last}")
 
-def help_category_embed(page: dict) -> discord.Embed:
-    blocks = [f"**`{_help_usage(c)}`**\n└ {c.description}" for c in page["cmds"]]
-    text = f"{page['desc']}\n\n" + "\n\n".join(blocks)
-    if len(text) > 4000:
-        text = text[:3990] + "…"
-    embed = discord.Embed(title=f"[도움말] {page['label']}", description=text, color=discord.Color.blurple())
-    embed.set_footer(text=f"명령어 {len(page['cmds'])}개 · 사용법 표기: <필수> [선택]")
-    return embed
+async def auction_place_bid(s: AuctionSession, user: discord.abc.User, amount: int):
+    """입찰 처리. 실패하면 사유 문자열, 성공하면 None"""
+    if user.id == s.seller_id:
+        return "자신이 올린 경매에는 입찰할 수 없습니다."
+    if user.id == s.high_id:
+        return "이미 최고 입찰자입니다. 다른 사람이 더 높게 부르면 다시 도전하세요."
+    if amount > AUCTION_PRICE_MAX:
+        return f"입찰 금액이 너무 큽니다. (최대 `${AUCTION_PRICE_MAX:,}`)"
 
+    async with s.lock:
+        if s.ended or time.monotonic() >= s.deadline:
+            return "이미 종료된 경매입니다."
+        need = auction_min_bid(s)
+        if amount < need:
+            return f"현재 최소 입찰액은 `${need:,}` 입니다."
+        prev_id, prev_amount = s.high_id, (s.current if s.high_id else 0)
+        try:
+            status, val = await asyncio.to_thread(auction_bid_sync, s.id, user.id, amount, prev_id, prev_amount)
+        except Exception as e:
+            print(f"[경매 입찰 오류] aid={s.id}: {e}")
+            return "입찰을 처리하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+        if status == "no_money":
+            return f"자금이 부족합니다. (보유 `${val:,}` / 입찰 `${amount:,}`)"
+        s.current, s.high_id, s.high_name = amount, user.id, user.display_name
+        s.bids.append((user.display_name, amount))
+        s.deadline = time.monotonic() + AUCTION_BID_SEC          # 레이즈가 들어올 때마다 10초 다시 시작
+        s.deadline_epoch = int(time.time()) + AUCTION_BID_SEC
+    await auction_refresh(s)
+    return None
 
-class HelpSelect(discord.ui.Select):
-    def __init__(self, pages: list):
-        self.pages = pages
-        options = [discord.SelectOption(label="전체 보기", value="__all__", description="분류 목록과 처음 시작하는 방법", default=True)]
-        for pg in pages:
-            options.append(discord.SelectOption(label=pg["label"], value=pg["key"], description=f"명령어 {len(pg['cmds'])}개"))
-        super().__init__(placeholder="분류를 선택하세요...", min_values=1, max_values=1, options=options)
+async def auction_precheck(interaction: discord.Interaction) -> bool:
+    """점검 / 가입(조직원·경찰) / 수감 여부. 실패하면 직접 안내를 보내므로 호출 전에 응답하지 않은 상태여야 한다."""
+    if not await check_maintenance(interaction): return False
+    if not await check_membership(interaction): return False
+    if await check_jail(interaction): return False
+    return True
+
+# ── 버튼 / 입력창 ────────────────────────────────────────────────────────
+class _AuctionBidButton(discord.ui.Button):
+    def __init__(self, s: AuctionSession, **kw):
+        super().__init__(**kw)
+        self.s = s
+
+    def amount(self) -> int:
+        raise NotImplementedError
 
     async def callback(self, interaction: discord.Interaction):
-        key = self.values[0]
-        for opt in self.options:
-            opt.default = (opt.value == key)
-        if key == "__all__":
-            embed = help_overview_embed(self.pages)
-        else:
-            embed = help_category_embed(next(pg for pg in self.pages if pg["key"] == key))
-        await interaction.response.edit_message(embed=embed, view=self.view)
-
-
-class HelpView(discord.ui.View):
-    def __init__(self, pages: list):
-        super().__init__(timeout=180)
-        self.interaction = None
-        self.add_item(HelpSelect(pages))
-
-    async def on_timeout(self):
-        if self.interaction is None:
+        s = self.s
+        if s.ended:
+            await interaction.response.send_message("이미 종료된 경매입니다.", ephemeral=True)
             return
+        if not await auction_precheck(interaction): return
+        await interaction.response.defer()
+        msg = await auction_place_bid(s, interaction.user, self.amount())
+        if msg:
+            await interaction.followup.send(msg, ephemeral=True)
+
+class AuctionMinButton(_AuctionBidButton):
+    def __init__(self, s):
+        super().__init__(s, label="입찰", style=discord.ButtonStyle.success, row=0)
+    def amount(self): return auction_min_bid(self.s)
+
+class AuctionRaiseButton(_AuctionBidButton):
+    def __init__(self, s, step: int):
+        super().__init__(s, label=f"+${step:,}", style=discord.ButtonStyle.primary, row=0)
+        self.step = step
+    def amount(self): return self.s.current + self.step
+
+class AuctionBidModal(discord.ui.Modal, title="입찰 금액 입력"):
+    amount_input = discord.ui.TextInput(label="입찰 금액 ($)", placeholder="예: 25000", min_length=1, max_length=14)
+
+    def __init__(self, s: AuctionSession):
+        super().__init__()
+        self.s = s
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = re.sub(r"[,\s$]", "", str(self.amount_input.value))
+        if not raw.isdigit():
+            await interaction.response.send_message("숫자만 입력해 주세요.", ephemeral=True)
+            return
+        amount = int(raw)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        msg = await auction_place_bid(self.s, interaction.user, amount)
+        await interaction.followup.send(msg or f"`${amount:,}` 입찰 완료!", ephemeral=True)
+
+class AuctionCustomButton(discord.ui.Button):
+    def __init__(self, s):
+        super().__init__(label="직접 입력", style=discord.ButtonStyle.secondary, row=0)
+        self.s = s
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.s.ended:
+            await interaction.response.send_message("이미 종료된 경매입니다.", ephemeral=True)
+            return
+        if not await auction_precheck(interaction): return
+        await interaction.response.send_modal(AuctionBidModal(self.s))
+
+class AuctionCancelButton(discord.ui.Button):
+    def __init__(self, s):
+        super().__init__(label="경매 취소 (판매자)", style=discord.ButtonStyle.danger, row=1)
+        self.s = s
+
+    async def callback(self, interaction: discord.Interaction):
+        s = self.s
+        if interaction.user.id != s.seller_id:
+            await interaction.response.send_message("판매자만 취소할 수 있습니다.", ephemeral=True)
+            return
+        async with s.lock:
+            if s.ended:
+                err = "이미 종료된 경매입니다."
+            elif s.high_id:
+                err = "이미 입찰이 들어와 취소할 수 없습니다."
+            else:
+                err = None
+                s.cancelled = True
+                s.deadline = 0          # 진행 루프가 바로 종료 처리
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+        else:
+            await interaction.response.defer()
+
+class AuctionView(discord.ui.View):
+    def __init__(self, s: AuctionSession):
+        super().__init__(timeout=None)
+        self.s = s
+        self.min_btn = AuctionMinButton(s)
+        self.cancel_btn = AuctionCancelButton(s)
+        self.add_item(self.min_btn)
+        for step in AUCTION_RAISE_STEPS:
+            self.add_item(AuctionRaiseButton(s, step))
+        self.add_item(AuctionCustomButton(s))
+        self.add_item(self.cancel_btn)
+        self.sync_labels()
+
+    def sync_labels(self):
+        need = auction_min_bid(self.s)
+        self.min_btn.label = f"시작가 ${need:,} 입찰" if self.s.high_id is None else f"최소 ${need:,} 입찰"
+        self.cancel_btn.disabled = bool(self.s.high_id)      # 입찰이 들어오면 취소 불가
+
+# ── 진행 / 종료 ──────────────────────────────────────────────────────────
+async def auction_finish(s: AuctionSession):
+    if s.cancelled or s.high_id is None:
+        s.result = "cancelled" if s.cancelled else "unsold"
         try:
-            await self.interaction.edit_original_response(view=None)   # 시간이 지나면 죽은 메뉴를 치운다
+            await asyncio.to_thread(auction_return_item_sync, s.id, s.seller_id)
+        except Exception as e:
+            print(f"[경매 아이템 반환 실패 → 재시작 시 복구] aid={s.id}: {e}")
+            s.result = "error"
+    else:
+        try:
+            s.payout = await asyncio.to_thread(auction_settle_sync, s)
+            s.result = "sold"
+        except Exception as e:
+            print(f"[경매 정산 실패 → 재시작 시 복구] aid={s.id}: {e}")
+            s.result = "error"
+    await auction_refresh(s)
+
+    if s.result == "sold" and s.channel is not None:       # 낙찰자·판매자에게 알림
+        try:
+            await s.channel.send(f"<@{s.high_id}> 님이 **{_auction_item_text(s)}** 을(를) `${s.current:,}` 에 낙찰받았습니다! (판매자 <@{s.seller_id}>)")
         except discord.HTTPException:
             pass
 
+async def run_auction(s: AuctionSession):
+    try:
+        while True:
+            async with s.lock:
+                remaining = s.deadline - time.monotonic()
+                if remaining <= 0:
+                    s.ended = True          # 종료 판정은 잠금 안에서 → 이 순간부터 새 입찰은 거절됨
+                    break
+            await asyncio.sleep(min(max(remaining, 0.05), 1.0))
+        await auction_finish(s)
+    except Exception as e:
+        print(f"[경매 진행 오류] aid={s.id}: {type(e).__name__}: {e}")
+        s.ended = True
+        s.result = "error"
+        try:
+            await auction_refresh(s)
+        except Exception:
+            pass
+    finally:
+        active_auctions.pop(s.id, None)
+        if auction_by_seller.get(s.seller_id) == s.id:
+            auction_by_seller.pop(s.seller_id, None)
 
-@bot.tree.command(name="도움말", description="[공용] 모든 명령어의 사용법과 설명을 분류별로 확인합니다.")
-async def help_command(interaction: discord.Interaction):
-    if not await check_maintenance(interaction): return
+# ── 슬래시 명령어 ────────────────────────────────────────────────────────
+async def _auction_item_autocomplete(interaction: discord.Interaction, current: str):
+    try:
+        info = await asyncio.to_thread(get_user_data, interaction.user.id)
+    except Exception:
+        return []
+    inv = info.get("inventory") or {}
+    cur = current.strip().lower()
+    out = []
+    for name, cnt in inv.items():
+        if int(cnt or 0) <= 0 or auction_blocked_reason(name):
+            continue
+        if cur and cur not in name.lower():
+            continue
+        label = f"{name} (x{cnt})" if int(cnt) > 1 else name
+        out.append(app_commands.Choice(name=label[:100], value=name[:100]))
+        if len(out) >= 25:
+            break
+    return out
 
-    pages = _help_pages()
-    view = HelpView(pages)
-    view.interaction = interaction
-    await interaction.response.send_message(embed=help_overview_embed(pages), view=view, ephemeral=True)
+@bot.tree.command(name="경매", description="[공용] 인벤토리의 아이템·장비를 경매에 올립니다. 누구나 입찰할 수 있어요.")
+@app_commands.describe(아이템="경매에 올릴 아이템 (목록에서 선택)",
+                       수량="올릴 개수 (재료·소모품만 여러 개 가능, 기본 1)",
+                       시작가=f"시작 금액 (최소 ${AUCTION_START_MIN:,}, 기본 ${AUCTION_START_MIN:,})")
+@app_commands.autocomplete(아이템=_auction_item_autocomplete)
+async def auction_command(interaction: discord.Interaction, 아이템: str,
+                          수량: app_commands.Range[int, 1, 9999] = 1,
+                          시작가: app_commands.Range[int, AUCTION_START_MIN, AUCTION_PRICE_MAX] = AUCTION_START_MIN):
+    if not await auction_precheck(interaction): return
 
-
-# ==========================================================================
-# [합친 모듈] jailbreak.py
-#   /탈옥 숫자 야구
-# ==========================================================================
-# ==========================================================================
-# [/탈옥]  숫자 야구(4자리) 탈옥 게임
-#
-#   • 수감 중인 조직원만 사용할 수 있습니다. (수감 중에는 다른 명령어가 막혀 있으므로 check_jail 은 쓰지 않습니다)
-#   • 0~9 중 서로 다른 숫자 4개(0으로 시작 가능)를 ESCAPE_MAX_TRIES 번 안에 맞히면 즉시 석방됩니다.
-#       - 스트라이크(S): 숫자와 자리가 모두 같음 / 볼(B): 숫자는 있지만 자리가 다름 / 둘 다 없으면 아웃
-#   • 실패·포기·시간 초과 시 형기는 그대로이며, ESCAPE_COOLDOWN_SEC 뒤에 다시 도전할 수 있습니다. (0 이면 제한 없음)
-#   • 게임이 진행되는 동안에는 명령어 동시 실행 방지 잠금이 유지됩니다. (GuardedView)
-# ==========================================================================
-ESCAPE_MAX_TRIES = 7
-ESCAPE_DIGITS = 4
-ESCAPE_COOLDOWN_SEC = 60      # 도전 시작 후 재도전까지 대기 시간(초)
-ESCAPE_TIMEOUT_SEC = 300      # 게임 화면 유지 시간(초)
-
-escape_cooldowns = {}   # {user_id: 재도전 가능 시각(time.time 기준)}
-
-
-def baseball_judge(answer: str, guess: str):
-    """(스트라이크, 볼) 반환"""
-    strike = sum(a == g for a, g in zip(answer, guess))
-    ball = len(set(answer) & set(guess)) - strike
-    return strike, ball
-
-
-def baseball_result_text(strike: int, ball: int) -> str:
-    return "아웃" if strike == 0 and ball == 0 else f"{strike}S {ball}B"
-
-
-def parse_baseball_guess(text: str):
-    """(숫자 문자열, 오류 메시지) — 정상이면 오류는 None"""
-    text = (text or "").strip()
-    if not re.fullmatch(rf"[0-9]{{{ESCAPE_DIGITS}}}", text):
-        return None, f"숫자 {ESCAPE_DIGITS}자리를 입력해 주세요. (예: 1234)"
-    if len(set(text)) != ESCAPE_DIGITS:
-        return None, "서로 다른 숫자 4개여야 합니다. (예: 1234 ✔ / 1123 ✘)"
-    return text, None
-
-
-class EscapeGuessModal(discord.ui.Modal, title="탈옥 — 숫자 입력"):
-    guess = discord.ui.TextInput(
-        label=f"서로 다른 숫자 {ESCAPE_DIGITS}자리",
-        placeholder="예: 1234",
-        min_length=ESCAPE_DIGITS,
-        max_length=ESCAPE_DIGITS,
-    )
-
-    def __init__(self, game: "EscapeGameView"):
-        super().__init__(timeout=ESCAPE_TIMEOUT_SEC)
-        self.game = game
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await self.game.submit_guess(interaction, str(self.guess.value))
-
-
-class EscapeGameView(GuardedView):
-    holds_command_lock = True   # 탈옥 게임이 끝날 때까지 다른 명령어 실행 차단
-
-    def __init__(self, owner: discord.Member):
-        super().__init__(timeout=ESCAPE_TIMEOUT_SEC)
-        self.owner = owner
-        self.answer = "".join(random.sample("0123456789", ESCAPE_DIGITS))
-        self.history = []        # [(guess, strike, ball)]
-        self.finished = False
-        self.message = None
-
-    # ---------------------------------------------------------------- 화면
-    def build_embed(self, title: str = "[탈옥] 숫자 야구", note: str = "", color=None) -> discord.Embed:
-        left = ESCAPE_MAX_TRIES - len(self.history)
-        embed = discord.Embed(title=title, color=color or discord.Color.dark_grey())
-        desc = (
-            f"{self.owner.mention} 님이 탈옥을 시도합니다!\n"
-            f"**{ESCAPE_MAX_TRIES}번 안에** 서로 다른 숫자 {ESCAPE_DIGITS}자리를 맞히면 **즉시 탈출**합니다.\n"
-            f"`S`=숫자·자리 일치 / `B`=숫자만 일치 / 둘 다 없으면 `아웃`"
-        )
-        if note:
-            desc += f"\n\n{note}"
-        embed.description = desc
-        if self.history:
-            lines = [f"`{i + 1}회` **{g}** → {baseball_result_text(s, b)}" for i, (g, s, b) in enumerate(self.history)]
-            embed.add_field(name="추리 기록", value="\n".join(lines), inline=False)
-        embed.set_footer(text=f"남은 기회 {left}번 · {ESCAPE_TIMEOUT_SEC}초 이내에 진행하세요")
-        if self.owner.avatar:
-            embed.set_thumbnail(url=self.owner.avatar.url)
-        return embed
-
-    def _end(self):
-        self.finished = True
-        self.stop()
-
-    # ---------------------------------------------------------------- 추측 처리
-    async def submit_guess(self, interaction: discord.Interaction, raw: str):
-        if self.finished:
-            await interaction.response.send_message("이미 끝난 게임입니다.", ephemeral=True)
-            return
-
-        # 도중에 형기가 끝났다면(자연 석방) 게임 종료
-        if not _is_jailed(self.owner.id):
-            self._end()
-            await interaction.response.edit_message(
-                embed=self.build_embed("[탈옥] 종료", "이미 석방되어 더 이상 탈옥할 필요가 없습니다.", discord.Color.blue()),
-                view=None)
-            return
-
-        guess, err = parse_baseball_guess(raw)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)   # 잘못된 입력은 기회를 소모하지 않음
-            return
-
-        if any(g == guess for g, _, _ in self.history):
-            await interaction.response.send_message("이미 시도한 숫자입니다. (기회는 소모되지 않았습니다)", ephemeral=True)
-            return
-
-        strike, ball = baseball_judge(self.answer, guess)
-        self.history.append((guess, strike, ball))
-
-        if strike == ESCAPE_DIGITS:
-            await self._success(interaction)
-        elif len(self.history) >= ESCAPE_MAX_TRIES:
-            await self._fail(interaction, f"기회를 모두 사용했습니다. 정답은 **{self.answer}** 였습니다.")
-        else:
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
-
-    async def _success(self, interaction: discord.Interaction):
-        self._end()
-        jail_list.pop(self.owner.id, None)
-        save_status(self.owner.id)
-        try:   # check_jail 의 석방 처리와 동일하게 위치를 기본 거점으로 복구
-            await asyncio.to_thread(update_user_location, self.owner.id, "레벤하임")
-        except Exception as e:
-            print(f"DB Error (escape location): {e}")
-
-        tries = len(self.history)
-        embed = self.build_embed(
-            "[탈옥 성공]",
-            f"**{self.answer}** — 정답! **{tries}번 만에** 경비를 따돌리고 탈출했습니다!\n"
-            f"{self.owner.mention} 님은 즉시 석방되었습니다.",
-            discord.Color.green())
-        embed.set_footer(text="탈옥 성공!")
-        await interaction.response.edit_message(embed=embed, view=None)
-
-    async def _fail(self, interaction: discord.Interaction, note: str, edit=None):
-        self._end()
-        embed = self.build_embed("[탈옥 실패]", f"{note}\n경비에게 붙잡혀 다시 감방으로 돌아갑니다.", discord.Color.red())
-        embed.set_footer(text=(f"{ESCAPE_COOLDOWN_SEC}초 뒤에 다시 도전할 수 있습니다." if ESCAPE_COOLDOWN_SEC else "탈옥 실패"))
-        if interaction is not None:
-            await interaction.response.edit_message(embed=embed, view=None)
-        elif edit is not None:
-            await edit(embed=embed, view=None)
-
-    # ---------------------------------------------------------------- 버튼
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner.id:
-            await interaction.response.send_message("본인의 탈옥 시도만 조작할 수 있습니다.", ephemeral=True)
-            return False
-        return True
-
-    @discord.ui.button(label="숫자 입력", style=discord.ButtonStyle.primary)
-    async def guess_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.finished:
-            await interaction.response.send_message("이미 끝난 게임입니다.", ephemeral=True)
-            return
-        await interaction.response.send_modal(EscapeGuessModal(self))
-
-    @discord.ui.button(label="포기", style=discord.ButtonStyle.danger)
-    async def give_up_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.finished:
-            await interaction.response.send_message("이미 끝난 게임입니다.", ephemeral=True)
-            return
-        await self._fail(interaction, "탈옥을 포기했습니다.")
-
-    async def on_timeout(self):
-        if self.finished or self.message is None:
-            return
-        self._end()
-        await self._fail(None, "시간이 초과되었습니다.", edit=self.message.edit)
-
-
-@bot.tree.command(name="탈옥", description=f"[조직원 전용] 숫자 야구({ESCAPE_DIGITS}자리)를 {ESCAPE_MAX_TRIES}번 안에 맞히면 즉시 탈옥합니다.")
-async def escape_command(interaction: discord.Interaction):
-    if not await check_maintenance(interaction): return
     user = interaction.user
-
-    if not _is_mafia(user):
-        await interaction.response.send_message("탈옥은 마피아 조직원만 시도할 수 있습니다.", ephemeral=True)
+    now_dt = datetime.now()
+    if any(int(k) == int(user.id) and now_dt <= exp for k, exp in list(wanted_list.items())):
+        # 수배 중에 경매로 아이템을 빼돌려 /검거 압류를 피하는 것을 막습니다. (입찰은 가능)
+        await interaction.response.send_message("**지명수배 중에는 경매에 물건을 올릴 수 없습니다.** 수배가 풀린 뒤에 다시 시도해 주세요.", ephemeral=True)
+        return
+    reason = auction_blocked_reason(아이템)
+    if reason:
+        await interaction.response.send_message(reason, ephemeral=True)
+        return
+    if auction_by_seller.get(user.id) in active_auctions:
+        await interaction.response.send_message("이미 진행 중인 내 경매가 있습니다. 끝난 뒤에 다시 올려주세요.", ephemeral=True)
+        return
+    gid = interaction.guild_id
+    if sum(1 for a in active_auctions.values() if a.guild_id == gid) >= AUCTION_MAX_PER_GUILD:
+        await interaction.response.send_message(f"이 서버에서는 동시에 {AUCTION_MAX_PER_GUILD}개까지만 경매를 열 수 있습니다. 잠시 후 다시 시도해 주세요.", ephemeral=True)
         return
 
-    if not _is_jailed(user.id):
-        await interaction.response.send_message("현재 수감 중이 아닙니다. 탈옥할 필요가 없어요!", ephemeral=True)
+    await interaction.response.defer()
+    import uuid
+    aid = uuid.uuid4().hex[:8]
+    try:
+        status = await asyncio.to_thread(auction_list_sync, aid, user.id, 아이템, 수량)
+    except Exception as e:
+        print(f"[경매 등록 오류] {e}")
+        await interaction.followup.send("경매를 등록하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.", ephemeral=True)
+        return
+    if status == "no_item":
+        await interaction.followup.send("해당 아이템을 그만큼 보유하고 있지 않습니다.", ephemeral=True)
         return
 
-    now = time.time()
-    cd = escape_cooldowns.get(user.id, 0)
-    if now < cd:
-        await interaction.response.send_message(
-            f"경비가 삼엄합니다. **{int(cd - now) + 1}초** 뒤에 다시 도전할 수 있습니다.", ephemeral=True)
+    s = AuctionSession(aid, gid, user, 아이템, 수량, 시작가)
+    s.channel = interaction.channel
+    s.view = AuctionView(s)
+    active_auctions[aid] = s
+    auction_by_seller[user.id] = aid
+    try:
+        msg = await interaction.followup.send(embed=auction_embed(s), view=s.view, wait=True)
+    except Exception as e:                       # 메시지를 못 보냈으면 경매를 열지 않고 아이템 반환
+        print(f"[경매 메시지 전송 실패] {e}")
+        active_auctions.pop(aid, None)
+        auction_by_seller.pop(user.id, None)
+        await asyncio.to_thread(auction_return_item_sync, aid, user.id)
         return
-    if ESCAPE_COOLDOWN_SEC:
-        escape_cooldowns[user.id] = now + ESCAPE_COOLDOWN_SEC   # 도중에 그만둬도 쿨타임을 피할 수 없게 시작 시점에 적용
+    s.message_hook = msg
+    if interaction.channel is not None and hasattr(interaction.channel, "get_partial_message"):
+        s.message = interaction.channel.get_partial_message(msg.id)
 
-    game = EscapeGameView(user)
-    await interaction.response.send_message(embed=game.build_embed(), view=game)
-    game.message = await interaction.original_response()
-#@@@@ FILE: mafia/mission.py
+    task = asyncio.create_task(run_auction(s))
+    _auction_tasks.add(task)
+    task.add_done_callback(_auction_tasks.discard)
+
+
+# ########################## [모듈: mission] ##########################
 """조직원 활동: /임무(하드코어 포함), 암시장, /가입 /탈퇴 /임무 명령어
 
 합친 모듈: mission.py, blackmarket.py
@@ -9184,33 +8243,6 @@ import re
 import time
 from datetime import datetime, timedelta
 
-from .core import bot, GuardedView, keep_task, supabase, wanted_list
-from .status import (
-    _require_db,
-    active_patrols,
-    BLACK_MARKET_ITEMS,
-    check_jail,
-    CHRONO_ITEMS,
-    CITIZEN_JOIN_GATING,
-    daily_record,
-    DRINK_ITEM,
-    evaluate_new_titles,
-    format_new_titles,
-    get_title_blob,
-    get_user_data,
-    get_user_rank,
-    join_requirement_text,
-    MISSION_BUFFS,
-    MISSION_COOLDOWN_FAST_SEC,
-    MISSION_COOLDOWN_SEC,
-    mission_cooldowns,
-    MISSIONS,
-    NO_COOLDOWN_ITEM,
-    save_status,
-    update_user_market_purchase,
-)
-from .admin import check_maintenance, check_membership, get_setting
-from .civilian import LeaveConfirmView, SelfJoinView
 
 
 # ==========================================================================
@@ -10541,7 +9573,9 @@ async def execute_mission(interaction: discord.Interaction):
         embed.set_thumbnail(url=user.avatar.url)
 
     await interaction.followup.send(embed=embed, view=MissionView(owner=user))
-#@@@@ FILE: mafia/police.py
+
+
+# ########################## [모듈: police] ##########################
 """경찰 활동: 경찰상점·이동·암시장 입구, /작전, /검거 /순찰 /심문
 
 합친 모듈: police_shop.py, police_ops.py, police_arrest.py
@@ -10554,31 +9588,6 @@ import time
 from datetime import datetime, timedelta
 from discord import app_commands
 
-from .core import bot, inc_money, inc_range, jail_list, supabase, wanted_list
-from .status import (
-    _ach_lock,
-    _check_updated,
-    _require_db,
-    active_patrols,
-    BLACK_MARKET_ITEMS,
-    check_jail,
-    CORRUPT_ARREST_BONUS_HONOR,
-    delete_user_data,
-    evaluate_new_titles,
-    format_new_titles,
-    get_title_blob,
-    get_user_data,
-    get_user_rank,
-    LOCATIONS,
-    police_ach_bump,
-    POLICE_BIG_FISH_HONOR,
-    save_status,
-    update_user_location,
-    update_user_stats,
-)
-from .admin import check_maintenance, check_membership, SettingsView
-from .mission import MarketView
-from .economy import POLICE_SHOP_ITEMS
 
 
 # ==========================================================================
@@ -10867,8 +9876,8 @@ def operation_success_rate(op: dict, inventory: dict, in_patrol: bool, wanted_n:
 
 def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n: int) -> dict:
     """작전 판정 + 보상/벌금 + 업적 카운터를 한 번에 처리해 저장 (경매·업적 쓰기와 겹치지 않도록 잠금)"""
-    from .economy import _auction_update  # 순환 import 방지: 호출 시점에 가져옴
-    from .economy import _inv_lock  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     _require_db()
     op = POLICE_OPERATIONS[op_key]
     with _ach_lock, _inv_lock:
@@ -10915,8 +9924,8 @@ class OperationSelect(discord.ui.Select):
         super().__init__(placeholder="수행할 수사 작전을 선택하세요...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        from .police_unit import police_shift_record  # 순환 import 방지: 호출 시점에 가져옴
-        from .police_unit import _is_police  # 순환 import 방지: 호출 시점에 가져옴
+        pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+        pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
         await interaction.response.defer()
         if interaction.user != self.owner:
             await interaction.followup.send("타인의 작전 선택 창은 조작할 수 없습니다.", ephemeral=True)
@@ -10988,7 +9997,7 @@ class OperationView(discord.ui.View):
 
 @bot.tree.command(name="작전", description="[경찰 전용] 원하는 수사 작전을 직접 선택하여 수행하고 포상금과 명예를 얻습니다.")
 async def police_operation_command(interaction: discord.Interaction):
-    from .police_unit import _is_police  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
@@ -11181,7 +10190,7 @@ async def interrogate_police_stage(s: InterrogationSession, answer: str, timed_o
 
 async def interrogate_trial(s: InterrogationSession, opinion: str):
     """재판: 확률로 판결을 정하고 jail_list 의 석방 시간을 조정"""
-    from .police_unit import police_shift_record  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     try:
         weights = INTERROGATE_VERDICT_WEIGHTS[(s.answer, opinion)]
         verdict = random.choices(["reduce", "keep", "extend"], weights=weights, k=1)[0]
@@ -11355,8 +10364,8 @@ ARREST_SEIZE_MAX = 2   # 한 번에 압류하는 아이템 종류 수 (최대)
 def seize_items_sync(police_id: int, target_id: int) -> list:
     """검거된 조직원의 아이템 중 랜덤 1~2종을 1개씩 빼앗아 경찰 인벤토리에 넣습니다. (동기 DB 작업 → to_thread 로 실행)
     재료와 거래 불가 아이템(네임드 전리품 등)은 압류하지 않습니다. 반환: 압류한 아이템 이름 목록"""
-    from .economy import auction_blocked_reason  # 순환 import 방지: 호출 시점에 가져옴
-    from .economy import _inv_lock  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     _require_db()
     with _inv_lock:
         t_inv = dict(get_user_data(target_id).get("inventory") or {})
@@ -11393,8 +10402,8 @@ def seize_items_sync(police_id: int, target_id: int) -> list:
 @bot.tree.command(name="검거", description="[경찰 전용] 지명수배 중인 마피아를 체포하여 감옥에 가두고 소지품 일부를 압류합니다.")
 @app_commands.describe(member="검거할 수배 대상 마피아")
 async def arrest_member(interaction: discord.Interaction, member: discord.Member):
-    from .police_unit import POLICE_SALARY_ARREST_BONUS_MAX, POLICE_SALARY_ARREST_BONUS_PER, police_shift_record  # 순환 import 방지: 호출 시점에 가져옴
-    from .civilian import try_corrupt_arrest  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     if not await check_maintenance(interaction): return
 
     police_role = discord.utils.get(interaction.guild.roles, name="경찰")
@@ -11714,7 +10723,7 @@ patrol_cooldowns = {}
     app_commands.Choice(name="로젠펠트 (유흥업소)", value="로젠펠트")
 ])
 async def patrol_location(interaction: discord.Interaction, 지역: app_commands.Choice[str]):
-    from .police_unit import police_shift_record  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     if not await check_maintenance(interaction): return
     if await check_jail(interaction): return
 
@@ -11777,7 +10786,731 @@ async def patrol_location(interaction: discord.Interaction, 지역: app_commands
         embed.set_thumbnail(url=user.avatar.url)
 
     await interaction.followup.send(embed=embed)
-#@@@@ FILE: mafia/police_unit.py
+
+
+# ########################## [모듈: misc] ##########################
+"""정보 검색, /능력치, /도움말, /탈옥
+
+합친 모듈: info.py, stats.py, help.py, jailbreak.py
+"""
+
+import asyncio
+import discord
+import random
+import re
+import time
+from discord import app_commands
+
+
+
+# ==========================================================================
+# [합친 모듈] info.py
+#   /정보
+# ==========================================================================
+# === [공용] 통합 `/정보` 명령어 (확장판) ===
+@bot.tree.command(name="정보", description="[공용] 특정 명령어, 아이템 또는 세계관 설정을 상세하게 검색합니다.")
+@app_commands.describe(keyword="알고 싶은 항목 (예: 전투, 보스, 슬롯, 칭호, 유토피아 오브 에덴)")
+@app_commands.choices(keyword=[
+    app_commands.Choice(name="전투 & 보스 시스템", value="전투"),
+    app_commands.Choice(name="히든 보스 (/보스)", value="보스"),
+    app_commands.Choice(name="카지노 & 도박 (/도박)", value="도박"),
+    app_commands.Choice(name="칭호 시스템 (/칭호)", value="칭호"),
+    app_commands.Choice(name="일일 의뢰 (/일퀘)", value="일퀘"),
+    app_commands.Choice(name="주간 의뢰 (/주간)", value="주간"),
+    app_commands.Choice(name="성향 · 전직 조건 · 부패 경찰", value="성향"),
+    app_commands.Choice(name="경찰 상점 (/경찰상점)", value="경찰상점"),
+    app_commands.Choice(name="통합 설정 (/설정)", value="설정"),
+    app_commands.Choice(name="네임드 몬스터 (/네임드)", value="네임드"),
+    app_commands.Choice(name="밀수 거래 (/밀수)", value="밀수"),
+    app_commands.Choice(name="조직(패밀리) (/조직)", value="조직"),
+    app_commands.Choice(name="조직 레이드 (/레이드)", value="레이드"),
+    app_commands.Choice(name="Utopia Of Eden (세계관)", value="유토피아 오브 에덴")
+])
+async def info_command(interaction: discord.Interaction, keyword: str):
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+    if not await check_maintenance(interaction): return
+
+    kw = keyword.strip()
+
+    # 1. 시스템 및 명령어 정보 사전
+    command_infos = {
+        "네임드": {
+            "title": "시스템: /네임드 [몬스터]",
+            "desc": "일반 NPC보다 훨씬 강한 강화 몬스터에 도전합니다.\n"
+                    "• **입장 조건:** 마르코 500pt / 비앙카 1,500pt / 보로닌 2,500pt / 처형자 4,000pt (명예)\n"
+                    "• **특징:** 12턴 제한, 체력이 절반 아래가 되면 **격노**하여 공격력이 크게 오릅니다.\n"
+                    "• **보상:** 많은 자금 + 소량의 명예, 최초 처치 시 고유 전리품 (칭호 해금)\n"
+                    "• **쿨타임:** 없음 (전투가 끝나면 바로 다시 도전할 수 있습니다)",
+        },
+        "전투": {
+            "title": "시스템: /전투 [npc이름]",
+            "desc": "지정한 NPC와 1:1 턴제 결투를 벌입니다.\n"
+                    "• **특징:** 제한 턴(10턴) 내에 처치해야 승리하며, 패배 시 치료비 패널티가 발생합니다.\n"
+                    f"• **행동:** `공격하기` 외에 스킬 3가지를 쓸 수 있습니다. (스킬을 쓰면 그 턴의 기본 공격을 대신합니다)\n"
+                    f"  - **강타:** 대미지 x{SKILL_SMASH_MULT} (사용 후 {SKILL_SMASH_CD}번째 행동부터 재사용)\n"
+                    f"  - **전투 함성:** 이후 {SKILL_RALLY_TURNS}번의 행동 동안 공격력 +{int(SKILL_RALLY_BONUS * 100)}% (재사용 {SKILL_RALLY_CD}행동 뒤)\n"
+                    f"  - **필살 일격:** 대미지 x{SKILL_FINISHER_MULT}, {SKILL_FINISHER_MIN_TURN}턴째부터 전투당 1회\n"
+                    f"  - 스킬이 생긴 만큼 NPC·보스 체력도 늘어나 있어서, 스킬을 잘 써야 기존과 같은 난이도입니다. `/결투`에서도 같은 스킬을 씁니다.\n"
+                    "• **쿨타임:** 없음 (전투가 끝나면 바로 다음 전투를 시작할 수 있습니다)\n"
+                    f"• **히든 이벤트:** 전투 승리 시 낮은 확률로 보스가 서버에 출현합니다! ({boss_chance_text()} / 한 번에 한 마리)",
+        },
+        "보스": {
+            "title": "시스템: /보스 (히든 보스 토벌)",
+            "desc": "전투 후 살기가 감지되었을 때 출현하는 최종 히든 보스전입니다.\n"
+                    f"• **출현 조건:** 일반 `/전투` 승리 시 보스마다 각각 확률로 경보가 발생해야 입장 가능합니다. ({boss_chance_text()})\n"
+                    "• **보스는 누군가 처치할 때까지 서버에 남습니다.** 도전에 실패해도 사라지지 않으며, 도전할 때마다 보스 체력은 가득 찬 상태로 시작합니다. 보스전은 한 번에 한 명만 도전할 수 있습니다.\n"
+                    f"• **보상:** 격퇴 성공 시 막대한 자금과 명예, 제작 재료를 획득!\n{boss_reward_text()}\n"
+                    "• **강화 보스:** 보스마다 0.3% 확률로 훨씬 강한 강화판이 출현합니다. 체력·공격력·방어력이 매우 높고 격노하지만, "
+                    "자금·명예·제작 재료가 크게 늘고 능력치가 오르는 전용 전리품과 칭호·업적을 얻습니다.\n"
+                    "• **권장:** 명예 약 5,000pt + 수상한 주사기 / 슈퍼 울트라 주먹",
+        },
+        "도박": {
+            "title": "시스템: /도박 [슬롯/동전/블랙잭/규칙]",
+            "desc": "보유 자금을 걸고 한판 승부를 벌입니다.\n"
+                    "• **슬롯:** 3개 일치 시 고배당, 잭팟(7⃣7⃣7⃣) 시 100배 지급\n"
+                    "• **동전:** 48% 확률로 베팅금의 2배 획득\n"
+                    "• **블랙잭:** 딜러와 21에 가까운 수로 겨루는 카드 게임 (블랙잭 2.5배)",
+        },
+        "칭호": {
+            "title": "시스템: /칭호",
+            "desc": "조건을 달성하여 업적 칭호를 획득하고 프로필에 장착합니다.\n"
+                    "• **효과:** `/프로필` 명령어 실행 시 내 아날로그 증명서에 장착된 칭호가 예쁘게 각인됩니다.",
+        },
+        "일퀘": {
+            "title": "시스템: /일퀘",
+            "desc": "매일 주어지는 일일 의뢰 4개를 모두 완료하면 **출석 1스택**이 쌓입니다.\n"
+                    + "".join(f"• {q['name']} {q['target']}회 ({q['hint']})\n" for q in DAILY_QUESTS)
+                    + "• **쿨타임:** 4개를 모두 완료한 시각부터 24시간 뒤에 새 의뢰가 열립니다.\n"
+                    f"• **보상:** 출석 {ATTENDANCE_TITLE_STACKS}스택 달성 시 {TITLES['attendance_month']['name']} 칭호",
+        },
+        "주간": {
+            "title": "시스템: /주간",
+            "desc": "매주 월요일 00:00(한국 시간)에 초기화되는 주간 의뢰입니다. 이번 주에 한 활동만 집계되며, 완료한 의뢰는 `/주간` 의 버튼으로 보상을 받습니다.\n"
+                    "**마피아**\n" + "".join(f"• {q['name']} {q['target']}회 → ${q['money']:,}" + (f" / 명예 +{q['honor']}" if q['honor'] else "") + "\n" for q in WEEKLY_QUESTS["mafia"])
+                    + "**경찰**\n" + "".join(f"• {q['name']} {q['target']}회 → ${q['money']:,}" + (f" / 명예 +{q['honor']}" if q['honor'] else "") + "\n" for q in WEEKLY_QUESTS["police"])
+                    + f"• **전부 완료 보너스:** ${WEEKLY_ALL_CLEAR_BONUS['money']:,} / 명예 +{WEEKLY_ALL_CLEAR_BONUS['honor']}\n"
+                    f"• **칭호:** 모든 의뢰를 완료한 주가 {WEEKLY_TITLE_WEEKS}주가 되면 {TITLES['weekly_master']['name']}",
+        },
+        "성향": {
+            "title": "시스템: 성향(선/악) · 전직 조건 · 부패 경찰",
+            "desc": f"시민은 활동에 따라 성향 점수가 쌓입니다. (선 {KARMA_GOOD_MIN}점 이상 / 악 {KARMA_EVIL_MAX}점 이하 / 그 사이는 중립, `/프로필` 에서 확인)\n"
+                    f"• **선한 활동:** `/아르바이트`(+{PARTTIME_KARMA}) `/봉사`(+{SERVICE_KARMA}) `/기부`(${DONATE_UNIT:,}당 +1)\n"
+                    f"• **악한 활동:** `/소매치기`(성공 {PICKPOCKET_KARMA_OK}, 실패 {PICKPOCKET_KARMA_FAIL} + 수배)\n\n"
+                    + join_requirement_text() + "\n\n"
+                    "**부패 경찰**\n"
+                    f"• `/검거` 로 수배 중이 아닌 시민도 체포(수감 {CORRUPT_ARREST_JAIL_SEC // 60}분, 벌금 갈취), `/갈취` 로 시민의 돈을 뜯어낼 수 있습니다.\n"
+                    f"• 들키면 민원이 접수되어 수배되고, 정식 경찰이 검거하면 추가 명예(+{CORRUPT_ARREST_BONUS_HONOR})를 받습니다.\n"
+                    "• 프로필에 '부패 경찰'로 표시됩니다.",
+        },
+        "설정": {
+            "title": "시스템: /설정",
+            "desc": "임무 실패 방지권 자동 사용 여부, 이벤트 긴급 알림 등 내 플레이 환경을 직접 커스텀할 수 있는 설정 창입니다.",
+        },
+        "이동": {
+            "title": "시스템: /이동 [지역명]",
+            "desc": "레벤하임(수도), 던베르크(공업), 블랙워드(빈민가), 에르느코항(항구), 로젠펠트(유흥가) 등 5대 거점으로 이동합니다.\n"
+                    "• 거점마다 암시장에서 판매하는 아이템 종류가 달라집니다.",
+        },
+        "아르바이트": {
+            "title": "시스템: /아르바이트",
+            "desc": "시민/공용 전용 안전 자금 수급처입니다. 위험 부담 없이 정직한 노동으로 소량의 돈을 획득합니다.",
+        },
+        "송금": {
+            "title": "명령어: /송금 [대상] [금액]",
+            "desc": "보유 자금을 다른 조직원에게 안전하게 이체합니다. (자기 자신 송금 불가)",
+        },
+        "검거": {
+            "title": "명령어: /검거 [대상] (경찰 전용)",
+            "desc": "지명수배 중인 마피아를 현장에서 체포하여 감옥에 5분간 수감하고 포상금을 획득합니다. 체포 시 대상 조직원의 아이템 중 랜덤 1~2종(각 1개)을 압류해 내 인벤토리로 가져옵니다. (재료와 네임드 전리품 등 거래 불가 아이템은 제외)",
+        },
+        "밀수": {
+            "title": "명령어: /밀수 [경찰] [뇌물] (조직원 전용)",
+            "desc": f"경찰에게 뇌물(${SMUGGLE_MIN_BRIBE:,}~${SMUGGLE_MAX_BRIBE:,})을 제안합니다. 경찰이 **수락**하면 뇌물이 경찰에게 넘어가고 {SMUGGLE_IMMUNITY_SEC // 60}분간 그 경찰은 나를 `/검거`할 수 없습니다. "
+                    f"**거절**하면 {SMUGGLE_REJECT_WANTED_SEC}초 지명수배 + 벌금 ${SMUGGLE_REJECT_FINE:,} + 명예 -{SMUGGLE_REJECT_HONOR_LOSS}pt 패널티를 받습니다. 쿨타임 {SMUGGLE_COOLDOWN_SEC // 60}분.",
+        },
+        "조직": {
+            "title": "명령어: /조직 [생성·초대·정보·기부·탈퇴·추방·위임·해산·목록]",
+            "desc": f"마피아 조직원끼리 **조직(클럽)** 을 만들어 단체 활동을 합니다.\n"
+                    f"• **/조직 생성:** 명예 {FAMILY_CREATE_MIN_HONOR}pt 이상 + ${FAMILY_CREATE_COST:,} 필요, 최대 {FAMILY_MAX_MEMBERS}명\n"
+                    "• **/조직 초대:** 조직장이 조직원을 초대 (상대가 수락해야 가입)\n"
+                    "• **/조직 기부:** 금고에 자금 기부 → 레이드 작전비로 사용\n"
+                    "• **/조직 목록:** 레이드 점수 랭킹 TOP 10",
+        },
+        "레이드": {
+            "title": "명령어: /레이드 [시작·정보]",
+            "desc": "조직원이 함께 레이드 보스를 잡는 협동 콘텐츠입니다. `/레이드 정보` 에서 보스별 조건·보상과 전투 방법을 볼 수 있습니다.\n"
+                    "공격 / 응급처치 / 전투 함성 3가지 버튼으로 진행하며, 보상은 참여도(딜량)에 따라 나뉩니다.",
+        },
+        "경찰상점": {
+            "title": "명령어: /경찰상점 (경찰 전용)",
+            "desc": "치안국 전용 보급품을 구매합니다. 보유만 해도 효과가 적용됩니다.\n"
+                    "• **치안국 강화 방탄복:** 방어력 +35\n"
+                    "• **기동타격대 무전기:** `/검거` 포상금 +20% / `/작전` 성공률 +5%\n"
+                    "• **특급 수사관 황금 배지:** 방어력 +50 / `/검거`·`/순찰`·`/심문`·`/작전` 명예 실적 +20%\n"
+                    "• **전술 방탄 헬멧:** 방어력 +25 / 체력 +1,500\n"
+                    "• **치안국 제식 돌격소총:** 공격력 +200\n"
+                    "• **특수작전 중장갑 전투복:** 방어력 +90 / 체력 +3,000\n"
+                    "• **광역 수사망 단말기:** `/구역 탈환` 포상금 +25% / 비용 50% 할인\n"
+                    "• **대테러 저격 소총:** 공격력 +350\n"
+                    "• **치안총감 지휘 휘장:** 방어력 +60 / 체력 +2,000 / 명예 실적 +15%\n"
+                    "능력치는 `/능력치`에서 확인할 수 있습니다.",
+        },
+        "무기상점": {
+            "title": "명령어: /무기상점",
+            "desc": "전투력을 대폭 높여주는 특수 무기(슈퍼 울트라 주먹, 주사기 등)를 구매합니다.",
+        },
+        "프로필": {
+            "title": "명령어: /프로필 [유저]",
+            "desc": "본인 또는 타 유저의 직급, 명예, 자금, 거점 상태가 담긴 아날로그 종이 증명서 이미지를 생성합니다.",
+        }
+    }
+
+    # 2. 아이템 정보 사전
+    item_infos = {
+        "슈퍼 울트라 주먹": {
+            "title": "아이템: 슈퍼 울트라 주먹",
+            "desc": "• **분류:** 무기 (최상급)\n• **효과:** 공격력 +500, 최대 체력 +2,000\n• **설명:** 패밀리 최고의 파괴력을 자랑하는 전설의 주먹입니다.",
+        },
+        "수상한 주사기": {
+            "title": "아이템: 수상한 주사기",
+            "desc": "• **분류:** 무기 (특수)\n• **효과:** 공격력 +300, 체력 +1,000\n• **설명:** 신체 능력을 극단적으로 끌어올리는 위험한 약물입니다.",
+        },
+        "임무 실패 방지권": {
+            "title": "아이템: 임무 실패 방지권",
+            "desc": "• **분류:** 방어구/유틸리티\n• **효과:** 방어력 +20, 임무 실패 시 수배 자동 방어\n• **설명:** 위기 상황에서 감옥행을 모면하게 해주는 티켓입니다.",
+        },
+        "시간 정지 회중시계": {
+            "title": "아이템: 시간 정지 회중시계",
+            "desc": "• **분류:** 유틸리티\n• **효과:** 임무 쿨타임 완전 제거 (영구)\n• **설명:** 멈춘 시간 속에서 쉬지 않고 작전을 이어갈 수 있게 해주는 신비한 회중시계입니다.",
+        },
+    }
+
+    # 3. 세계관 정보 사전
+    world_infos = {
+        "유토피아 오브 에덴": {
+            "title": "세계관: Utopia Of Eden (유토피아 오브 에덴)",
+            "desc": (
+                "**“모두가 평등한 세상. 그곳에 불평등한 자는 존재할 수 없다.”**\n\n"
+                "**기본 정보**\n"
+                "• **조직 분류:** 테러조직 | **활동 국가:** 칼렌데 공화국\n"
+                "• **창립자:** 에칼 데 페스토 | **주요 사상:** 공산주의\n"
+                "• **주요 활동:** 선전물 제작 및 배포, 극단적 테러 활동\n"
+                "• **대립 관계:** 칼렌데 중앙치안국 및 기타 세력\n\n"
+                "**주요 사건: 예노호 테러 사건**\n"
+                "데이브 니스코프가 여객선 예노호를 통제 불능으로 만들고 침몰시킨 참사 (사망 120명, 실종 1명)."
+            )
+        }
+    }
+
+    # 4. 통합 검색 매칭
+    target_info = None
+    combined_dict = {**command_infos, **item_infos, **world_infos}
+
+    if kw in combined_dict:
+        target_info = combined_dict[kw]
+    else:
+        for name, data in combined_dict.items():
+            if kw in name:
+                target_info = data
+                break
+
+    if not target_info:
+        available_keys = list(combined_dict.keys())
+        keys_str = ", ".join([f"`{k}`" for k in available_keys])
+        
+        await interaction.response.send_message(
+            f"**[{kw}]**에 대한 정보를 찾을 수 없습니다.\n\n"
+            f"**검색 가능한 전체 목록:**\n{keys_str}",
+            ephemeral=True
+        )
+        return
+
+    # 5. 임베드 생성 및 전송
+    embed = discord.Embed(
+        title=target_info["title"],
+        description=target_info["desc"],
+        color=discord.Color.dark_red()
+    )
+    embed.set_footer(text="마피아 RPG 패밀리 GM 통합 정보 시스템")
+
+    if interaction.user.avatar:
+        embed.set_thumbnail(url=interaction.user.avatar.url)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ==========================================================================
+# [합친 모듈] stats.py
+#   /능력치
+# ==========================================================================
+# ==========================================================================
+# [/능력치]  전투 능력치 확인 (체력/공격력/방어력 + 구성 내역)
+#   - 실제 전투에 쓰이는 compute_combat_stats 결과를 그대로 보여주고, 어디서 얼마가 붙었는지 풀어서 설명합니다.
+# ==========================================================================
+def combat_stats_breakdown(honor: int, inventory: dict) -> dict:
+    inventory = inventory or {}
+    # 상점 무기 (먼저 보유한 하나)
+    shop_name, shop = None, (0, 0)
+    for name, a, h in WEAPON_TIERS:
+        if name in inventory:
+            shop_name, shop = name, (a, h)
+            break
+    craft_w, craft_a = crafted_gear_best(inventory)
+
+    if craft_w and (craft_w["atk"], craft_w["hp"]) > shop:
+        weapon = {"name": craft_w["name"], "src": "제작", "atk": craft_w["atk"], "hp": craft_w["hp"]}
+    elif shop_name:
+        weapon = {"name": shop_name, "src": "상점", "atk": shop[0], "hp": shop[1]}
+    else:
+        weapon = None
+    armor = {"name": craft_a["name"], "def": craft_a["def"], "hp": craft_a["hp"]} if craft_a else None
+
+    # 보유했지만 적용되지 않는 장비
+    unused = []
+    for name, a, h in WEAPON_TIERS:
+        if name in inventory and not (weapon and weapon["src"] == "상점" and weapon["name"] == name):
+            unused.append(f"{name} (무기)")
+    for r in CRAFT_RECIPES:
+        if (CRAFT_PREFIX + r["name"]) not in inventory:
+            continue
+        if r["slot"] == "weapon" and not (weapon and weapon["src"] == "제작" and weapon["name"] == r["name"]):
+            unused.append(f"{r['name']} (무기)")
+        if r["slot"] == "armor" and not (armor and armor["name"] == r["name"]):
+            unused.append(f"{r['name']} (방어구)")
+
+    return {
+        "base_hp": 1000 + honor * 5,
+        "base_atk": 100 + int(honor * 0.5),
+        "base_def": 10,
+        "weapon": weapon,
+        "armor": armor,
+        "ticket": "임무 실패 방지권" in inventory,
+        "police": [(it["name"], it.get("atk_bonus", 0), it.get("hp_bonus", 0), it.get("def_bonus", 0))
+                   for it in POLICE_SHOP_ITEMS if it["name"] in inventory and (it.get("atk_bonus") or it.get("hp_bonus") or it.get("def_bonus"))],
+        "elite": [(n, a, h, d) for n, (a, h, d) in ELITE_TROPHY_STATS.items() if n in inventory],
+        "unused": unused,
+        "total": compute_combat_stats(honor, inventory),   # 실제 전투에서 쓰는 값
+    }
+
+
+def build_stats_embed(target: discord.abc.User, data: dict) -> discord.Embed:
+    honor = int(data.get("honor", 0) or 0)
+    money = int(data.get("money", 0) or 0)
+    inv = data.get("inventory") or {}
+    b = combat_stats_breakdown(honor, inv)
+    t = b["total"]
+
+    embed = discord.Embed(title=f"[{target.display_name} 님의 전투 능력치]", color=discord.Color.dark_teal())
+    embed.description = (f"**체력** `{t['hp']:,}`\n**공격력** `{t['atk']:,}`\n**방어력** `{t['def']:,}`\n\n"
+                         f"명예 `{honor:,} pt` · 보유 자금 `${money:,}`")
+
+    lines = [f"• **기본** (명예 반영): 체력 +{b['base_hp']:,} / 공격력 +{b['base_atk']:,} / 방어력 +{b['base_def']}"]
+    w = b["weapon"]
+    if w:
+        parts = [f"공격력 +{w['atk']:,}"] + ([f"체력 +{w['hp']:,}"] if w["hp"] else [])
+        lines.append(f"• **무기** [{w['src']}] {w['name']}: " + " / ".join(parts))
+    else:
+        lines.append("• **무기**: 없음")
+    a = b["armor"]
+    if a:
+        lines.append(f"• **방어구** [제작] {a['name']}: 방어력 +{a['def']:,} / 체력 +{a['hp']:,}")
+    else:
+        lines.append("• **방어구**: 없음 (`/제작`에서 만들 수 있습니다)")
+    if b["ticket"]:
+        lines.append("• **임무 실패 방지권**: 방어력 +20")
+    for ename, eatk, ehp, edef in b["elite"]:
+        lines.append(f"• **강화 보스 전리품** {ename.split('] ', 1)[-1]}: 공격력 +{eatk:,} / 방어력 +{edef:,} / 체력 +{ehp:,}")
+    for pname, patk, php, pdef in b["police"]:
+        parts = ([f"공격력 +{patk:,}"] if patk else []) + ([f"방어력 +{pdef:,}"] if pdef else []) + ([f"체력 +{php:,}"] if php else [])
+        lines.append(f"• **치안국 보급품** {pname}: " + " / ".join(parts))
+    if POLICE_RADIO_NAME in inv:
+        lines.append(f"• **{POLICE_RADIO_NAME}**: /검거 포상금 +{round(POLICE_RADIO_ARREST_BONUS * 100)}% · /작전 성공률 +{POLICE_RADIO_OP_BONUS}%")
+    if POLICE_BADGE_NAME in inv:
+        lines.append(f"• **{POLICE_BADGE_NAME}**: 검거·순찰·심문·작전 명예 실적 +{round(POLICE_BADGE_HONOR_BONUS * 100)}%")
+    if POLICE_INSIGNIA_NAME in inv:
+        lines.append(f"• **{POLICE_INSIGNIA_NAME}**: 명예 실적 +{round(POLICE_INSIGNIA_HONOR_BONUS * 100)}%")
+    if POLICE_TERMINAL_NAME in inv:
+        lines.append(f"• **{POLICE_TERMINAL_NAME}**: 구역 탈환 포상금 +{round(POLICE_TERMINAL_PRIZE_BONUS * 100)}% / 탈환 비용 {round(POLICE_TERMINAL_COST_DISCOUNT * 100)}% 할인")
+    embed.add_field(name="능력치 구성", value="\n".join(lines), inline=False)
+
+    if b["unused"]:
+        embed.add_field(name="보유 중이지만 적용되지 않는 장비",
+                        value="\n".join(f"• {x}" for x in b["unused"])[:1000] +
+                              "\n*무기·방어구는 각각 가장 강한 1개만 적용됩니다.*", inline=False)
+    embed.set_footer(text="/전투 · /네임드 · /보스 · /결투 · 레이드 · 점령전에 모두 이 능력치가 쓰입니다.")
+    if target.avatar:
+        embed.set_thumbnail(url=target.avatar.url)
+    return embed
+
+
+@bot.tree.command(name="능력치", description="[공용] 본인 또는 다른 유저의 전투 능력치(체력·공격력·방어력)와 구성을 확인합니다.")
+@app_commands.describe(member="조회할 유저 (비우면 본인)")
+async def stats_command(interaction: discord.Interaction, member: discord.Member = None):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    target = member or interaction.user
+    if target.bot:
+        await interaction.response.send_message("봇의 능력치는 확인할 수 없습니다.", ephemeral=True)
+        return
+    await interaction.response.defer()
+    data = await asyncio.to_thread(get_user_data, target.id)
+    await interaction.followup.send(embed=build_stats_embed(target, data))
+
+
+# ==========================================================================
+# [합친 모듈] help.py
+#   /도움말
+# ==========================================================================
+# ==========================================================================
+# [/도움말]  전체 명령어 안내
+#   • 봇에 등록된 슬래시 명령어(bot.tree)를 실시간으로 읽어서 보여줍니다.
+#     → 새 명령어를 추가해도 따로 고칠 필요 없이 자동으로 목록에 들어갑니다. (설명은 각 명령어의 description)
+#   • 아래 HELP_CATEGORIES 에 이름을 적지 않은 명령어는 '기타' 분류에 모입니다.
+# ==========================================================================
+HELP_CATEGORIES = [
+    # (키, 표시 이름, 분류 설명, [명령어 이름 — /조직 처럼 그룹 명령어는 첫 단어만])
+    ("start",   "시작 · 정보",          "가입과 내 정보 확인, 설정, 랭킹 등 기본이 되는 명령어입니다.",
+     ["도움말", "가입", "탈퇴", "프로필", "정보", "설정", "일퀘", "주간", "칭호", "업적", "랭킹"]),
+    ("economy", "이동 · 상점 · 경제",   "거점 이동, 장비 구매, 자금 이체, 제작 등 돈과 장비에 관한 명령어입니다.",
+     ["이동", "암시장", "무기상점", "백화점", "인벤토리", "송금", "제작", "경매", "사업", "주식"]),
+    ("citizen", "시민 활동",         "가입 전 시민의 활동입니다. 좋은 활동은 선, 나쁜 활동은 악 성향이 쌓이고 전직 조건에 영향을 줍니다.",
+     ["아르바이트", "봉사", "기부", "소매치기"]),
+    ("mafia",   "마피아 활동",          "비밀 임무 수행, 경찰 매수, 탈옥 등 조직원의 범죄 활동입니다.",
+     ["임무", "밀수", "탈옥"]),
+    ("battle",  "전투 · 능력치",        "NPC·네임드·보스 토벌과 결투, 전투 능력치 확인입니다.",
+     ["능력치", "전투", "네임드", "보스", "결투"]),
+    ("casino",  "카지노",               "자금을 걸고 즐기는 도박입니다. (`/도박 규칙` 에서 배당표 확인)",
+     ["도박"]),
+    ("police",  "경찰",                 "경찰 소속 전용 명령어입니다.",
+     ["작전", "검거", "순찰", "심문", "월급", "경찰상점", "수사팀", "갈취"]),
+    ("family",  "조직 · 레이드 · 구역", "조직(패밀리)을 만들어 함께하는 협동·점령 콘텐츠입니다.",
+     ["조직", "레이드", "구역"]),
+    ("admin",   "관리자",               "서버 관리자 전용 명령어입니다.",
+     ["추방", "관리"]),
+]
+
+
+def _help_usage(cmd) -> str:
+    """'/송금 <member> <amount>' 처럼 사용법 문자열 생성 (<필수> / [선택])"""
+    parts = [f"/{cmd.qualified_name}"]
+    for prm in cmd.parameters:
+        name = getattr(prm, "display_name", None) or prm.name
+        parts.append(f"<{name}>" if prm.required else f"[{name}]")
+    return " ".join(parts)
+
+
+def _help_pages() -> list:
+    """현재 등록된 명령어를 분류별로 정리 → [{key, label, desc, cmds}]"""
+    by_root = {}
+    for cmd in bot.tree.walk_commands():
+        if isinstance(cmd, app_commands.Group):
+            continue   # 그룹 자체가 아니라 그 안의 하위 명령어를 나열
+        by_root.setdefault(cmd.qualified_name.split(" ")[0], []).append(cmd)
+
+    pages, used = [], set()
+    for key, label, desc, roots in HELP_CATEGORIES:
+        cmds = []
+        for root in roots:
+            if root in by_root:
+                cmds.extend(by_root[root])
+                used.add(root)
+        if cmds:
+            pages.append({"key": key, "label": label, "desc": desc, "cmds": cmds})
+
+    leftover = [c for root, cs in by_root.items() if root not in used for c in cs]
+    if leftover:
+        pages.append({"key": "etc", "label": "기타", "desc": "분류되지 않은 명령어입니다.", "cmds": leftover})
+    return pages
+
+
+def help_overview_embed(pages: list) -> discord.Embed:
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
+    total = sum(len(pg["cmds"]) for pg in pages)
+    lines = [f"**{pg['label']}** ({len(pg['cmds'])}개)\n└ {pg['desc']}" for pg in pages]
+    embed = discord.Embed(
+        title="[패밀리 GM 도움말]",
+        description=(f"총 **{total}개**의 명령어가 있습니다. 아래 메뉴에서 분류를 고르면 사용법과 설명을 볼 수 있습니다.\n"
+                     f"사용법 표기: `<필수>` `[선택]`  ·  설명 앞의 `[ ]` 는 사용할 수 있는 대상입니다.\n\n"
+                     + "\n\n".join(lines)),
+        color=discord.Color.blurple()
+    )
+    embed.add_field(
+        name="처음이라면",
+        value=("`/가입` 으로 조직원 또는 경찰이 되세요.\n"
+               "조직원은 `/임무` · `/전투` 로 자금과 명예를 모으고, `/무기상점` · `/암시장` · `/제작` 으로 장비를 갖춥니다.\n"
+               f"명예 {FAMILY_CREATE_MIN_HONOR}pt 이상이면 `/조직 생성` 으로 조직을 만들어 `/레이드` 와 `/구역` 에 도전할 수 있습니다.\n"
+               f"경찰은 `/순찰` · `/검거` 로 활동하고, 명예 {POLICE_UNIT_CREATE_MIN_HONOR}pt 이상이면 `/수사팀 생성` 으로 수사팀을 만들어 `/수사팀 작전` 에 도전할 수 있습니다."),
+        inline=False
+    )
+    embed.set_footer(text="수감 중에는 일부 명령어를 쓸 수 없습니다. (수감자는 /탈옥 으로 탈출을 시도할 수 있어요)")
+    return embed
+
+
+def help_category_embed(page: dict) -> discord.Embed:
+    blocks = [f"**`{_help_usage(c)}`**\n└ {c.description}" for c in page["cmds"]]
+    text = f"{page['desc']}\n\n" + "\n\n".join(blocks)
+    if len(text) > 4000:
+        text = text[:3990] + "…"
+    embed = discord.Embed(title=f"[도움말] {page['label']}", description=text, color=discord.Color.blurple())
+    embed.set_footer(text=f"명령어 {len(page['cmds'])}개 · 사용법 표기: <필수> [선택]")
+    return embed
+
+
+class HelpSelect(discord.ui.Select):
+    def __init__(self, pages: list):
+        self.pages = pages
+        options = [discord.SelectOption(label="전체 보기", value="__all__", description="분류 목록과 처음 시작하는 방법", default=True)]
+        for pg in pages:
+            options.append(discord.SelectOption(label=pg["label"], value=pg["key"], description=f"명령어 {len(pg['cmds'])}개"))
+        super().__init__(placeholder="분류를 선택하세요...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        key = self.values[0]
+        for opt in self.options:
+            opt.default = (opt.value == key)
+        if key == "__all__":
+            embed = help_overview_embed(self.pages)
+        else:
+            embed = help_category_embed(next(pg for pg in self.pages if pg["key"] == key))
+        await interaction.response.edit_message(embed=embed, view=self.view)
+
+
+class HelpView(discord.ui.View):
+    def __init__(self, pages: list):
+        super().__init__(timeout=180)
+        self.interaction = None
+        self.add_item(HelpSelect(pages))
+
+    async def on_timeout(self):
+        if self.interaction is None:
+            return
+        try:
+            await self.interaction.edit_original_response(view=None)   # 시간이 지나면 죽은 메뉴를 치운다
+        except discord.HTTPException:
+            pass
+
+
+@bot.tree.command(name="도움말", description="[공용] 모든 명령어의 사용법과 설명을 분류별로 확인합니다.")
+async def help_command(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+
+    pages = _help_pages()
+    view = HelpView(pages)
+    view.interaction = interaction
+    await interaction.response.send_message(embed=help_overview_embed(pages), view=view, ephemeral=True)
+
+
+# ==========================================================================
+# [합친 모듈] jailbreak.py
+#   /탈옥 숫자 야구
+# ==========================================================================
+# ==========================================================================
+# [/탈옥]  숫자 야구(4자리) 탈옥 게임
+#
+#   • 수감 중인 조직원만 사용할 수 있습니다. (수감 중에는 다른 명령어가 막혀 있으므로 check_jail 은 쓰지 않습니다)
+#   • 0~9 중 서로 다른 숫자 4개(0으로 시작 가능)를 ESCAPE_MAX_TRIES 번 안에 맞히면 즉시 석방됩니다.
+#       - 스트라이크(S): 숫자와 자리가 모두 같음 / 볼(B): 숫자는 있지만 자리가 다름 / 둘 다 없으면 아웃
+#   • 실패·포기·시간 초과 시 형기는 그대로이며, ESCAPE_COOLDOWN_SEC 뒤에 다시 도전할 수 있습니다. (0 이면 제한 없음)
+#   • 게임이 진행되는 동안에는 명령어 동시 실행 방지 잠금이 유지됩니다. (GuardedView)
+# ==========================================================================
+ESCAPE_MAX_TRIES = 7
+ESCAPE_DIGITS = 4
+ESCAPE_COOLDOWN_SEC = 60      # 도전 시작 후 재도전까지 대기 시간(초)
+ESCAPE_TIMEOUT_SEC = 300      # 게임 화면 유지 시간(초)
+
+escape_cooldowns = {}   # {user_id: 재도전 가능 시각(time.time 기준)}
+
+
+def baseball_judge(answer: str, guess: str):
+    """(스트라이크, 볼) 반환"""
+    strike = sum(a == g for a, g in zip(answer, guess))
+    ball = len(set(answer) & set(guess)) - strike
+    return strike, ball
+
+
+def baseball_result_text(strike: int, ball: int) -> str:
+    return "아웃" if strike == 0 and ball == 0 else f"{strike}S {ball}B"
+
+
+def parse_baseball_guess(text: str):
+    """(숫자 문자열, 오류 메시지) — 정상이면 오류는 None"""
+    text = (text or "").strip()
+    if not re.fullmatch(rf"[0-9]{{{ESCAPE_DIGITS}}}", text):
+        return None, f"숫자 {ESCAPE_DIGITS}자리를 입력해 주세요. (예: 1234)"
+    if len(set(text)) != ESCAPE_DIGITS:
+        return None, "서로 다른 숫자 4개여야 합니다. (예: 1234 ✔ / 1123 ✘)"
+    return text, None
+
+
+class EscapeGuessModal(discord.ui.Modal, title="탈옥 — 숫자 입력"):
+    guess = discord.ui.TextInput(
+        label=f"서로 다른 숫자 {ESCAPE_DIGITS}자리",
+        placeholder="예: 1234",
+        min_length=ESCAPE_DIGITS,
+        max_length=ESCAPE_DIGITS,
+    )
+
+    def __init__(self, game: "EscapeGameView"):
+        super().__init__(timeout=ESCAPE_TIMEOUT_SEC)
+        self.game = game
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await self.game.submit_guess(interaction, str(self.guess.value))
+
+
+class EscapeGameView(GuardedView):
+    holds_command_lock = True   # 탈옥 게임이 끝날 때까지 다른 명령어 실행 차단
+
+    def __init__(self, owner: discord.Member):
+        super().__init__(timeout=ESCAPE_TIMEOUT_SEC)
+        self.owner = owner
+        self.answer = "".join(random.sample("0123456789", ESCAPE_DIGITS))
+        self.history = []        # [(guess, strike, ball)]
+        self.finished = False
+        self.message = None
+
+    # ---------------------------------------------------------------- 화면
+    def build_embed(self, title: str = "[탈옥] 숫자 야구", note: str = "", color=None) -> discord.Embed:
+        left = ESCAPE_MAX_TRIES - len(self.history)
+        embed = discord.Embed(title=title, color=color or discord.Color.dark_grey())
+        desc = (
+            f"{self.owner.mention} 님이 탈옥을 시도합니다!\n"
+            f"**{ESCAPE_MAX_TRIES}번 안에** 서로 다른 숫자 {ESCAPE_DIGITS}자리를 맞히면 **즉시 탈출**합니다.\n"
+            f"`S`=숫자·자리 일치 / `B`=숫자만 일치 / 둘 다 없으면 `아웃`"
+        )
+        if note:
+            desc += f"\n\n{note}"
+        embed.description = desc
+        if self.history:
+            lines = [f"`{i + 1}회` **{g}** → {baseball_result_text(s, b)}" for i, (g, s, b) in enumerate(self.history)]
+            embed.add_field(name="추리 기록", value="\n".join(lines), inline=False)
+        embed.set_footer(text=f"남은 기회 {left}번 · {ESCAPE_TIMEOUT_SEC}초 이내에 진행하세요")
+        if self.owner.avatar:
+            embed.set_thumbnail(url=self.owner.avatar.url)
+        return embed
+
+    def _end(self):
+        self.finished = True
+        self.stop()
+
+    # ---------------------------------------------------------------- 추측 처리
+    async def submit_guess(self, interaction: discord.Interaction, raw: str):
+        if self.finished:
+            await interaction.response.send_message("이미 끝난 게임입니다.", ephemeral=True)
+            return
+
+        # 도중에 형기가 끝났다면(자연 석방) 게임 종료
+        if not _is_jailed(self.owner.id):
+            self._end()
+            await interaction.response.edit_message(
+                embed=self.build_embed("[탈옥] 종료", "이미 석방되어 더 이상 탈옥할 필요가 없습니다.", discord.Color.blue()),
+                view=None)
+            return
+
+        guess, err = parse_baseball_guess(raw)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)   # 잘못된 입력은 기회를 소모하지 않음
+            return
+
+        if any(g == guess for g, _, _ in self.history):
+            await interaction.response.send_message("이미 시도한 숫자입니다. (기회는 소모되지 않았습니다)", ephemeral=True)
+            return
+
+        strike, ball = baseball_judge(self.answer, guess)
+        self.history.append((guess, strike, ball))
+
+        if strike == ESCAPE_DIGITS:
+            await self._success(interaction)
+        elif len(self.history) >= ESCAPE_MAX_TRIES:
+            await self._fail(interaction, f"기회를 모두 사용했습니다. 정답은 **{self.answer}** 였습니다.")
+        else:
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _success(self, interaction: discord.Interaction):
+        self._end()
+        jail_list.pop(self.owner.id, None)
+        save_status(self.owner.id)
+        try:   # check_jail 의 석방 처리와 동일하게 위치를 기본 거점으로 복구
+            await asyncio.to_thread(update_user_location, self.owner.id, "레벤하임")
+        except Exception as e:
+            print(f"DB Error (escape location): {e}")
+
+        tries = len(self.history)
+        embed = self.build_embed(
+            "[탈옥 성공]",
+            f"**{self.answer}** — 정답! **{tries}번 만에** 경비를 따돌리고 탈출했습니다!\n"
+            f"{self.owner.mention} 님은 즉시 석방되었습니다.",
+            discord.Color.green())
+        embed.set_footer(text="탈옥 성공!")
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    async def _fail(self, interaction: discord.Interaction, note: str, edit=None):
+        self._end()
+        embed = self.build_embed("[탈옥 실패]", f"{note}\n경비에게 붙잡혀 다시 감방으로 돌아갑니다.", discord.Color.red())
+        embed.set_footer(text=(f"{ESCAPE_COOLDOWN_SEC}초 뒤에 다시 도전할 수 있습니다." if ESCAPE_COOLDOWN_SEC else "탈옥 실패"))
+        if interaction is not None:
+            await interaction.response.edit_message(embed=embed, view=None)
+        elif edit is not None:
+            await edit(embed=embed, view=None)
+
+    # ---------------------------------------------------------------- 버튼
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner.id:
+            await interaction.response.send_message("본인의 탈옥 시도만 조작할 수 있습니다.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="숫자 입력", style=discord.ButtonStyle.primary)
+    async def guess_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.finished:
+            await interaction.response.send_message("이미 끝난 게임입니다.", ephemeral=True)
+            return
+        await interaction.response.send_modal(EscapeGuessModal(self))
+
+    @discord.ui.button(label="포기", style=discord.ButtonStyle.danger)
+    async def give_up_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.finished:
+            await interaction.response.send_message("이미 끝난 게임입니다.", ephemeral=True)
+            return
+        await self._fail(interaction, "탈옥을 포기했습니다.")
+
+    async def on_timeout(self):
+        if self.finished or self.message is None:
+            return
+        self._end()
+        await self._fail(None, "시간이 초과되었습니다.", edit=self.message.edit)
+
+
+@bot.tree.command(name="탈옥", description=f"[조직원 전용] 숫자 야구({ESCAPE_DIGITS}자리)를 {ESCAPE_MAX_TRIES}번 안에 맞히면 즉시 탈옥합니다.")
+async def escape_command(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    user = interaction.user
+
+    if not _is_mafia(user):
+        await interaction.response.send_message("탈옥은 마피아 조직원만 시도할 수 있습니다.", ephemeral=True)
+        return
+
+    if not _is_jailed(user.id):
+        await interaction.response.send_message("현재 수감 중이 아닙니다. 탈옥할 필요가 없어요!", ephemeral=True)
+        return
+
+    now = time.time()
+    cd = escape_cooldowns.get(user.id, 0)
+    if now < cd:
+        await interaction.response.send_message(
+            f"경비가 삼엄합니다. **{int(cd - now) + 1}초** 뒤에 다시 도전할 수 있습니다.", ephemeral=True)
+        return
+    if ESCAPE_COOLDOWN_SEC:
+        escape_cooldowns[user.id] = now + ESCAPE_COOLDOWN_SEC   # 도중에 그만둬도 쿨타임을 피할 수 없게 시작 시점에 적용
+
+    game = EscapeGameView(user)
+    await interaction.response.send_message(embed=game.build_embed(), view=game)
+    game.message = await interaction.original_response()
+
+
+# ########################## [모듈: police_unit] ##########################
 """수사팀, 구매 확인 창·시설 업그레이드, /월급, /백화점
 
 합친 모듈: police_unit.py, confirm_upgrade.py, salary.py, dept_store.py
@@ -11791,21 +11524,6 @@ import time
 from datetime import datetime, timedelta
 from discord import app_commands
 
-from .core import bot, inc_money, keep_task, supabase
-from .status import (
-    _check_updated,
-    _require_db,
-    check_jail,
-    compute_combat_stats,
-    get_user_data,
-    get_user_rank,
-    police_ach_bump,
-    update_user_stats,
-)
-from .admin import check_maintenance, check_membership
-from .economy import _inv_lock
-from .family import _is_jailed, FAMILY_NAME_PATTERN
-from .police import police_bonuses
 
 
 # ==========================================================================
@@ -13186,7 +12904,9 @@ async def department_store_cmd(interaction: discord.Interaction):
     items = [it for it in LUXURY_ITEMS if int(inv.get(it["name"], 0) or 0) < 1]
     kwargs = {"view": DepartmentStoreView(interaction.user, items)} if items else {}
     await interaction.response.send_message(embed=department_store_embed(interaction.user, money, inv), ephemeral=True, **kwargs)
-#@@@@ FILE: mafia/territory.py
+
+
+# ########################## [모듈: territory] ##########################
 """구역 점령전과 랭킹
 
 합친 모듈: territory.py, ranking.py
@@ -13199,36 +12919,6 @@ import time
 from datetime import datetime
 from discord import app_commands
 
-from .core import bot, inc_money, keep_task, report_error, supabase
-from .status import (
-    _check_updated,
-    active_patrols,
-    bump_user_stats_sync,
-    check_jail,
-    compute_combat_stats,
-    get_title_blob,
-    get_user_data,
-    LOCATIONS,
-    update_user_stats,
-)
-from .admin import check_maintenance, check_membership
-from .family import (
-    _bar,
-    _family_precheck,
-    _is_jailed,
-    _is_mafia,
-    active_raids,
-    FAMILY_DB_ERROR_MSG,
-    family_get_by_id,
-    family_get_by_name,
-    family_get_by_user,
-    family_group,
-    FAMILY_MAX_MEMBERS,
-    family_update,
-    raid_family_cooldowns,
-    raid_user_map,
-)
-from .police import POLICE_TERMINAL_COST_DISCOUNT, POLICE_TERMINAL_NAME, POLICE_TERMINAL_PRIZE_BONUS
 
 
 # ==========================================================================
@@ -13476,7 +13166,7 @@ class WarLobbyView(discord.ui.View):
         self.s = session
 
     async def _join(self, interaction: discord.Interaction, side: str):
-        from .police_unit import _is_police  # 순환 import 방지: 호출 시점에 가져옴
+        pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
         s = self.s
         user = interaction.user
         if s.state != "lobby":
@@ -14010,7 +13700,7 @@ async def territory_war_cmd(interaction: discord.Interaction, 지역: app_comman
 @app_commands.describe(지역="되찾을 지역")
 @app_commands.choices(지역=_LOCATION_CHOICES)
 async def territory_recapture_cmd(interaction: discord.Interaction, 지역: app_commands.Choice[str]):
-    from .police_unit import _is_police  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
     if await check_jail(interaction): return
@@ -14334,7 +14024,7 @@ def police_rank_rows_sync(user_ids: list) -> list:
     return rows
 
 async def send_police_ranking(interaction: discord.Interaction, kind: str):
-    from .police_unit import _is_police, POLICE_UNIT_DB_ERROR_MSG, police_unit_list_top  # 순환 import 방지: 호출 시점에 가져옴
+    pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     guild = interaction.guild
     footer = None
     if kind == "police_unit":
@@ -14461,99 +14151,7 @@ async def ranking_cmd(interaction: discord.Interaction, 종류: app_commands.Cho
     if footer:
         embed.set_footer(text=footer)
     await interaction.followup.send(embed=embed)
-#@@@@ FILE: bot.py
-import os
 
-from mafia import core   # Flask keep-alive · bot 객체 · DB 연결
 
-# 각 모듈을 불러오면 슬래시 명령어가 자동으로 등록됩니다 (market 안에 on_ready · 사업/주식이 들어 있음)
-from mafia import (  # noqa: F401
-    status,
-    admin,
-    battle,
-    civilian,
-    economy,
-    family,
-    market,
-    misc,
-    mission,
-    police,
-    police_unit,
-    territory,
-)
-
-core.bot.run(os.getenv("DISCORD_TOKEN"))
-#@@@@ FILE: requirements.txt
-#| discord.py>=2.3,<3
-#| flask>=2.3,<4
-#| supabase>=2.0,<3
-#| Pillow>=10.0
-#| requests>=2.31
-#@@@@ FILE: README_구조(예전 구조 설명).md
-#| # 마피아 GM 봇 — 파일 구조 (13,481줄 단일 파일 → 35개 모듈)
-#| 
-#| 실행은 예전과 똑같이 `python bot.py` 입니다. (Render 시작 명령 변경 불필요)
-#| 
-#| ```
-#| bot.py            진입점: 모듈을 불러오면 슬래시 명령어가 자동 등록되고, 마지막에 봇을 실행
-#| requirements.txt  의존성 (버전 범위 지정)
-#| assets/           font.ttf, paper_background.jpg, 보스/네임드 그림
-#| mafia/
-#|   core.py           Flask keep-alive, 수입 배율, 명령어 잠금, Supabase 연결, bot 객체, 오류 보고
-#|   status.py         감옥·수배 저장/복구, get_user_data 등 유저 데이터 접근
-#|   alignment.py      성향(선/악) · 전직
-#|   achievements.py   업적 · 일퀘 · 주간 · 칭호
-#|   admin.py          /관리 · 점검 모드 · 공통 체크
-#|   transfer.py       /송금
-#|   police_arrest.py  /설정 /검거 /밀수          police_ops.py   /작전 /심문
-#|   battle_data.py    NPC·보스·네임드 데이터      battle.py       /전투 /보스 /네임드
-#|   civilian.py       /아르바이트 /봉사 /기부 /소매치기   corrupt_police.py  /갈취
-#|   gamble.py         /도박        duel.py  /결투       join_leave.py  가입·탈퇴
-#|   mission.py        /임무        blackmarket.py 암시장   profile.py  /프로필
-#|   police_shop.py    경찰상점     info.py  /정보
-#|   family.py /조직   raid.py /레이드   territory.py /구역   ranking.py /랭킹
-#|   jailbreak.py /탈옥  crafting.py /제작  stats.py /능력치  auction.py /경매  help.py /도움말
-#|   police_unit.py /수사팀   salary.py /월급   confirm_upgrade.py   dept_store.py /백화점
-#|   biz_stock.py      /사업 /주식
-#|   events.py         on_ready
-#|   ledger.py         자금 흐름 로그 (core 가 DB 클라이언트를 이걸로 감쌈)
-#| ```
-#| 
-#| 의존 방향은 위에서 아래(번호가 낮은 모듈 → 높은 모듈)입니다. 아래 모듈의 함수를 위 모듈이 호출해야 할 때는
-#| 함수 안에서 `from .xxx import ...` 로 호출 시점에 가져옵니다 (순환 import 방지). 새 명령어는 해당 모듈에 추가하고,
-#| 새 모듈을 만들었다면 `bot.py` 의 import 목록에만 넣으면 됩니다.
-#| 
-#| ## 이번에 고친 버그
-#| 1. **get_user_data (심각)**: DB 읽기에 한 번이라도 실패하면 '잔고 1000짜리 가짜 데이터'를 돌려줬고, 그 값으로 계산한
-#|    결과가 저장되면서 실제 잔고·인벤토리가 덮어써질 수 있었음 → 이제 `DBReadError` 로 알리고 저장하지 않음.
-#|    (처음 접속 유저가 동시에 두 번 생성 요청을 보낸 경우에도 다시 읽도록 보강)
-#| 2. **백그라운드 작업 소실 위험**: 레이드·구역전·수사작전·주식 시세 루프 등 `create_task` 결과를 변수에 안 담아
-#|    실행 도중 사라질 수 있었음 → `keep_task()` 로 끝날 때까지 붙잡아 둠 (7곳).
-#| 3. **재연결 때마다 명령어 재동기화**: on_ready 가 다시 불릴 때마다 `tree.sync()` 를 호출 → 프로세스당 1회로 제한.
-#| 4. 결투 시간초과 처리의 `except:` → `except Exception:` (취소 신호를 삼키지 않도록).
-#| 5. Flask 포트를 `PORT` 환경변수 우선으로 (없으면 기존 8080).
-#| 6. 분리 과정에서 전역 변수(점검 모드·오류 로그 채널·이벤트 루프)를 모듈 간에 안전하게 공유하도록 정리.
-#|    `/칭호` 안의 불필요한 `global npc_cooldowns` 삭제.
-#| 
-#| ## 점검했지만 손대지 않은 것 (권장 사항)
-#| - 비동기 함수 안에서 DB 호출을 직접 하는 곳이 있음 (전투 종료 `end_battle`, 무기상점·암시장 구매, `finalize_mission` 등 8곳).
-#|   DB가 느리면 그동안 봇 전체가 멈춤 → 점차 `await asyncio.to_thread(...)` 로 옮기는 것을 권장.
-#| - 돈 갱신이 "읽기 → 계산 → 덮어쓰기" 방식이라, 스레드에서 도는 작업(송금·경매·레이드 정산)과 겹치면 드물게 덮어써질 수 있음.
-#|   근본 해결은 Supabase SQL 함수(rpc)로 `money = money + x` 를 한 번에 처리하는 것.
-#| - `update_user_stats` 는 잔고가 모자라도 음수로 저장함 (호출하는 쪽에서 미리 검사하는 구조라 현재는 문제 없음).
-#| - 도박 기대수익은 슬롯 약 89.7%, 동전 96%로 정상 범위입니다.
-#| 
-#| ## 검증 방법과 한계
-#| - discord.py 를 설치할 수 없는 환경이라, 가짜(스텁) discord 로 원본과 분리본을 각각 import 해서 비교했습니다:
-#|   슬래시 명령어 95개 등록 동일, 최상위 이름·함수 동일, 정의 913개 중 의도한 수정 7개만 다름, 정의 안 된 이름 0개.
-#| - 실제 디스코드 서버에서의 동작은 직접 확인하지 못했습니다. 배포 전에 테스트 서버에서 주요 명령어
-#|   (/프로필, /전투, /송금, /레이드, /주식)를 한 번씩 눌러 보세요.
-#| - 버그 점검은 전체 정독이 아니라 정적 분석 + 돈이 오가는 핵심 로직(유저 데이터, 송금, 도박, 주식) 위주였습니다.
-#| 
-#| ## 자금 흐름 로그 (ledger.py)
-#| - `user_data` 의 money 가 바뀔 때마다 자동으로 변동액·원인 명령어를 기록합니다. 송금·경매·도박·주식·레이드 등
-#|   돈을 바꾸는 모든 코드가 따로 수정 없이 잡힙니다.
-#| - **고액 변동**(기본 50만 이상)과 **10분 내 급증**(기준의 3배 누적)은 `/관리 로그채널` 로 지정한 채널에 알림이 갑니다.
-#| - `/관리 자금로그 [유저] [개수]` : 최근 변동 보기 / `/관리 자금로그기준 금액` : 알림 기준 변경
-#|   (기본값은 환경변수 `MONEY_LOG_THRESHOLD` 로도 지정 가능)
-#| - 한계: 최근 기록 3,000건은 메모리에만 있어 재시작하면 사라집니다 (채널에 간 알림은 남음).
+# ########################## [실행] ##########################
+bot.run(os.getenv("DISCORD_TOKEN"))
