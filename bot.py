@@ -2233,7 +2233,7 @@ def _tb_text(error) -> str:
 
 def report_error_sync(context: str, error):
     """스레드(to_thread 안의 DB 작업 등)에서도 부를 수 있는 오류 보고"""
-    loop = _core._main_loop
+    loop = _main_loop
     if loop is not None and loop.is_running():
         try:
             asyncio.run_coroutine_threadsafe(report_error(context, error), loop)
@@ -2279,7 +2279,7 @@ def _loop_exception_handler(loop, context):
 # [관리자 도구] /관리 ...
 # ==========================================
 def _admin_log_channel():
-    return ADMIN_LOG_CHANNEL_ID or _core.ERROR_LOG_CHANNEL_ID
+    return ADMIN_LOG_CHANNEL_ID or ERROR_LOG_CHANNEL_ID
 
 async def admin_audit(interaction: discord.Interaction, action: str, target=None, detail: str = ""):
     """관리자 작업을 콘솔과 기록 채널에 남김"""
@@ -2419,7 +2419,7 @@ async def admin_money(interaction: discord.Interaction, member: discord.Member, 
 async def admin_money_log(interaction: discord.Interaction, member: discord.Member = None, count: app_commands.Range[int, 1, 30] = 15):
     if not await admin_only(interaction): return
     pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
-    rows = ledger.recent(member.id if member else None, count)
+    rows = recent(member.id if member else None, count)
     if not rows:
         await interaction.response.send_message("아직 기록이 없습니다. (봇을 켠 뒤 일어난 변동만 기록됩니다)", ephemeral=True)
         return
@@ -2429,7 +2429,7 @@ async def admin_money_log(interaction: discord.Interaction, member: discord.Memb
         lines.append(f"<t:{int(r['ts'])}:T> <@{r['uid']}> **{sign}${abs(r['delta']):,}** → ${r['new']:,} · `{r['cmd']}`")
     embed = discord.Embed(title="[자금 로그] 최근 변동" + (f" — {member.display_name}" if member else ""),
                           description="\n".join(lines)[:4000], color=discord.Color.blurple())
-    embed.set_footer(text=f"고액 알림 기준: ${ledger.get_threshold():,} 이상")
+    embed.set_footer(text=f"고액 알림 기준: ${get_threshold():,} 이상")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @admin_group.command(name="자금로그기준", description="자금 로그 채널로 알릴 고액 변동 기준을 바꿉니다. (봇을 재시작하면 환경변수 값으로 복귀)")
@@ -2437,8 +2437,8 @@ async def admin_money_log(interaction: discord.Interaction, member: discord.Memb
 async def admin_money_log_threshold(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 1_000_000_000]):
     if not await admin_only(interaction): return
     pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
-    old = ledger.get_threshold()
-    ledger.set_threshold(amount)
+    old = get_threshold()
+    set_threshold(amount)
     await admin_audit(interaction, "자금 로그 기준 변경", None, f"${old:,} -> ${amount:,}")
     await interaction.response.send_message(f"고액 변동 알림 기준: `${old:,}` -> `${amount:,}`", ephemeral=True)
 
@@ -2559,14 +2559,14 @@ async def admin_reset_transfers(interaction: discord.Interaction, member: discor
 @admin_group.command(name="로그채널", description="오류 보고 / 관리자 작업 기록을 받을 채널을 지정합니다. (영구 설정은 환경 변수 사용)")
 @app_commands.describe(channel="로그를 받을 텍스트 채널")
 async def admin_log_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-    global ADMIN_LOG_CHANNEL_ID
+    global ADMIN_LOG_CHANNEL_ID, ERROR_LOG_CHANNEL_ID
     if not await admin_only(interaction): return
     await interaction.response.defer(ephemeral=True)
     test = discord.Embed(title="[로그 채널 설정]", description="이 채널로 오류 보고와 관리자 작업 기록이 전송됩니다.", color=discord.Color.green())
     if not await send_log_embed(channel.id, test):
         await interaction.followup.send("해당 채널에 메시지를 보낼 수 없습니다. 봇에게 채널 보기 / 메시지 보내기 / 링크 첨부 권한이 있는지 확인해 주세요.", ephemeral=True)
         return
-    _core.ERROR_LOG_CHANNEL_ID = channel.id
+    ERROR_LOG_CHANNEL_ID = channel.id
     ADMIN_LOG_CHANNEL_ID = channel.id
     await admin_audit(interaction, "로그 채널 지정", None, f"{channel.mention}")
     await interaction.followup.send(
@@ -4993,7 +4993,7 @@ class SelfJoinView(discord.ui.View):
         await self.process_join(interaction, target_role_name="경찰", rank_title="순경")
 
     async def process_join(self, interaction: discord.Interaction, target_role_name: str, rank_title: str):
-        if _admin.MAINTENANCE_MODE and not interaction.user.guild_permissions.administrator:
+        if MAINTENANCE_MODE and not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("현재 점검 중입니다.", ephemeral=True)
             return
 
@@ -7059,9 +7059,8 @@ _tree_synced = False   # 명령어 동기화는 프로세스당 한 번만 (재�
 
 @bot.event
 async def on_ready():
-    global _status_loaded, _tree_synced
-    _main_loop = asyncio.get_running_loop()
-    _core._main_loop = _main_loop   # report_error_sync(core)가 읽는 공유 값
+    global _status_loaded, _tree_synced, _main_loop
+    _main_loop = asyncio.get_running_loop()   # report_error_sync 가 읽는 공유 값
     _main_loop.set_exception_handler(_loop_exception_handler)
     if not _status_loaded:   # on_ready 는 재연결 때 또 불릴 수 있으므로 처음 한 번만
         _status_loaded = True
