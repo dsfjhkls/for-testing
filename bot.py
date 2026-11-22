@@ -2113,6 +2113,7 @@ M_BORONIN = MATERIAL_PREFIX + "보로닌의 장갑판"
 M_EXEC    = MATERIAL_PREFIX + "처형자의 붉은 파편"
 M_DARK    = MATERIAL_PREFIX + "어둠의 핵"
 M_ORIGIN  = MATERIAL_PREFIX + "태초의 파편"
+M_SILENT  = MATERIAL_PREFIX + "심판자의 침묵석"   # 침묵의 심판자(보스) 전용 재료
 M_EDEN    = MATERIAL_PREFIX + "에덴의 붉은 깃발"
 M_RAT     = MATERIAL_PREFIX + "쥐왕의 송곳니"
 M_BULL    = MATERIAL_PREFIX + "폭군의 닻줄"
@@ -2136,6 +2137,7 @@ CRAFT_RECIPES = [
     _recipe("w_exec",   "처형자의 붉은 낫",     "weapon",  10000, {M_EXEC: 3, M_ALLOY: 8},       atk=1100, hp=1000,  desc="붉은 달 아래 처형에 쓰이던 낫."),
     _recipe("w_dark",   "어둠의 대검",          "weapon",  15000, {M_DARK: 2, M_ALLOY: 8},       atk=1300, hp=2000,  desc="어둠의 핵이 박힌 거대한 대검."),
     _recipe("w_eden",   "혁명의 붉은 총검",     "weapon",  22000, {M_EDEN: 2, M_ALLOY: 9},       atk=1600, hp=2800,  desc="에덴의 붉은 깃발을 감아 만든 총검."),
+    _recipe("w_silent", "침묵의 단죄검",        "weapon",  26000, {M_SILENT: 2, M_ALLOY: 10},    atk=1800, hp=3200,  desc="심판자의 침묵석으로 벼려낸, 소리 없이 죄를 베는 검."),
     _recipe("w_origin", "태초의 파괴검",        "weapon",  30000, {M_ORIGIN: 2, M_ALLOY: 10},    atk=2000, hp=3500,  desc="태초의 파편이 깃든 파괴의 검."),
     # ── 방어구
     _recipe("a_vest",    "보강 방탄 조끼",       "armor",    600, {M_SCRAP: 10},                 df=25,  hp=400,     desc="고철 판으로 보강한 조끼."),
@@ -2146,6 +2148,7 @@ CRAFT_RECIPES = [
     _recipe("a_king",    "황제의 왕관 갑주",     "armor",  10000, {M_KING: 3, M_ALLOY: 8},       df=240, hp=3000,    desc="황제의 왕관 파편이 박힌 갑주."),
     _recipe("a_dark",    "어둠의 갑주",          "armor",  15000, {M_DARK: 2, M_ALLOY: 10},      df=330, hp=5000,    desc="어둠의 핵이 맥동하는 갑주."),
     _recipe("a_eden",    "붉은 깃발 방탄 코트",  "armor",  22000, {M_EDEN: 2, M_ALLOY: 9},       df=410, hp=6500,    desc="에덴의 붉은 깃발로 안감을 댄 방탄 코트."),
+    _recipe("a_silent",  "침묵의 판결 갑주",     "armor",  26000, {M_SILENT: 2, M_ALLOY: 10},    df=460, hp=7200,    desc="침묵의 심판자가 내린 판결처럼 어떤 소리도 통하지 않는 갑주."),
     _recipe("a_origin",  "태초의 방벽",          "armor",  30000, {M_ORIGIN: 2, M_ALLOY: 10},    df=500, hp=8000,    desc="태초의 파편으로 빚어낸 절대 방벽."),
 ]
 _CRAFT_ALL_GOAL = len(CRAFT_RECIPES)
@@ -7129,6 +7132,7 @@ MATERIAL_SOURCES = {
     M_EXEC:    "/네임드: 붉은 달의 처형자",
     M_DARK:    "/보스: 어둠의 지배자",
     M_EDEN:    "/보스: 에칼 데 페스토",
+    M_SILENT:  "/보스: 침묵의 심판자",
     M_ORIGIN:  "/보스: 태초의 파괴자",
     M_RAT:     "/레이드: 하수구의 쥐왕",
     M_BULL:    "/레이드: 부두 항만의 폭군",
@@ -7151,12 +7155,12 @@ MATERIAL_DROPS = {
     # /보스
     "[히든보스] 어둠의 지배자":    [(M_DARK, 1.00, (2, 3)), (M_ALLOY, 1.00, (2, 4))],
     "[테러보스] 에칼 데 페스토":   [(M_EDEN, 1.00, (2, 3)), (M_ALLOY, 1.00, (3, 4))],
-    "[심판보스] 침묵의 심판자":    [(M_EDEN, 1.00, (2, 3)), (M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (3, 5))],
+    "[심판보스] 침묵의 심판자":    [(M_SILENT, 1.00, (2, 3)), (M_EDEN, 1.00, (2, 3)), (M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (3, 5))],
     "[최강보스] 태초의 파괴자":    [(M_ORIGIN, 1.00, (2, 3)), (M_DARK, 1.00, (1, 2)), (M_ALLOY, 1.00, (3, 5))],
     # 강화 보스: 일반 보스보다 재료를 훨씬 많이, 특수 합금은 확정으로 줍니다
     "[강화보스] 심연을 삼킨 어둠의 지배자":      [(M_DARK, 1.00, (5, 8)), (M_ALLOY, 1.00, (6, 10))],
     "[강화보스] 대재앙의 화신 에칼 데 페스토":    [(M_EDEN, 1.00, (5, 8)), (M_ALLOY, 1.00, (7, 11))],
-    "[강화보스] 모든 소리를 삼킨 침묵의 심판자":  [(M_EDEN, 1.00, (5, 8)), (M_DARK, 1.00, (3, 5)), (M_ALLOY, 1.00, (8, 11))],
+    "[강화보스] 모든 소리를 삼킨 침묵의 심판자":  [(M_SILENT, 1.00, (5, 8)), (M_EDEN, 1.00, (5, 8)), (M_DARK, 1.00, (3, 5)), (M_ALLOY, 1.00, (8, 11))],
     "[강화보스] 종말을 선고하는 태초의 파괴자":   [(M_ORIGIN, 1.00, (5, 8)), (M_DARK, 1.00, (3, 5)), (M_ALLOY, 1.00, (8, 12))],
     # /레이드 (RAID_TIERS 의 name)
     "하수구의 쥐왕":      [(M_RAT, 1.00, (1, 3)), (M_SCRAP, 1.00, (3, 5))],
