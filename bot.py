@@ -25,6 +25,13 @@ from flask import Flask
 from supabase import Client, create_client
 from threading import Thread
 
+# 호스팅 로그(Render 등)에 print 가 바로바로 보이도록 줄 단위로 출력 (버퍼링 때문에 로그가 늦게/안 뜨는 것을 방지)
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 
 # ==========================================================================
 # [합친 모듈] ledger.py
@@ -3190,6 +3197,19 @@ def boss_image_file(boss_data: dict):
         return discord.File(path, filename=name)
     print(f"[보스 그림 없음] {name} 파일을 assets 폴더에서 찾지 못했습니다.")
     return None
+
+def check_boss_images():
+    """봇이 켜질 때 보스·네임드 그림 파일을 실제로 찾을 수 있는지 로그로 알려줍니다."""
+    print(f"[그림 폴더 확인] 기준 폴더={PROFILE_BASE_DIR} / 실행 위치={os.getcwd()}", flush=True)
+    seen = set()
+    datas = [v["data"] for v in BOSS_KINDS.values()] + list(NAMED_MONSTERS.values())
+    for d in datas:
+        name = d.get("image")
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        found = next(iter(_asset_paths((name,))), None)
+        print(f"[그림 확인] {name}: {'찾음 -> ' + found if found else '없음 (assets 폴더에 올려주세요)'}", flush=True)
 
 # 출현 판정표: (종류, 확률) — 위에서부터 확률을 누적해 한 번의 주사위로 어느 보스가 나올지 정합니다.
 BOSS_SPAWN_TABLE = [
@@ -7069,6 +7089,7 @@ _tree_synced = False   # 명령어 동기화는 프로세스당 한 번만 (재�
 async def on_ready():
     global _status_loaded, _tree_synced, _main_loop
     _main_loop = asyncio.get_running_loop()   # report_error_sync 가 읽는 공유 값
+    check_boss_images()
     _main_loop.set_exception_handler(_loop_exception_handler)
     if not _status_loaded:   # on_ready 는 재연결 때 또 불릴 수 있으므로 처음 한 번만
         _status_loaded = True
@@ -7420,11 +7441,11 @@ PROFILE_AREA = (70, 60, 468, 330)      # 배경(543x394) 안쪽 점선 테두리
 PROFILE_SCALE = 2                      # 배경이 작아서 2배로 키워 그림 (글씨가 선명해짐)
 PROFILE_INK = (60, 40, 20)             # 짙은 세피아 잉크색
 PROFILE_MUTED = (125, 98, 66)          # 라벨·하단 문구용 옅은 갈색
-PROFILE_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 프로젝트 루트 (assets 폴더 기준)
+PROFILE_BASE_DIR = os.path.dirname(os.path.abspath(__file__))   # bot.py 가 있는 폴더 (assets 폴더 기준)
 
 def _asset_paths(names):
     """봇 폴더 → assets 폴더 순서로 실제 존재하는 파일 경로를 하나씩 반환"""
-    for folder in (PROFILE_BASE_DIR, os.path.join(PROFILE_BASE_DIR, "assets")):
+    for folder in (PROFILE_BASE_DIR, os.path.join(PROFILE_BASE_DIR, "assets"), os.getcwd(), os.path.join(os.getcwd(), "assets")):
         for name in names:
             path = os.path.join(folder, name)
             if os.path.isfile(path):
