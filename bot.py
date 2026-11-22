@@ -14598,9 +14598,9 @@ TRIAL_DB_ERROR_MSG = "시련 DB 처리 중 오류가 발생했습니다. (관리
 TRIAL_MAX_TURNS = 10                 # 한 층의 전투 제한 턴 (/전투 와 같음)
 
 # --- 적 능력치: 층마다 곱해지는 비율 (층 f 의 능력치 = 기본값 × 성장률^(f-1)) ---
-TRIAL_HP_BASE, TRIAL_HP_GROWTH = 700, 1.085
-TRIAL_ATK_BASE, TRIAL_ATK_GROWTH = 70, 1.07
-TRIAL_DEF_BASE, TRIAL_DEF_GROWTH = 5, 1.065
+TRIAL_HP_BASE, TRIAL_HP_GROWTH = 3500, 1.4
+TRIAL_ATK_BASE, TRIAL_ATK_GROWTH = 350, 1.25
+TRIAL_DEF_BASE, TRIAL_DEF_GROWTH = 100, 1.085
 # --- 강화 적 (10층마다) ---
 TRIAL_BOSS_EVERY = 10
 TRIAL_BOSS_HP_MULT = 1.9             # 체력 ×1.9
