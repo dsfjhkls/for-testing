@@ -5273,6 +5273,11 @@ class LeaveConfirmView(discord.ui.View):
             print(f"Police unit detach error: {e}")
 
         try:
+            trial_reset_sync(member.id, True)    # 시련 기록도 삭제
+        except Exception as e:
+            print(f"Trial reset error: {e}")
+
+        try:
             delete_user_data(member.id)
         except Exception:
             pass
@@ -10980,6 +10985,7 @@ from discord import app_commands
     app_commands.Choice(name="밀수 거래 (/밀수)", value="밀수"),
     app_commands.Choice(name="조직(패밀리) (/조직)", value="조직"),
     app_commands.Choice(name="조직 레이드 (/레이드)", value="레이드"),
+    app_commands.Choice(name="시련 · 무한 도전 (/시련)", value="시련"),
     app_commands.Choice(name="Utopia Of Eden (세계관)", value="유토피아 오브 에덴")
 ])
 async def info_command(interaction: discord.Interaction, keyword: str):
@@ -10990,6 +10996,16 @@ async def info_command(interaction: discord.Interaction, keyword: str):
 
     # 1. 시스템 및 명령어 정보 사전
     command_infos = {
+        "시련": {
+            "title": "시스템: /시련 [도전 · 정보 · 초기화]",
+            "desc": ("1층부터 한 층씩 올라가는 무한 도전 모드입니다. 올라갈수록 적이 강해지고 보상도 늘어납니다.\n"
+                     "• **적:** 17종의 이름이 약한 순서대로 나오고, 17층마다 처음부터 반복됩니다. (반복되면 '2회차'가 붙음)\n"
+                     f"• **강화 적:** {TRIAL_BOSS_EVERY}층마다 등장해 같은 구간의 다른 적보다 눈에 띄게 강하고, 체력이 절반 아래가 되면 격노합니다.\n"
+                     f"• **전투:** `/전투` 와 같은 방식입니다. ({TRIAL_MAX_TURNS}턴 제한, 스킬 사용) 패배해도 층은 내려가지 않고 패널티도 없습니다.\n"
+                     f"• **보상:** 그 층을 처음 돌파할 때 보상금과 명예를 받습니다. 층이 오를수록 커지고, 강화 적 층은 {TRIAL_BOSS_REWARD_MULT}배입니다.\n"
+                     "• **랭킹:** `/랭킹` 의 '시련 최고 층' 에서 확인합니다. 같은 층이면 먼저 도달한 사람이 위입니다.\n"
+                     "• **초기화:** `/시련 초기화` 로 1층부터 다시 시작할 수 있습니다. (최고 기록 유지 / 기록까지 전부 삭제 선택)"),
+        },
         "네임드": {
             "title": "시스템: /네임드 [몬스터]",
             "desc": "일반 NPC보다 훨씬 강한 강화 몬스터에 도전합니다.\n"
@@ -11589,8 +11605,8 @@ HELP_CATEGORIES = [
      ["아르바이트", "봉사", "기부", "소매치기", "부패신고"]),
     ("mafia",   "마피아 활동",          "비밀 임무 수행, 경찰 매수, 탈옥 등 조직원의 범죄 활동입니다.",
      ["임무", "밀수", "탈옥"]),
-    ("battle",  "전투 · 능력치",        "NPC·네임드·보스 토벌과 결투, 전투 능력치와 도감 확인입니다.",
-     ["능력치", "전투", "네임드", "보스", "도감", "결투"]),
+    ("battle",  "전투 · 능력치",        "NPC·네임드·보스 토벌과 무한 도전(시련), 결투, 전투 능력치와 도감 확인입니다.",
+     ["능력치", "전투", "네임드", "보스", "시련", "도감", "결투"]),
     ("casino",  "카지노",               "자금을 걸고 즐기는 도박입니다. (`/도박 규칙` 에서 배당표 확인)",
      ["도박"]),
     ("police",  "경찰",                 "경찰 소속 전용 명령어입니다.",
@@ -14498,7 +14514,7 @@ async def send_police_ranking(interaction: discord.Interaction, kind: str):
     await interaction.followup.send(embed=embed)
 
 
-@bot.tree.command(name="랭킹", description="[공용] 서버 랭킹을 확인합니다. (명예 / 자금 / 조직 / 경찰)")
+@bot.tree.command(name="랭킹", description="[공용] 서버 랭킹을 확인합니다. (명예 / 자금 / 조직 / 경찰 / 시련)")
 @app_commands.describe(종류="확인할 랭킹")
 @app_commands.choices(종류=[
     app_commands.Choice(name="명예 (개인)", value="honor"),
@@ -14510,12 +14526,16 @@ async def send_police_ranking(interaction: discord.Interaction, kind: str):
     app_commands.Choice(name="경찰 순찰 수 (경찰)", value="police_patrols"),
     app_commands.Choice(name="경찰 심문 수 (경찰)", value="police_interrogations"),
     app_commands.Choice(name="수사팀 작전 점수 (수사팀)", value="police_unit"),
+    app_commands.Choice(name="시련 최고 층 (개인)", value="trial"),
 ])
 async def ranking_cmd(interaction: discord.Interaction, 종류: app_commands.Choice[str]):
     if not await check_maintenance(interaction): return
     kind = 종류.value
     guild = interaction.guild
     await interaction.response.defer()
+    if kind == "trial":      # 시련(무한 도전) 랭킹
+        await send_trial_ranking(interaction)
+        return
     if kind in POLICE_RANK_KINDS or kind == "police_unit":      # 경찰 관련 랭킹은 따로 처리
         await send_police_ranking(interaction, kind)
         return
@@ -14561,6 +14581,370 @@ async def ranking_cmd(interaction: discord.Interaction, 종류: app_commands.Cho
     embed = discord.Embed(title=title, description="\n".join(lines), color=discord.Color.gold())
     if footer:
         embed.set_footer(text=footer)
+    await interaction.followup.send(embed=embed)
+
+
+# ==========================================================================
+# [시련]  무한 도전 모드  —  /시련 도전 · /시련 정보 · /시련 초기화  (+ /랭킹 · /도움말 · /관리 시련초기화)
+#   • 1층부터 시작해 한 층씩 올라가며, 층이 오를수록 적이 점점 강해지고 보상도 늘어납니다.
+#   • 10층마다 '강화 적'이 나타납니다. 같은 10층 구간의 다른 적보다 눈에 띄게 강해서, 장비·명예를 키워야 넘을 수 있어요.
+#   • 적 이름은 17종이 약한 순서대로 나오고, 17층마다 처음부터 다시 반복됩니다. (반복할 때는 '2회차', '3회차' 가 붙음)
+#   • 기록은 Supabase 의 `trial_progress` 테이블에 저장됩니다. (trial.sql 을 먼저 실행하세요)
+#   • 전투 방식(스킬·방어 자세·격노·턴 제한)은 /전투 와 똑같습니다. 패배해도 층은 내려가지 않고 패널티도 없습니다.
+#   • 보상은 그 층을 '처음' 깼을 때만 전부 지급됩니다. (초기화 뒤 다시 오를 때는 최고 기록 이하의 층은 보상이 10%)
+#   • 랭킹은 최고로 높이 올라간 층 기준이며, 같은 층이면 먼저 도달한 사람이 위입니다.
+# ==========================================================================
+TRIAL_DB_ERROR_MSG = "시련 DB 처리 중 오류가 발생했습니다. (관리자: `trial_progress` 테이블이 만들어져 있는지 확인해 주세요 — trial.sql 참고)"
+TRIAL_MAX_TURNS = 10                 # 한 층의 전투 제한 턴 (/전투 와 같음)
+
+# --- 적 능력치: 층마다 곱해지는 비율 (층 f 의 능력치 = 기본값 × 성장률^(f-1)) ---
+TRIAL_HP_BASE, TRIAL_HP_GROWTH = 700, 1.085
+TRIAL_ATK_BASE, TRIAL_ATK_GROWTH = 70, 1.07
+TRIAL_DEF_BASE, TRIAL_DEF_GROWTH = 5, 1.065
+# --- 강화 적 (10층마다) ---
+TRIAL_BOSS_EVERY = 10
+TRIAL_BOSS_HP_MULT = 1.9             # 체력 ×1.9
+TRIAL_BOSS_ATK_MULT = 1.35           # 공격력 ×1.35
+TRIAL_BOSS_DEF_MULT = 1.35           # 방어력 ×1.35
+TRIAL_BOSS_ENRAGE = 1.25             # 체력이 절반 아래가 되면 격노: 공격력 ×1.25
+# --- 보상 (그 층을 처음 깼을 때) ---
+TRIAL_REWARD_BASE = 300              # 1층 보상금 (전체 수입 배율 적용 전)
+TRIAL_REWARD_GROWTH = 1.08           # 층마다 보상금 ×1.08
+TRIAL_BOSS_REWARD_MULT = 3           # 강화 적 층은 보상금·명예 ×3
+TRIAL_REPLAY_MONEY_RATE = 0.1        # 이미 깬 적 있는 층(초기화 뒤 재도전)의 보상금 비율, 명예는 없음
+
+# 적 이름 17종: 약한 순서대로 나오고, 17층마다 처음부터 반복됩니다.
+TRIAL_NAMES = [
+    ("뒷골목 건달",          "칼렌데 뒷골목에서 시비를 거는 흔한 건달입니다."),
+    ("부두 하역 깡패",        "에르느코항 부두에서 상인들을 갈취하는 깡패입니다."),
+    ("암시장 경비병",         "암시장 입구를 지키는 무장 경비병입니다."),
+    ("빚 독촉 해결사",        "받아낼 때까지 포기하지 않는 독촉 전문 해결사입니다."),
+    ("밀수 조직의 호송대원",  "밀수품을 실어 나르며 눈에 띄는 자는 가차 없이 처리합니다."),
+    ("지하 격투장 투사",      "칼렌데 지하 격투장에서 무패를 자랑하는 투사입니다."),
+    ("도살장 백정",           "도살장에서 단련된 거구의 백정입니다."),
+    ("조직의 행동대장",       "패밀리의 궂은일을 도맡아 온 행동대장입니다."),
+    ("청부 저격수",           "먼 곳에서 거물만 노리는 청부 저격수입니다."),
+    ("지명수배 살인마",       "치안국도 손대지 못한 지명수배 살인마입니다."),
+    ("용병단 대장",           "전장을 떠돌며 돈이 되는 싸움만 하는 용병단의 대장입니다."),
+    ("심판의 집행관",         "죄인을 직접 처단하는 비밀 집행관입니다."),
+    ("지하 제국의 간부",      "칼렌데 지하 제국을 실제로 움직이는 간부입니다."),
+    ("그림자 암살단장",       "그림자처럼 사라지는 암살단을 이끄는 단장입니다."),
+    ("피의 군주",             "피로 영토를 넓혀 온 악명 높은 군주입니다."),
+    ("칼렌데의 파멸자",       "칼렌데 지하 세계를 불태우려는 재앙 같은 존재입니다."),
+    ("시련의 수호자",         "시련의 끝에서 도전자를 기다리는 최후의 수호자입니다."),
+]
+assert len(TRIAL_NAMES) == 17
+
+
+def trial_is_boss(floor: int) -> bool:
+    return floor % TRIAL_BOSS_EVERY == 0
+
+def trial_next_boss_floor(floor: int) -> int:
+    return -(-floor // TRIAL_BOSS_EVERY) * TRIAL_BOSS_EVERY
+
+def trial_enemy(floor: int) -> dict:
+    """층별 적 정보 (NPCBattleView 가 쓰는 npc_info 형식 + trial_floor / is_boss)"""
+    idx = (floor - 1) % len(TRIAL_NAMES)
+    cycle = (floor - 1) // len(TRIAL_NAMES)
+    base_name, base_desc = TRIAL_NAMES[idx]
+    boss = trial_is_boss(floor)
+    name = ("[강화] " if boss else "") + base_name + (f" · {cycle + 1}회차" if cycle else "")
+    hp = TRIAL_HP_BASE * TRIAL_HP_GROWTH ** (floor - 1)
+    atk = TRIAL_ATK_BASE * TRIAL_ATK_GROWTH ** (floor - 1)
+    df = TRIAL_DEF_BASE * TRIAL_DEF_GROWTH ** (floor - 1)
+    desc = base_desc
+    enemy = {"name": name, "trial_floor": floor, "is_boss": boss, "base_name": base_name}
+    if boss:
+        hp, atk, df = hp * TRIAL_BOSS_HP_MULT, atk * TRIAL_BOSS_ATK_MULT, df * TRIAL_BOSS_DEF_MULT
+        enemy["enrage"] = TRIAL_BOSS_ENRAGE
+        desc += f"\n**강화 적** — 같은 10층 구간에서 가장 강한 적입니다. 체력이 절반 아래가 되면 격노합니다!"
+    enemy.update({"hp": int(hp), "atk": int(atk), "def": int(df), "desc": desc})
+    return enemy
+
+def trial_reward(floor: int, new_record: bool):
+    """(보상금, 명예)  new_record=False 면 이미 깬 적 있는 층이라 보상금 일부만"""
+    mult = TRIAL_BOSS_REWARD_MULT if trial_is_boss(floor) else 1
+    money = inc_money(int(TRIAL_REWARD_BASE * TRIAL_REWARD_GROWTH ** (floor - 1))) * mult
+    honor = (1 + floor // 5) * mult
+    if not new_record:
+        return int(money * TRIAL_REPLAY_MONEY_RATE), 0
+    return money, honor
+
+
+# ---------------------------------------------------------------- DB 도우미 (동기)
+def trial_get_sync(user_id) -> dict:
+    res = supabase.table("trial_progress").select("*").eq("user_id", str(user_id)).limit(1).execute()
+    if res.data:
+        r = res.data[0]
+        return {"floor": max(1, int(r.get("floor") or 1)), "best": int(r.get("best") or 0),
+                "best_at": r.get("best_at"), "clears": int(r.get("clears") or 0)}
+    return {"floor": 1, "best": 0, "best_at": None, "clears": 0}
+
+def trial_save_sync(user_id, floor: int, best: int, best_at, clears: int):
+    supabase.table("trial_progress").upsert({
+        "user_id": str(user_id), "floor": int(floor), "best": int(best), "best_at": best_at,
+        "clears": int(clears), "updated_at": datetime.now(timezone.utc).isoformat(),
+    }, on_conflict="user_id").execute()
+
+def trial_rank_rows_sync(limit: int):
+    res = (supabase.table("trial_progress").select("user_id,best,best_at,floor,clears")
+           .gt("best", 0).order("best", desc=True).order("best_at", desc=False).limit(limit).execute())
+    return res.data or []
+
+def trial_reset_sync(user_id, full: bool):
+    """full=False: 현재 층만 1층으로 (최고 기록 유지) / full=True: 기록까지 전부 삭제"""
+    uid = str(user_id)
+    if full:
+        supabase.table("trial_progress").delete().eq("user_id", uid).execute()
+    else:
+        supabase.table("trial_progress").update({"floor": 1, "updated_at": datetime.now(timezone.utc).isoformat()}).eq("user_id", uid).execute()
+
+def trial_reset_all_sync() -> int:
+    rows = supabase.table("trial_progress").select("user_id").execute().data or []
+    if rows:
+        supabase.table("trial_progress").delete().neq("user_id", "").execute()
+    return len(rows)
+
+def trial_apply_win_sync(user_id: int, floor: int) -> dict:
+    """승리 처리: 진행 저장 → 보상 지급 (보상 지급이 실패하면 진행을 되돌린다)"""
+    row = trial_get_sync(user_id)
+    new_record = floor > row["best"]
+    money, honor = trial_reward(floor, new_record)
+    new_best = max(row["best"], floor)
+    best_at = datetime.now(timezone.utc).isoformat() if new_record else row["best_at"]
+    trial_save_sync(user_id, floor + 1, new_best, best_at, row["clears"] + 1)
+    try:
+        if money or honor:
+            update_user_stats(user_id, money, honor)
+    except Exception:
+        try:
+            trial_save_sync(user_id, row["floor"], row["best"], row["best_at"], row["clears"])
+        except Exception as e2:
+            print(f"Trial win rollback error: {e2}")
+        raise
+    return {"floor": floor, "money": money, "honor": honor, "new_record": new_record, "next_floor": floor + 1, "best": new_best}
+
+
+# ---------------------------------------------------------------- 전투 화면
+class TrialBattleView(NPCBattleView):
+    """/전투 와 같은 전투 화면 (스킬·방어 자세·격노·턴 제한). 끝날 때의 보상 처리만 시련 방식으로 바꿨습니다."""
+
+    def __init__(self, user: discord.Member, user_stats_dict: dict, enemy: dict):
+        super().__init__(user=user, user_stats_dict=user_stats_dict, npc_info=enemy, max_turns=TRIAL_MAX_TURNS)
+        tag = "강화 적 " if enemy["is_boss"] else ""
+        self.logs = [f"{user.display_name} 님이 시련 **{enemy['trial_floor']}층**의 {tag}**[{enemy['name']}]** 에게 도전합니다! (제한: {self.max_turns}턴)"]
+
+    def get_embed(self) -> discord.Embed:
+        embed = super().get_embed()
+        floor = self.npc_info["trial_floor"]
+        boss = self.npc_info["is_boss"]
+        embed.title = f"[시련 {floor}층{' · 강화 적' if boss else ''}] 턴 {self.turn_count} / {self.max_turns}"
+        embed.color = discord.Color.dark_red() if boss else discord.Color.dark_teal()
+        return embed
+
+    async def end_battle(self, interaction: discord.Interaction, outcome: str):
+        self.finished = True
+        self.stop()
+        for child in self.children:
+            child.disabled = True
+        floor = self.npc_info["trial_floor"]
+        enemy_name = self.npc_info["name"]
+
+        if outcome == "win":
+            try:
+                res = await asyncio.to_thread(trial_apply_win_sync, self.user.id, floor)
+            except Exception as e:
+                await report_error("/시련 도전 (승리 처리)", e, interaction)
+                embed = discord.Embed(title="[시련] 기록 저장 실패",
+                                      description=TRIAL_DB_ERROR_MSG + "\n(진행과 보상이 반영되지 않았습니다. 같은 층에 다시 도전해 주세요.)",
+                                      color=discord.Color.red())
+            else:
+                nxt = trial_enemy(res["next_floor"])
+                desc = (f"**{self.user.mention}** 님이 **{floor}층** 의 **{enemy_name}** 을(를) 쓰러뜨렸습니다!\n\n"
+                        f"**획득 보상금:** `${res['money']:,}`\n**획득 명예:** `+{res['honor']} pt`")
+                if not res["new_record"]:
+                    desc += "\n(이미 깬 적 있는 층이라 보상금이 줄어들고 명예는 없습니다)"
+                desc += f"\n\n**최고 기록:** {res['best']}층" + (" — **신기록!**" if res["new_record"] else "")
+                desc += f"\n**다음 층:** {res['next_floor']}층 · {nxt['name']}" + ("\n**다음은 강화 적입니다! 단단히 준비하세요.**" if nxt["is_boss"] else "")
+                embed = discord.Embed(title=f"[시련 {floor}층 돌파]", description=desc, color=discord.Color.green())
+        else:
+            reason = f"지정된 **{self.max_turns}턴**이 지나 제압당했습니다." if outcome == "turn_limit" else f"**{enemy_name}** 에게 쓰러졌습니다."
+            embed = discord.Embed(
+                title=f"[시련 {floor}층 실패] {self.user.display_name}",
+                description=(f"**{self.user.mention}** 님이 {reason}\n\n패널티는 없습니다. 같은 층에 바로 다시 `/시련 도전` 할 수 있어요.\n"
+                             f"스킬을 잘 쓰거나, `/무기상점`·`/제작`·명예로 능력치를 키운 뒤 도전해 보세요."),
+                color=discord.Color.red())
+
+        log_text = "\n".join(self.logs[-8:])
+        embed.add_field(name="최종 전투 기록", value=f"```diff\n{log_text}\n```", inline=False)
+        if self.user.avatar:
+            embed.set_thumbnail(url=self.user.avatar.url)
+        try:
+            await interaction.edit_original_response(embed=embed, view=self)
+        except Exception as e:
+            print(f"[시련 결과 수정 실패] {type(e).__name__}: {e}")
+            try:
+                await interaction.followup.send(embed=embed)
+            except Exception as e2:
+                print(f"[시련 결과 전송 실패] {type(e2).__name__}: {e2}")
+
+
+# ================================================================ /시련
+trial_group = app_commands.Group(name="시련", description="[조직원·경찰] 무한 도전 — 올라갈수록 강해지는 적과 싸워 최고 층을 겨룹니다.")
+bot.tree.add_command(trial_group)
+
+async def _trial_precheck(interaction: discord.Interaction) -> bool:
+    if not await check_maintenance(interaction): return False
+    if not await check_membership(interaction): return False
+    if await check_jail(interaction): return False
+    return True
+
+@trial_group.command(name="도전", description="현재 층의 적과 전투를 시작합니다. 이기면 다음 층으로 올라갑니다.")
+async def trial_fight_cmd(interaction: discord.Interaction):
+    if not await _trial_precheck(interaction): return
+    user = interaction.user
+    await interaction.response.defer()
+    try:
+        row, info = await asyncio.gather(asyncio.to_thread(trial_get_sync, user.id), asyncio.to_thread(get_user_data, user.id))
+    except Exception as e:
+        print(f"Trial fight lookup error: {e}")
+        await interaction.followup.send(TRIAL_DB_ERROR_MSG, ephemeral=True)
+        return
+    enemy = trial_enemy(row["floor"])
+    stats = compute_combat_stats(info.get("honor", 0), info.get("inventory", {}))
+    view = TrialBattleView(user=user, user_stats_dict=stats, enemy=enemy)
+    msg = await interaction.followup.send(embed=view.get_embed(), view=view)
+    view.message = msg
+
+@trial_group.command(name="정보", description="내 시련 진행 상황과 다음 적 정보를 확인합니다.")
+async def trial_info_cmd(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    user = interaction.user
+    try:
+        row = await asyncio.to_thread(trial_get_sync, user.id)
+    except Exception as e:
+        print(f"Trial info error: {e}")
+        await interaction.response.send_message(TRIAL_DB_ERROR_MSG, ephemeral=True)
+        return
+    floor = row["floor"]
+    enemy = trial_enemy(floor)
+    new_record = floor > row["best"]
+    money, honor = trial_reward(floor, new_record)
+    boss_floor = trial_next_boss_floor(floor)
+    embed = discord.Embed(title=f"[시련] {user.display_name} 님의 진행 상황", color=discord.Color.dark_teal())
+    embed.add_field(name="현재 도전 층", value=f"**{floor}층**", inline=True)
+    embed.add_field(name="최고 기록", value=f"**{row['best']}층**" if row["best"] else "아직 없음", inline=True)
+    embed.add_field(name="누적 돌파", value=f"{row['clears']}회", inline=True)
+    embed.add_field(
+        name=f"다음 적 — {enemy['name']}",
+        value=(f"{enemy['desc']}\n체력 `{int(enemy['hp'] * PVE_HP_SCALE):,}` · 공격력 `{enemy['atk']:,}` · 방어력 `{enemy['def']:,}`\n"
+               f"돌파 보상 `${money:,}` · 명예 `+{honor}`" + ("" if new_record else " (이미 깬 적 있는 층)")),
+        inline=False)
+    embed.add_field(name="다음 강화 적", value=("지금이 강화 적 층입니다!" if boss_floor == floor else f"{boss_floor}층 ({boss_floor - floor}층 남음)"), inline=True)
+    embed.set_footer(text="적 이름은 17종이 반복됩니다 · 패배해도 패널티 없음 · `/랭킹` 에서 시련 랭킹 확인")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+class TrialResetView(discord.ui.View):
+    def __init__(self, owner: discord.Member):
+        super().__init__(timeout=30)
+        self.owner = owner
+
+    async def _do(self, interaction: discord.Interaction, full: bool):
+        if interaction.user.id != self.owner.id:
+            await interaction.response.send_message("본인만 누를 수 있습니다.", ephemeral=True)
+            return
+        self.stop()
+        await interaction.response.defer()
+        try:
+            await asyncio.to_thread(trial_reset_sync, self.owner.id, full)
+        except Exception as e:
+            print(f"Trial reset error: {e}")
+            await interaction.edit_original_response(content=TRIAL_DB_ERROR_MSG, view=None)
+            return
+        msg = ("시련 기록을 **전부 삭제**했습니다. 랭킹에서도 사라집니다. 1층부터 다시 시작해 보세요."
+               if full else "현재 도전 층을 **1층으로 되돌렸습니다.** 최고 기록은 그대로 랭킹에 남아요. (이미 깬 적 있는 층은 보상금이 10%로 줄어듭니다)")
+        await interaction.edit_original_response(content=msg, view=None)
+
+    @discord.ui.button(label="진행만 초기화 (최고 기록 유지)", style=discord.ButtonStyle.primary)
+    async def reset_run(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._do(interaction, False)
+
+    @discord.ui.button(label="기록까지 전부 초기화", style=discord.ButtonStyle.danger)
+    async def reset_all(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._do(interaction, True)
+
+    @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner.id:
+            await interaction.response.send_message("본인만 누를 수 있습니다.", ephemeral=True)
+            return
+        self.stop()
+        await interaction.response.edit_message(content="초기화를 취소했습니다.", view=None)
+
+@trial_group.command(name="초기화", description="내 시련 진행을 초기화합니다. (진행만 / 최고 기록까지 선택)")
+async def trial_reset_cmd(interaction: discord.Interaction):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    try:
+        row = await asyncio.to_thread(trial_get_sync, interaction.user.id)
+    except Exception as e:
+        print(f"Trial reset lookup error: {e}")
+        await interaction.response.send_message(TRIAL_DB_ERROR_MSG, ephemeral=True)
+        return
+    if row["floor"] <= 1 and row["best"] <= 0:
+        await interaction.response.send_message("초기화할 시련 기록이 없습니다.", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        f"현재 **{row['floor']}층** 도전 중 · 최고 기록 **{row['best']}층**\n어떻게 초기화할까요?\n"
+        f"• **진행만 초기화:** 1층부터 다시 오릅니다. 최고 기록(랭킹)은 유지돼요.\n• **기록까지 전부:** 랭킹에서도 사라집니다.",
+        view=TrialResetView(interaction.user), ephemeral=True)
+
+@admin_group.command(name="시련초기화", description="모든 유저의 시련 진행과 랭킹을 초기화합니다. (시즌 종료용)")
+@app_commands.describe(확인="실행하려면 '초기화' 라고 입력해 주세요")
+async def admin_trial_reset(interaction: discord.Interaction, 확인: str):
+    if not await admin_only(interaction): return
+    if 확인.strip() != "초기화":
+        await interaction.response.send_message("확인 문구가 맞지 않아 취소했습니다. (`초기화` 를 입력해야 실행됩니다)", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        top = await asyncio.to_thread(trial_rank_rows_sync, 3)
+        count = await asyncio.to_thread(trial_reset_all_sync)
+    except Exception as e:
+        await report_error("/관리 시련초기화", e, interaction)
+        await interaction.followup.send(TRIAL_DB_ERROR_MSG, ephemeral=True)
+        return
+    podium = " / ".join(f"{i + 1}위 <@{r['user_id']}> {int(r['best'])}층" for i, r in enumerate(top)) or "기록 없음"
+    await admin_audit(interaction, "시련 전체 초기화", None, f"{count}명의 기록 삭제 / 마지막 순위: {podium}")
+    await interaction.followup.send(f"시련 기록 **{count}명** 분을 모두 초기화했습니다.\n초기화 직전 순위: {podium}", ephemeral=True)
+
+
+# ---------------------------------------------------------------- 시련 랭킹 (/랭킹 에서 사용)
+async def send_trial_ranking(interaction: discord.Interaction):
+    guild = interaction.guild
+    try:
+        rows = await asyncio.to_thread(trial_rank_rows_sync, RANK_SCAN_N)
+    except Exception as e:
+        print(f"Trial ranking error: {e}")
+        await interaction.followup.send(TRIAL_DB_ERROR_MSG, ephemeral=True)
+        return
+    board = []   # [(member, 최고 층)]  이 서버에 있는 사람만
+    for r in rows:
+        try:
+            m = guild.get_member(int(r["user_id"]))
+        except (ValueError, TypeError):
+            continue
+        if m and not m.bot:
+            board.append((m, int(r["best"])))
+    if not board:
+        await interaction.followup.send("아직 시련 기록이 없습니다. `/시련 도전` 으로 첫 층을 돌파해 보세요!", ephemeral=True)
+        return
+    lines = [f"`{i + 1}위` **{m.display_name}** — {best}층 (강화 적 {best // TRIAL_BOSS_EVERY}회 격파)" for i, (m, best) in enumerate(board[:RANK_TOP_N])]
+    me = next((i + 1 for i, (m, _) in enumerate(board) if m.id == interaction.user.id), None)
+    footer = f"내 순위: {me}위" if me else "내 순위: 아직 기록이 없습니다."
+    embed = discord.Embed(title="시련 랭킹 (최고 도달 층)", description="\n".join(lines), color=discord.Color.dark_teal())
+    embed.set_footer(text=footer + " · 같은 층이면 먼저 도달한 사람이 위")
     await interaction.followup.send(embed=embed)
 
 
