@@ -3271,6 +3271,7 @@ def boss_reward_text() -> str:
 NAMED_MONSTERS = {
     "marco": {
         "name": "[네임드] 백정 마르코", "named": True, "min_honor": 500, "max_turns": 12,
+        "image": "named_marco.png",   # 전투 화면 그림 (assets 폴더). 파일이 없으면 그림 없이 진행됩니다.
         "hp": 4200, "atk": 330, "def": 55, "enrage": 1.5,
         "reward_money": inc_range((900, 1800)), "reward_honor": 4,
         "drop": "[전리품] 마르코의 정육 칼",
@@ -3294,6 +3295,7 @@ NAMED_MONSTERS = {
     },
     "executioner": {
         "name": "[네임드] 붉은 달의 처형자", "named": True, "min_honor": 4000, "max_turns": 12,
+        "image": "named_executioner.jpg",   # 전투 화면 그림 (assets 폴더). 파일이 없으면 그림 없이 진행됩니다.
         "hp": 22000, "atk": 1200, "def": 260, "enrage": 1.6,
         "reward_money": inc_range((4800, 8400)), "reward_honor": 24,
         "drop": "[전리품] 처형자의 붉은 가면",
