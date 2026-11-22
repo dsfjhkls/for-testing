@@ -1398,6 +1398,10 @@ _police_ach = [
     _ach("p_ops_150",      "심화", "특수 작전의 전설",     "/작전 150회 성공",                       lambda s, i: s["police_ops"],            150,  hide="name"),
     _ach("p_ops_boss_3",   "심화", "거물 소탕 작전",       "'거물 마피아 보스 소탕 작전' 3회 성공",  lambda s, i: s["police_ops_boss"],       3,    hide="full"),
     _ach("p_op_50",        "심화", "작전 총사령관",       "수사팀 작전에서 성공 단계 50개 누적",    lambda s, i: s["police_op_stages"],      50,   hide="full"),
+    # 전투 (/전투 · /네임드 · /보스 — 경찰도 이용 가능)
+    _ach("p_fight_5",      "기초", "거리의 소탕꾼",       "/전투 5회 승리",                         lambda s, i: s["fight_wins"],            5),
+    _ach("p_named_1",      "숙련", "악명 높은 자를 쓰러뜨리다", "/네임드 1회 처치",                lambda s, i: s["named_kills"],           1),
+    _ach("p_boss_1",       "심화", "재앙을 막아선 경찰",   "/보스 1회 처치",                         lambda s, i: s["boss_kills"],            1,    hide="name"),
 ]
 for _a in _police_ach:
     _a["role"] = "police"
@@ -3547,6 +3551,7 @@ class NPCBattleView(GuardedView):
                 ach_stats["boss_kills"] += 1
             if self.npc_info["name"].startswith(ELITE_PREFIX):
                 ach_stats["elite_boss_kills"] += 1
+            codex_record_win(daily_blob, self.npc_info["name"], mat_drops)   # /도감 기록
             after_info = {
                 **user_data, "money": new_money, "honor": new_honor,
                 "inventory": update_payload.get("inventory", user_data.get("inventory"))
@@ -3656,7 +3661,7 @@ class NPCBattleView(GuardedView):
         if self.user.id in npc_cooldowns:
             del npc_cooldowns[self.user.id]
 
-@bot.tree.command(name="전투", description="[조직원 전용] NPC 이름을 직접 입력하여 1:1 턴제 전투를 시작합니다.")
+@bot.tree.command(name="전투", description="[조직원·경찰] NPC 이름을 직접 입력하여 1:1 턴제 전투를 시작합니다.")
 @app_commands.describe(npc_name="전투를 벌일 NPC 이름 (예: 골목길 깡패, 조직의 배신자)")
 async def fight_npc(interaction: discord.Interaction, npc_name: str):
     if not await check_maintenance(interaction): return
@@ -3695,8 +3700,8 @@ async def fight_npc(interaction: discord.Interaction, npc_name: str):
     view.message = msg
 
 
-# === [조직원 전용] `/보스` 명령어 ===
-@bot.tree.command(name="보스", description="[조직원 전용] 전투 후 등장한 최강의 보스와 목숨을 건 결전을 시작합니다.")
+# === [조직원·경찰] `/보스` 명령어 ===
+@bot.tree.command(name="보스", description="[조직원·경찰] 전투 후 등장한 최강의 보스와 목숨을 건 결전을 시작합니다.")
 async def fight_boss(interaction: discord.Interaction):
     if not await check_maintenance(interaction): return
     if not await check_membership(interaction): return
@@ -3765,8 +3770,8 @@ async def fight_boss(interaction: discord.Interaction):
         npc_cooldowns.pop(user.id, None)   # 보스는 그대로 남아 있음
         await interaction.followup.send("보스전을 시작하는 중 오류가 발생했습니다. 보스는 그대로 남아 있으니 다시 시도해주세요.", ephemeral=True)
 
-# === [조직원 전용] `/네임드` 명령어 ===
-@bot.tree.command(name="네임드", description="[조직원 전용] 강화된 네임드 몬스터에 도전합니다. (명예 조건 / 고유 전리품)")
+# === [조직원·경찰] `/네임드` 명령어 ===
+@bot.tree.command(name="네임드", description="[조직원·경찰] 강화된 네임드 몬스터에 도전합니다. (명예 조건 / 고유 전리품)")
 @app_commands.describe(monster="도전할 네임드 몬스터")
 @app_commands.choices(monster=[
     app_commands.Choice(name=f"{m['name']} (명예 {m['min_honor']:,}+)", value=k) for k, m in NAMED_MONSTERS.items()
@@ -10855,12 +10860,14 @@ async def info_command(interaction: discord.Interaction, keyword: str):
                     f"  - **필살 일격:** 대미지 x{SKILL_FINISHER_MULT}, {SKILL_FINISHER_MIN_TURN}턴째부터 전투당 1회\n"
                     f"  - 스킬이 생긴 만큼 NPC·보스 체력도 늘어나 있어서, 스킬을 잘 써야 기존과 같은 난이도입니다. `/결투`에서도 같은 스킬을 씁니다.\n"
                     "• **쿨타임:** 없음 (전투가 끝나면 바로 다음 전투를 시작할 수 있습니다)\n"
+                    "• **참여:** 조직원과 경찰 모두 이용할 수 있습니다. 경찰도 자금·명예·재료를 얻고, 경찰 전용 업적이 쌓입니다.\n"
                     f"• **히든 이벤트:** 전투 승리 시 낮은 확률로 보스가 서버에 출현합니다! ({boss_chance_text()} / 한 번에 한 마리)",
         },
         "보스": {
             "title": "시스템: /보스 (히든 보스 토벌)",
             "desc": "전투 후 살기가 감지되었을 때 출현하는 최종 히든 보스전입니다.\n"
                     f"• **출현 조건:** 일반 `/전투` 승리 시 보스마다 각각 확률로 경보가 발생해야 입장 가능합니다. ({boss_chance_text()})\n"
+                    "• **참여:** 조직원과 경찰 모두 도전할 수 있습니다.\n"
                     "• **보스는 누군가 처치할 때까지 서버에 남습니다.** 도전에 실패해도 사라지지 않으며, 도전할 때마다 보스 체력은 가득 찬 상태로 시작합니다. 보스전은 한 번에 한 명만 도전할 수 있습니다.\n"
                     f"• **보상:** 격퇴 성공 시 막대한 자금과 명예, 제작 재료를 획득!\n{boss_reward_text()}\n"
                     "• **강화 보스:** 보스마다 0.3% 확률로 훨씬 강한 강화판이 출현합니다. 체력·공격력·방어력이 매우 높고 격노하지만, "
@@ -11146,6 +11153,258 @@ def build_stats_embed(target: discord.abc.User, data: dict) -> discord.Embed:
     return embed
 
 
+# ==========================================================================
+# [도감] /도감 — 만난 NPC·네임드·보스·제작 재료를 기록하고 확인합니다.
+#   • /전투 · /네임드 · /보스 에서 승리하면 그 대상이 도감에 등록됩니다. (조직원·경찰 공통)
+#   • 등록 전에는 이름이 '???' 로 가려지고, 등록하면 능력치·보상·재료 드랍 같은 정보가 열립니다.
+#   • 기록은 칭호 블롭의 blob["codex"] = {"kills": {대상 이름: 처치 횟수}, "mats": [얻은 재료 이름]} 에 저장됩니다.
+#   • 이미 가지고 있는 고유 전리품·재료는 처음 열 때 자동으로 등록된 것으로 취급합니다. (예전 기록 보정)
+# ==========================================================================
+CODEX_CATEGORIES = [
+    ("npc",   "일반 NPC"),
+    ("named", "네임드"),
+    ("boss",  "보스"),
+    ("elite", "강화 보스"),
+    ("mat",   "제작 재료"),
+]
+CODEX_LABELS = dict(CODEX_CATEGORIES)
+
+
+def codex_record_win(blob: dict, name: str, mat_drops: dict = None):
+    """전투 승리를 도감에 기록합니다. (blob 만 수정하므로 호출한 쪽에서 DB 에 저장해야 합니다)"""
+    codex = dict(blob.get("codex") or {})
+    kills = dict(codex.get("kills") or {})
+    kills[name] = int(kills.get(name, 0) or 0) + 1
+    mats = list(codex.get("mats") or [])
+    for m in (mat_drops or {}):
+        if m not in mats:
+            mats.append(m)
+    codex["kills"] = kills
+    codex["mats"] = mats
+    blob["codex"] = codex
+
+
+def codex_entries(cat: str) -> list:
+    if cat == "npc":
+        return list(NPC_DATA.values())
+    if cat == "named":
+        return list(NAMED_MONSTERS.values())
+    if cat == "boss":
+        return [k["data"] for k in BOSS_KINDS.values() if not k["data"]["name"].startswith(ELITE_PREFIX)]
+    if cat == "elite":
+        return [k["data"] for k in BOSS_KINDS.values() if k["data"]["name"].startswith(ELITE_PREFIX)]
+    if cat == "mat":
+        return [{"name": m} for m in MATERIAL_SOURCES]
+    return []
+
+
+def codex_state(user_info: dict) -> dict:
+    """도감 기록 + 지금 가진 물건으로 보정한 등록 상태"""
+    blob = get_title_blob(user_info)
+    raw = blob.get("codex") if isinstance(blob.get("codex"), dict) else {}
+    kills = {str(k): int(v or 0) for k, v in (raw.get("kills") or {}).items()}
+    mats = set(raw.get("mats") or [])
+    inv = user_info.get("inventory") or {}
+    for mon in list(NAMED_MONSTERS.values()) + [k["data"] for k in BOSS_KINDS.values()]:
+        drop = mon.get("drop")
+        if drop and inv.get(drop) and kills.get(mon["name"], 0) <= 0:
+            kills[mon["name"]] = 1   # 전리품을 가지고 있다 = 처치한 적 있음
+    for m in MATERIAL_SOURCES:
+        if (inv.get(m) or 0) > 0:
+            mats.add(m)
+    return {"kills": kills, "mats": mats, "inv": inv}
+
+
+def _codex_found(cat: str, entry: dict, st: dict) -> bool:
+    if cat == "mat":
+        return entry["name"] in st["mats"]
+    return st["kills"].get(entry["name"], 0) > 0
+
+
+def _codex_counts(cat: str, st: dict):
+    ents = codex_entries(cat)
+    return sum(1 for e in ents if _codex_found(cat, e, st)), len(ents)
+
+
+def _codex_hint(cat: str, e: dict) -> str:
+    if cat == "named":
+        return f"명예 {e['min_honor']:,}pt 이상이면 /네임드 로 도전할 수 있습니다."
+    if cat == "boss":
+        return "/전투 승리 시 낮은 확률로 출현하는 보스입니다."
+    if cat == "elite":
+        return "보스가 출현할 때 극히 낮은 확률로 나타나는 강화판입니다."
+    if cat == "mat":
+        return "아직 입수한 적 없는 재료입니다."
+    return "/전투 로 만날 수 있는 NPC입니다."
+
+
+def codex_list_embed(cat: str, st: dict) -> discord.Embed:
+    ents = codex_entries(cat)
+    found, total = _codex_counts(cat, st)
+    lines = []
+    for e in ents:
+        if _codex_found(cat, e, st):
+            if cat == "mat":
+                lines.append(f"**[등록]** {_mat_short(e['name'])} (보유 {int(st['inv'].get(e['name'], 0) or 0):,}개)")
+            else:
+                lines.append(f"**[등록]** {e['name']} — 처치 {st['kills'].get(e['name'], 0):,}회")
+        else:
+            lines.append(f"[미발견] ??? — {_codex_hint(cat, e)}")
+    all_found = all_total = 0
+    for key, _ in CODEX_CATEGORIES:
+        f, t = _codex_counts(key, st)
+        all_found += f
+        all_total += t
+    embed = discord.Embed(
+        title=f"[도감] {CODEX_LABELS[cat]} ({found}/{total})",
+        description=f"`{_bar(found, total, 12)}` **{found}/{total}**\n\n" + "\n".join(lines),
+        color=discord.Color.dark_gold() if found < total else discord.Color.gold()
+    )
+    embed.set_footer(text=f"전체 도감 {all_found}/{all_total} · 아래 메뉴에서 항목을 골라 자세히 볼 수 있습니다.")
+    return embed
+
+
+def codex_detail_embed(cat: str, e: dict, st: dict) -> discord.Embed:
+    name = e["name"]
+    if cat == "mat":
+        embed = discord.Embed(title=f"[도감] {_mat_short(name)}",
+                              description="전투·레이드에서 얻어 `/제작` 에 쓰는 제작 재료입니다.",
+                              color=discord.Color.dark_teal())
+        embed.add_field(name="획득처", value=MATERIAL_SOURCES.get(name, "알 수 없음"), inline=False)
+        embed.add_field(name="보유 수량", value=f"{int(st['inv'].get(name, 0) or 0):,}개", inline=True)
+        uses = [r["name"] for r in CRAFT_RECIPES if name in r["mats"]]
+        if uses:
+            embed.add_field(name="쓰이는 제작 장비", value="\n".join(f"• {u}" for u in uses)[:1000], inline=False)
+        return embed
+
+    kills = st["kills"].get(name, 0)
+    embed = discord.Embed(title=f"[도감] {name}", description=f"*{e.get('desc', '')}*",
+                          color=discord.Color.dark_purple() if cat in ("boss", "elite") else discord.Color.dark_gold())
+    max_turns = e.get("max_turns", 12) if cat == "named" else (15 if cat in ("boss", "elite") else 10)
+    embed.add_field(
+        name="능력치",
+        value=f"체력 {int(e['hp'] * PVE_HP_SCALE):,} · 공격력 {e['atk']:,} · 방어력 {e['def']:,}\n제한 {max_turns}턴",
+        inline=False)
+    lo, hi = e["reward_money"]
+    embed.add_field(name="처치 보상", value=f"${lo:,} ~ ${hi:,} / 명예 +{e['reward_honor']}pt", inline=False)
+    if e.get("enrage"):
+        embed.add_field(name="특징", value=f"체력이 절반 아래로 떨어지면 격노합니다. (공격력 +{int((e['enrage'] - 1) * 100)}%)", inline=False)
+    drops = MATERIAL_DROPS.get(name, [])
+    if drops:
+        dl = []
+        for m, ch, (dlo, dhi) in drops:
+            qty = f"x{dlo}" if dlo == dhi else f"x{dlo}~{dhi}"
+            dl.append(f"• {_mat_short(m)} {qty} ({int(round(ch * 100))}%)")
+        embed.add_field(name="제작 재료 드랍", value="\n".join(dl)[:1000], inline=False)
+    if e.get("drop"):
+        have = "보유 중" if st["inv"].get(e["drop"]) else "미보유"
+        embed.add_field(name="고유 전리품", value=f"{e['drop']} ({have})", inline=False)
+    if cat == "named":
+        embed.add_field(name="도전 조건", value=f"명예 {e['min_honor']:,}pt 이상", inline=False)
+    if cat in ("boss", "elite"):
+        kind = next((k for k, v in BOSS_KINDS.items() if v["data"]["name"] == name), None)
+        chance = dict(BOSS_SPAWN_TABLE).get(kind)
+        if chance:
+            embed.add_field(name="출현", value=f"/전투 승리 시 약 {chance * 100:g}% 확률로 출현", inline=False)
+    embed.set_footer(text=f"내 처치 기록: {kills:,}회")
+    return embed
+
+
+class CodexView(discord.ui.View):
+    def __init__(self, owner: discord.abc.User, st: dict, cat: str = "npc"):
+        super().__init__(timeout=180)
+        self.owner = owner
+        self.st = st
+        self.cat = cat if cat in CODEX_LABELS else "npc"
+        self.interaction = None   # 시간이 지나면 이 메시지의 메뉴를 거두기 위해 보관
+        self._build()
+
+    def _build(self):
+        self.clear_items()
+
+        cat_select = discord.ui.Select(
+            placeholder="도감 분류 선택",
+            options=[
+                discord.SelectOption(label=f"{label} ({_codex_counts(key, self.st)[0]}/{_codex_counts(key, self.st)[1]})",
+                                     value=key, default=(key == self.cat))
+                for key, label in CODEX_CATEGORIES
+            ],
+            row=0,
+        )
+
+        async def on_cat(interaction: discord.Interaction):
+            self.cat = cat_select.values[0]
+            self._build()
+            await interaction.response.edit_message(embed=codex_list_embed(self.cat, self.st), view=self)
+        cat_select.callback = on_cat
+        self.add_item(cat_select)
+
+        ents = codex_entries(self.cat)
+        detail_select = discord.ui.Select(
+            placeholder="항목을 골라 자세히 보기",
+            options=[
+                discord.SelectOption(
+                    label=((_mat_short(e["name"]) if self.cat == "mat" else e["name"]) if _codex_found(self.cat, e, self.st) else "???")[:100],
+                    value=str(i))
+                for i, e in enumerate(ents)
+            ][:25],
+            row=1,
+        )
+
+        async def on_detail(interaction: discord.Interaction):
+            e = ents[int(detail_select.values[0])]
+            if not _codex_found(self.cat, e, self.st):
+                await interaction.response.send_message("아직 만나지 못한 항목입니다. 전투에서 승리하면 도감에 등록됩니다.", ephemeral=True)
+                return
+            await interaction.response.edit_message(embed=codex_detail_embed(self.cat, e, self.st), view=self)
+        detail_select.callback = on_detail
+        self.add_item(detail_select)
+
+        back = discord.ui.Button(label="목록으로", style=discord.ButtonStyle.secondary, row=2)
+
+        async def on_back(interaction: discord.Interaction):
+            await interaction.response.edit_message(embed=codex_list_embed(self.cat, self.st), view=self)
+        back.callback = on_back
+        self.add_item(back)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner.id:
+            await interaction.response.send_message("본인의 도감 창만 조작할 수 있습니다. `/도감` 으로 직접 열어 보세요.", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        if self.interaction is not None:
+            try:
+                await self.interaction.edit_original_response(view=None)
+            except Exception:
+                pass
+
+
+@bot.tree.command(name="도감", description="[공용] 지금까지 만난 NPC·네임드·보스·제작 재료를 도감으로 확인합니다.")
+@app_commands.describe(분류="처음에 열 도감 분류 (비우면 일반 NPC)")
+@app_commands.choices(분류=[app_commands.Choice(name=label, value=key) for key, label in CODEX_CATEGORIES])
+async def codex_command(interaction: discord.Interaction, 분류: app_commands.Choice[str] = None):
+    if not await check_maintenance(interaction): return
+    if not await check_membership(interaction): return
+    if await check_jail(interaction): return
+
+    await interaction.response.defer(ephemeral=True)
+    try:
+        info = await asyncio.to_thread(get_user_data, interaction.user.id)
+        st = codex_state(info)
+    except Exception as e:
+        await report_error("/도감", e, interaction)
+        await interaction.followup.send("도감을 불러오는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.", ephemeral=True)
+        return
+
+    cat = 분류.value if 분류 else "npc"
+    view = CodexView(interaction.user, st, cat)
+    view.interaction = interaction
+    await interaction.followup.send(embed=codex_list_embed(view.cat, st), view=view, ephemeral=True)
+
+
+
 @bot.tree.command(name="능력치", description="[공용] 본인 또는 다른 유저의 전투 능력치(체력·공격력·방어력)와 구성을 확인합니다.")
 @app_commands.describe(member="조회할 유저 (비우면 본인)")
 async def stats_command(interaction: discord.Interaction, member: discord.Member = None):
@@ -11182,8 +11441,8 @@ HELP_CATEGORIES = [
      ["아르바이트", "봉사", "기부", "소매치기"]),
     ("mafia",   "마피아 활동",          "비밀 임무 수행, 경찰 매수, 탈옥 등 조직원의 범죄 활동입니다.",
      ["임무", "밀수", "탈옥"]),
-    ("battle",  "전투 · 능력치",        "NPC·네임드·보스 토벌과 결투, 전투 능력치 확인입니다.",
-     ["능력치", "전투", "네임드", "보스", "결투"]),
+    ("battle",  "전투 · 능력치",        "NPC·네임드·보스 토벌과 결투, 전투 능력치와 도감 확인입니다.",
+     ["능력치", "전투", "네임드", "보스", "도감", "결투"]),
     ("casino",  "카지노",               "자금을 걸고 즐기는 도박입니다. (`/도박 규칙` 에서 배당표 확인)",
      ["도박"]),
     ("police",  "경찰",                 "경찰 소속 전용 명령어입니다.",
@@ -11244,7 +11503,8 @@ def help_overview_embed(pages: list) -> discord.Embed:
         value=("`/가입` 으로 조직원 또는 경찰이 되세요.\n"
                "조직원은 `/임무` · `/전투` 로 자금과 명예를 모으고, `/무기상점` · `/암시장` · `/제작` 으로 장비를 갖춥니다.\n"
                f"명예 {FAMILY_CREATE_MIN_HONOR}pt 이상이면 `/조직 생성` 으로 조직을 만들어 `/레이드` 와 `/구역` 에 도전할 수 있습니다.\n"
-               f"경찰은 `/순찰` · `/검거` 로 활동하고, 명예 {POLICE_UNIT_CREATE_MIN_HONOR}pt 이상이면 `/수사팀 생성` 으로 수사팀을 만들어 `/수사팀 작전` 에 도전할 수 있습니다."),
+               f"경찰은 `/순찰` · `/검거` 로 활동하고, 명예 {POLICE_UNIT_CREATE_MIN_HONOR}pt 이상이면 `/수사팀 생성` 으로 수사팀을 만들어 `/수사팀 작전` 에 도전할 수 있습니다.\n"
+               "경찰도 `/전투` · `/네임드` · `/보스` 로 NPC와 보스를 토벌할 수 있고, `/도감` 에서 만난 몬스터를 확인할 수 있습니다."),
         inline=False
     )
     embed.set_footer(text="수감 중에는 일부 명령어를 쓸 수 없습니다. (수감자는 /탈옥 으로 탈출을 시도할 수 있어요)")
