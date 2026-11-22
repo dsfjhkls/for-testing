@@ -4599,10 +4599,16 @@ async def corrupt_report_command(interaction: discord.Interaction, member: disco
         await interaction.response.send_message(f"{member.mention} 님에게는 최근 {CORRUPT_REPORT_WINDOW_SEC // 60}분 안의 비위 증거가 없습니다. (허위 신고)", ephemeral=True)
         return
 
+    # 같은 비위를 두 사람이 동시에 신고해도 처벌·보상이 두 번 나가지 않도록,
+    # 첫 await 가 오기 전(= 다른 신고가 끼어들 수 없는 지점)에 증거를 먼저 확보해 둔다.
+    claimed = corrupt_misdeeds.pop(member.id, None)
+
     corrupt_report_cooldowns[user.id] = time.time() + CORRUPT_REPORT_COOLDOWN_SEC
     await interaction.response.defer()
     sure = is_police or user.id in victims   # 경찰이거나 직접 피해를 본 시민은 확실히 인정
     if not sure and random.random() >= CORRUPT_REPORT_CITIZEN_CHANCE:
+        if claimed is not None:
+            corrupt_misdeeds.setdefault(member.id, claimed)   # 처벌이 안 났으니 증거는 돌려놓음 (그 사이 새 비위가 생겼다면 새 것을 유지)
         await interaction.followup.send(embed=discord.Embed(
             title="[감찰 신고] 증거 불충분",
             description=f"**{user.mention}** 님의 신고가 접수됐지만 증거가 부족해 **{member.mention}** 님은 처벌받지 않았습니다.",
@@ -4620,10 +4626,12 @@ async def corrupt_report_command(interaction: discord.Interaction, member: disco
             reward = f"사례금 `${money:,}` / 성향 `+{karma}`"
     except Exception as e:
         corrupt_report_cooldowns.pop(user.id, None)
+        if claimed is not None:
+            corrupt_misdeeds.setdefault(member.id, claimed)   # 실패했으니 다시 신고할 수 있게 증거를 돌려놓음
         await report_error("/부패신고", e, interaction)
         await interaction.followup.send("데이터베이스 오류로 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.", ephemeral=True)
         return
-    corrupt_misdeeds.pop(member.id, None)   # 같은 비위로 중복 처벌 방지
+    # (같은 비위로 중복 처벌되지 않도록 증거는 위에서 이미 꺼내 두었음)
     jail_list[member.id] = datetime.now() + timedelta(seconds=CORRUPT_REPORT_JAIL_SEC)
     wanted_list.pop(member.id, None)
     save_status(member.id)
