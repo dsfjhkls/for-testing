@@ -3364,7 +3364,20 @@ async def hidden_summon(ctx: commands.Context):
         await ctx.send(**kwargs)
     except Exception as e:   # 공지를 못 보냈다면 보스도 취소해서 '조용한 보스'가 생기지 않게 함
         print(f"[비밀 보스 공지 실패 → 소환 취소] {type(e).__name__}: {e}")
-        await _hidden_dm(author, f"[!{HIDDEN_SUMMON_COMMAND}] 보스 공지를 보내지 못해 소환을 취소했습니다. 봇에게 이 채널의 '메시지 보내기 / 링크 첨부(임베드)' 권한이 있는지 확인해 주세요. ({type(e).__name__})")
+        try:   # 원인을 짐작하지 않도록, 봇이 이 채널에서 '실제로' 가진 권한을 알려줌
+            _p = ctx.channel.permissions_for(guild.me)
+            _perm = " / ".join(f"{n} {'O' if getattr(_p, a, False) else 'X'}" for n, a in [
+                ("채널보기", "view_channel"), ("메시지보내기", "send_messages"), ("링크임베드", "embed_links"),
+                ("파일첨부", "attach_files"), ("메시지관리", "manage_messages"), ("스레드에서보내기", "send_messages_in_threads")])
+            _where = f"{type(ctx.channel).__name__} #{getattr(ctx.channel, 'name', '?')} (id {ctx.channel.id})"
+        except Exception:
+            _perm, _where = "확인 실패", "확인 실패"
+        print(f"[비밀 보스 공지 실패 상세] 채널={_where} / 봇 권한: {_perm} / 오류: {e}")
+        await _hidden_dm(author, f"[!{HIDDEN_SUMMON_COMMAND}] 보스 공지를 보내지 못해 소환을 취소했습니다.\n"
+                                 f"• 오류: `{type(e).__name__}: {str(e)[:200]}`\n"
+                                 f"• 채널: {_where}\n"
+                                 f"• 봇이 이 채널에서 가진 권한: {_perm}\n"
+                                 f"(X 로 표시된 항목이 막혀 있는 것입니다. 모두 O 인데도 실패하면 위 오류 코드를 알려주세요.)")
         if active_boss_guilds.get(guild.id) == HIDDEN_SUMMON_KIND:
             set_active_boss(guild.id, None)
         _hidden_summon_until.pop(guild.id, None)
