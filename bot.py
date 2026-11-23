@@ -3300,16 +3300,24 @@ def boss_reward_text() -> str:
     )
 
 # ==========================================================================
-# [비밀 명령어] !hidden  —  비밀 보스 소환
+# [비밀 명령어] !히든  —  비밀 보스 소환
 #   • 슬래시(/) 명령어가 아니라 '!' 접두사 명령어라서, 디스코드의 명령어 목록·자동완성에 나타나지 않습니다.
 #   • 입력한 메시지는 바로 지워서 다른 사람이 보지 못하게 합니다. → 봇에게 '메시지 관리' 권한을 주세요. (권한이 없으면 지우지 못하고 그냥 둡니다)
-#   • 조건을 못 맞춘 일반 유저에게는 아무 반응도 하지 않습니다. (명령어가 있다는 것도 들키지 않게) 서버 관리자에게만 이유를 알려줍니다.
+#   • 채널에는 성공했을 때의 보스 공지 외에 아무것도 띄우지 않습니다. 실패하면 이유를 '개인 DM'으로만 알려줍니다. (DM 을 막아 둔 유저는 못 받음 → 콘솔 로그에는 남음)
 #   • 소환하면 그 서버에 비밀 보스가 출현하고, 평소처럼 `/보스` 로 도전합니다. 처치되면 사라집니다.
 # ==========================================================================
-HIDDEN_SUMMON_COMMAND = "hidden"       # 바꾸려면 여기 (예: "열려라참깨")
+HIDDEN_SUMMON_COMMAND = "히든"         # 바꾸려면 여기 (예: "열려라참깨")  →  디스코드에서는 !히든 으로 입력
+HIDDEN_SUMMON_DELETE_MESSAGE = True    # True: 입력한 메시지를 바로 지움(비밀 유지) / False: 지우지 않음
 HIDDEN_SUMMON_KIND = "secret"          # 소환할 보스 (BOSS_KINDS 의 키)
 HIDDEN_SUMMON_COOLDOWN_SEC = 3600      # 서버 전체 재소환 대기시간(초). 보상이 크니 너무 짧게 하지 마세요.
 _hidden_summon_until = {}              # {서버ID: 다시 소환할 수 있는 시각 (time.time() 기준)}
+
+async def _hidden_dm(user, text: str):
+    """결과를 본인에게만 DM 으로 알린다 (DM 을 막아 둔 경우는 조용히 넘어감)."""
+    try:
+        await user.send(text)
+    except Exception:
+        pass
 
 @bot.command(name=HIDDEN_SUMMON_COMMAND, hidden=True)
 @commands.guild_only()
@@ -3335,14 +3343,14 @@ async def hidden_summon(ctx: commands.Context):
         _hidden_summon_until[guild.id] = now + HIDDEN_SUMMON_COOLDOWN_SEC
         set_active_boss(guild.id, HIDDEN_SUMMON_KIND)
 
-    try:   # 입력한 명령어는 성공/실패와 관계없이 지움 (비밀 유지)
-        await ctx.message.delete()
-    except Exception:
-        pass
+    if HIDDEN_SUMMON_DELETE_MESSAGE:
+        try:   # 입력한 명령어는 성공/실패와 관계없이 지움 (비밀 유지)
+            await ctx.message.delete()
+        except Exception:
+            pass
     if problem:
         print(f"[!{HIDDEN_SUMMON_COMMAND} 거절] guild={guild.id} user={author.id}: {problem}")
-        if is_admin:
-            await ctx.send(f"[!{HIDDEN_SUMMON_COMMAND}] {problem}", delete_after=10)   # 관리자에게만 이유를 알려줌
+        await _hidden_dm(author, f"[!{HIDDEN_SUMMON_COMMAND}] 소환하지 못했습니다: {problem}")   # 채널에는 아무것도 띄우지 않고 개인 DM 으로만 알림
         return
 
     kind = BOSS_KINDS[HIDDEN_SUMMON_KIND]
@@ -3356,6 +3364,7 @@ async def hidden_summon(ctx: commands.Context):
         await ctx.send(**kwargs)
     except Exception as e:   # 공지를 못 보냈다면 보스도 취소해서 '조용한 보스'가 생기지 않게 함
         print(f"[비밀 보스 공지 실패 → 소환 취소] {type(e).__name__}: {e}")
+        await _hidden_dm(author, f"[!{HIDDEN_SUMMON_COMMAND}] 보스 공지를 보내지 못해 소환을 취소했습니다. 봇에게 이 채널의 '메시지 보내기 / 링크 첨부(임베드)' 권한이 있는지 확인해 주세요. ({type(e).__name__})")
         if active_boss_guilds.get(guild.id) == HIDDEN_SUMMON_KIND:
             set_active_boss(guild.id, None)
         _hidden_summon_until.pop(guild.id, None)
