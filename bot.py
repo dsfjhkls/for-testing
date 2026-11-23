@@ -1227,7 +1227,7 @@ def get_title_blob(user_info: dict) -> dict:
     for key in ("success", "fail", "streak", "best_streak", "hard_success",
                 "gamble_played", "gamble_won", "gamble_wagered", "gamble_net", "jackpot", "broke",
                 "attendance", "weekly_clears",
-                "parttime_total", "service_total", "donated_total", "pickpocket_ok", "pickpocket_fail",   # ← 성향·전직용
+                "parttime_total", "parttime_mafia", "service_total", "donated_total", "pickpocket_ok", "pickpocket_fail",   # ← 성향·전직용
                 "corrupt_arrests", "extortions",                                                       # ← 부패 경찰용
                 "fight_wins", "named_kills", "boss_kills", "elite_boss_kills",            # ← 업적용 카운터
                 "duel_wins", "raid_clears", "raid_king_clears", "war_wins", "war_conquests",
@@ -1385,6 +1385,7 @@ ACHIEVEMENTS = [
     _ach("a_raid_king",  "심화", "지하의 왕을 끌어내린 자", "'칼렌데 지하 황제' 레이드 클리어",   lambda s, i: s["raid_king_clears"],     1,        hide="name"),
     _ach("a_duel_50",    "심화", "결투장의 지배자",      "결투 50회 승리",                    lambda s, i: s["duel_wins"],            50,       hide="full"),
     _ach("a_war_conq_5", "심화", "도시의 새 주인",       "구역 점령전에서 구역을 5회 빼앗음", lambda s, i: s["war_conquests"],        5,        hide="full"),
+    _ach("a_parttime_mafia", "심화", "현생을 깨우친 자", "조직원인 상태에서 아르바이트 100회", lambda s, i: s["parttime_mafia"],       100,      hide="name"),   # 히든: 조건은 달성 전까지 ???
 ]
 # ── 경찰 업적 (role="police": 경찰에게만 보임) ──
 #   검거·순찰·심문·수사팀 작전·월급 평가를 센 카운터를 씁니다. (police_ach_bump 가 올림)
@@ -4372,9 +4373,12 @@ async def part_time_job(interaction: discord.Interaction):
     try:
         daily_blob = get_title_blob(user_stats)
         daily_blob["stats"]["parttime_total"] += 1                      # 전직 조건용 누적 횟수
+        if _is_mafia(user):
+            daily_blob["stats"]["parttime_mafia"] += 1                  # 조직원 상태에서 한 아르바이트 횟수 (히든 업적용)
         if _is_citizen(user):
             karma_change(daily_blob, PARTTIME_KARMA)                    # 성실한 노동은 선한 활동
         daily_msg = daily_record(daily_blob, "parttime", user_stats)
+        daily_msg += format_new_titles(evaluate_new_titles(daily_blob, user_stats))   # 업적 달성 판정·알림 (히든 업적 포함)
         save_title_blob(user.id, daily_blob)
     except Exception as e:
         print(f"DB Error (parttime daily quest): {e}")
