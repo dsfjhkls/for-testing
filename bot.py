@@ -382,7 +382,7 @@ intents.message_content = True
 intents.guilds = True
 intents.members = True
 
-bot = commands.Bot(command_prefix='!', intents=intents, tree_cls=GuardedTree)
+bot = commands.Bot(command_prefix='!', intents=intents, tree_cls=GuardedTree, help_command=None)   # 기본 !help 는 비밀 명령어를 드러낼 수 있어 끔
 
 @bot.listen("on_app_command_completion")
 async def _release_command_lock(interaction: discord.Interaction, command):
@@ -914,6 +914,11 @@ def compute_combat_stats(honor: int, inventory: dict) -> dict:
             def_val += it.get("def_bonus", 0)
             hp += it.get("hp_bonus", 0)
     for tname, (ta, th, td) in ELITE_TROPHY_STATS.items():   # 강화 보스 전리품
+        if tname in inventory:
+            atk += ta
+            hp += th
+            def_val += td
+    for tname, (ta, th, td) in SECRET_TROPHY_STATS.items():   # 비밀 보스 전리품
         if tname in inventory:
             atk += ta
             hp += th
@@ -3124,6 +3129,27 @@ ELITE_ULTIMATE_BOSS = {**ULTIMATE_BOSS,
     "drop": "[강화보스 전리품] 종말의 심판 인장",
     "desc": "태초의 파괴자가 마침내 세계의 종말을 선고했습니다. 체력이 절반 아래로 떨어지면 격노합니다. 15턴 안에 쓰러뜨리지 못하면 모든 것이 사라집니다."}
 
+# === 비밀 보스: !hidden 으로만 소환됩니다 (랜덤 출현 없음 · /도감과 보상 안내에도 표시되지 않음) ===
+#   • 수치만 바꾸면 난이도·보상이 조절됩니다. 강화 보스 중 가장 센 '종말을 선고하는 태초의 파괴자'(체력 24만 / 공격력 9,000)보다 더 어렵게 잡아 두었습니다.
+#   • 그림을 쓰려면 assets 폴더에 파일을 넣고 "image" 에 이름을 적으세요. (얼굴만 쓰려면 "image_crop": (왼쪽, 위, 오른쪽, 아래) 비율도 추가)
+#   • 이름을 바꿀 때는 아래 BOSS_KINDS["secret"] 의 title / spawn_msg 도 같이 바꾸세요.
+SECRET_BOSS = {
+    "image": None,
+    "name": "[금단보스] 이름 없는 문지기",
+    "hp": 320000,
+    "atk": 11500,
+    "def": 1700,
+    "enrage": 1.6,   # 체력이 절반 아래가 되면 공격력 ×1.6
+    "reward_money": inc_range((220000, 420000)),
+    "reward_honor": 1500,
+    "drop": "[금단 전리품] 문지기의 열쇠",
+    "desc": "이름도 얼굴도 알려지지 않은 채 지하 세계의 가장 깊은 문을 지켜 온 존재입니다. 체력이 절반 아래로 떨어지면 격노합니다. 15턴 안에 쓰러뜨리지 못하면 제압당합니다.",
+}
+# 비밀 보스 전리품: 가지고만 있어도 능력치가 오릅니다 {이름: (공격력, 체력, 방어력)}  (강화 보스 전리품 업적에는 영향 없도록 따로 관리)
+SECRET_TROPHY_STATS = {
+    "[금단 전리품] 문지기의 열쇠": (500, 7500, 120),
+}
+
 # === 보스 종류 표 (출현 판정 · 출현 공지 · /보스 전투가 모두 이 표를 사용합니다) ===
 #   보스를 더 추가하려면: 보스 데이터를 만들고 → 여기에 한 줄 추가 → BOSS_SPAWN_TABLE 에 확률 한 줄 추가
 BOSS_KINDS = {
@@ -3191,6 +3217,15 @@ BOSS_KINDS["ultimate_x"] = {
     "spawn_msg": ("**[종말 경보]** \n"
                   "하늘이 갈라지고 시간이 멈췄습니다! 태초의 파괴자가 세계의 종말을 선고했습니다!\n"
                   "**[강화보스] 종말을 선고하는 태초의 파괴자**가 강림했습니다! 극도로 위험합니다! (`/보스` 명령어로 토벌 가능)"),
+}
+BOSS_KINDS["secret"] = {
+    "data": SECRET_BOSS,
+    "title": "[금단보스] 이름 없는 문지기 토벌전",
+    "color": discord.Color.from_rgb(20, 20, 20),
+    "secret": True,   # 도감·보상 안내·랜덤 출현에서 제외
+    "spawn_msg": ("**[???]** \n"
+                  "금지된 이름이 불리자 지하 깊은 곳의 문이 열렸습니다...\n"
+                  "**[금단보스] 이름 없는 문지기**가 모습을 드러냈습니다! 극도로 위험합니다! (`/보스` 명령어로 토벌 가능)"),
 }
 BOSS_NAMES = tuple(k["data"]["name"] for k in BOSS_KINDS.values())
 
@@ -3261,8 +3296,85 @@ def boss_chance_text() -> str:
 def boss_reward_text() -> str:
     return "\n".join(
         f"  └ {boss_short_name(k['data'])}: ${k['data']['reward_money'][0]:,}~${k['data']['reward_money'][1]:,} / 명예 +{k['data']['reward_honor']}pt"
-        for k in BOSS_KINDS.values()
+        for k in BOSS_KINDS.values() if not k.get("secret")
     )
+
+# ==========================================================================
+# [비밀 명령어] !hidden  —  비밀 보스 소환
+#   • 슬래시(/) 명령어가 아니라 '!' 접두사 명령어라서, 디스코드의 명령어 목록·자동완성에 나타나지 않습니다.
+#   • 입력한 메시지는 바로 지워서 다른 사람이 보지 못하게 합니다. → 봇에게 '메시지 관리' 권한을 주세요. (권한이 없으면 지우지 못하고 그냥 둡니다)
+#   • 조건을 못 맞춘 일반 유저에게는 아무 반응도 하지 않습니다. (명령어가 있다는 것도 들키지 않게) 서버 관리자에게만 이유를 알려줍니다.
+#   • 소환하면 그 서버에 비밀 보스가 출현하고, 평소처럼 `/보스` 로 도전합니다. 처치되면 사라집니다.
+# ==========================================================================
+HIDDEN_SUMMON_COMMAND = "hidden"       # 바꾸려면 여기 (예: "열려라참깨")
+HIDDEN_SUMMON_KIND = "secret"          # 소환할 보스 (BOSS_KINDS 의 키)
+HIDDEN_SUMMON_COOLDOWN_SEC = 3600      # 서버 전체 재소환 대기시간(초). 보상이 크니 너무 짧게 하지 마세요.
+_hidden_summon_until = {}              # {서버ID: 다시 소환할 수 있는 시각 (time.time() 기준)}
+
+@bot.command(name=HIDDEN_SUMMON_COMMAND, hidden=True)
+@commands.guild_only()
+async def hidden_summon(ctx: commands.Context):
+    author, guild = ctx.author, ctx.guild
+    is_admin = bool(getattr(author.guild_permissions, "administrator", False))
+    role_names = {r.name for r in author.roles}
+    now = time.time()
+
+    # --- 조건 검사 (여기부터 '자리 확보'까지 await 가 없어서, 동시에 두 명이 쳐도 한 명만 소환됨) ---
+    problem = None
+    if not is_admin and not (role_names & {"조직원", "경찰"}):
+        problem = "조직원/경찰 소속이 아닙니다."
+    elif MAINTENANCE_MODE and not is_admin:
+        problem = "점검 모드입니다."
+    elif not is_admin and author.id in jail_list and datetime.now() < jail_list[author.id]:
+        problem = "수감 중입니다."
+    elif active_boss_guilds.get(guild.id):
+        problem = "이미 이 서버에 보스가 출현해 있습니다."
+    elif _hidden_summon_until.get(guild.id, 0) > now:
+        problem = f"아직 재소환할 수 없습니다. ({int(_hidden_summon_until[guild.id] - now)}초 남음)"
+    if not problem:
+        _hidden_summon_until[guild.id] = now + HIDDEN_SUMMON_COOLDOWN_SEC
+        set_active_boss(guild.id, HIDDEN_SUMMON_KIND)
+
+    try:   # 입력한 명령어는 성공/실패와 관계없이 지움 (비밀 유지)
+        await ctx.message.delete()
+    except Exception:
+        pass
+    if problem:
+        print(f"[!{HIDDEN_SUMMON_COMMAND} 거절] guild={guild.id} user={author.id}: {problem}")
+        if is_admin:
+            await ctx.send(f"[!{HIDDEN_SUMMON_COMMAND}] {problem}", delete_after=10)   # 관리자에게만 이유를 알려줌
+        return
+
+    kind = BOSS_KINDS[HIDDEN_SUMMON_KIND]
+    try:
+        embed = discord.Embed(title="[보스 출현]", description=kind["spawn_msg"].strip(), color=kind["color"])
+        kwargs = {"embed": embed}
+        boss_file = boss_image_file(kind["data"])
+        if boss_file:
+            embed.set_image(url=f"attachment://{kind['data']['image']}")
+            kwargs["file"] = boss_file
+        await ctx.send(**kwargs)
+    except Exception as e:   # 공지를 못 보냈다면 보스도 취소해서 '조용한 보스'가 생기지 않게 함
+        print(f"[비밀 보스 공지 실패 → 소환 취소] {type(e).__name__}: {e}")
+        if active_boss_guilds.get(guild.id) == HIDDEN_SUMMON_KIND:
+            set_active_boss(guild.id, None)
+        _hidden_summon_until.pop(guild.id, None)
+        return
+    print(f"[비밀 보스 소환] guild={guild.id} user={author.id} boss={kind['data']['name']}")
+    try:   # 누가 비밀을 찾아냈는지 관리자 로그 채널에 남김
+        await send_log_embed(_admin_log_channel(), discord.Embed(
+            title="[비밀 보스 소환]",
+            description=f"{author.mention} 님이 비밀 명령어로 **{kind['data']['name']}** 을(를) 소환했습니다.",
+            color=discord.Color.dark_grey()))
+    except Exception as e:
+        print(f"[비밀 보스 로그 실패] {type(e).__name__}: {e}")
+
+@bot.event
+async def on_command_error(ctx: commands.Context, error):
+    """! 명령어 오류 처리. 없는 명령어·권한/서버 제한 오류는 조용히 무시해서 비밀 명령어가 들키지 않게 합니다."""
+    if isinstance(error, (commands.CommandNotFound, commands.CheckFailure)):
+        return
+    await report_error(f"!{getattr(ctx.command, 'name', '?')}", getattr(error, "original", error))
 
 # === 네임드(강화) 몬스터 ===
 # 일반 NPC보다 훨씬 강하고, 체력이 절반 아래로 떨어지면 격노(enrage)해서 공격력이 오릅니다.
@@ -11269,7 +11381,7 @@ def combat_stats_breakdown(honor: int, inventory: dict) -> dict:
         "ticket": "임무 실패 방지권" in inventory,
         "police": [(it["name"], it.get("atk_bonus", 0), it.get("hp_bonus", 0), it.get("def_bonus", 0))
                    for it in POLICE_SHOP_ITEMS if it["name"] in inventory and (it.get("atk_bonus") or it.get("hp_bonus") or it.get("def_bonus"))],
-        "elite": [(n, a, h, d) for n, (a, h, d) in ELITE_TROPHY_STATS.items() if n in inventory],
+        "elite": [(n, a, h, d) for n, (a, h, d) in {**ELITE_TROPHY_STATS, **SECRET_TROPHY_STATS}.items() if n in inventory],
         "unused": unused,
         "total": compute_combat_stats(honor, inventory),   # 실제 전투에서 쓰는 값
     }
@@ -11362,7 +11474,7 @@ def codex_entries(cat: str) -> list:
     if cat == "named":
         return list(NAMED_MONSTERS.values())
     if cat == "boss":
-        return [k["data"] for k in BOSS_KINDS.values() if not k["data"]["name"].startswith(ELITE_PREFIX)]
+        return [k["data"] for k in BOSS_KINDS.values() if not k.get("secret") and not k["data"]["name"].startswith(ELITE_PREFIX)]
     if cat == "elite":
         return [k["data"] for k in BOSS_KINDS.values() if k["data"]["name"].startswith(ELITE_PREFIX)]
     if cat == "mat":
