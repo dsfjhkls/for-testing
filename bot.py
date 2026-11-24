@@ -337,6 +337,15 @@ class GuardedTree(app_commands.CommandTree):
         if interaction.type is not discord.InteractionType.application_command:
             return True
 
+        # 관리자 제재(/관리 제재) 중인 유저는 모든 명령어를 쓸 수 없음 (서버 관리자는 항상 통과)
+        sanction_text = sanction_block_text(interaction)
+        if sanction_text:
+            try:
+                await interaction.response.send_message(sanction_text, ephemeral=True)
+            except discord.HTTPException:
+                pass
+            return False
+
         uid = interaction.user.id
         cur = active_commands.get(uid)
         if cur is not None and not cur.is_active():
@@ -15205,6 +15214,178 @@ async def admin_event(interaction: discord.Interaction, 동작: app_commands.Cho
     if replaced:
         embed.set_footer(text=f"진행 중이던 '{replaced}' 이벤트는 이 이벤트로 교체되었습니다.")
     await interaction.response.send_message(embed=embed)
+
+
+# ==========================================================================
+# [제재] /관리 제재 [시작 · 해제 · 목록]  —  봇의 모든 명령어 차단
+#   • 제재된 유저는 이 봇의 슬래시 명령어를 하나도 쓸 수 없습니다. (Discord 채팅·서버 활동은 그대로)
+#   • 모든 명령어가 지나가는 GuardedTree.interaction_check 에서 막으므로, 새로 만든 명령어도 자동으로 차단됩니다.
+#   • 서버 관리자(관리자 권한)는 제재 대상이 될 수 없고, 혹시 제재 목록에 있어도 항상 통과합니다.
+#   • 제재 정보는 Supabase 의 `user_sanctions` 테이블에 저장되어 봇을 재시작해도 유지됩니다. (sanctions.sql 을 먼저 실행하세요)
+#   • 이미 열려 있는 전투·경매 화면의 버튼은 막지 않습니다. (새 명령어 입력부터 차단)
+# ==========================================================================
+SANCTION_DB_ERROR_MSG = "제재 DB 처리 중 오류가 발생했습니다. (관리자: `user_sanctions` 테이블이 만들어져 있는지 확인해 주세요 — sanctions.sql 참고)"
+SANCTION_MAX_HOURS = 24 * 365      # 최대 1년 (0 을 입력하면 영구 제재)
+SANCTION_REASON_MAX = 100
+
+sanctions = {}                     # {user_id: {"until": epoch 초 또는 None(영구), "reason": str, "by": 관리자 id}}
+sanction_state = {"loaded": False}
+
+# ---------------------------------------------------------------- DB 도우미 (동기)
+def _sanction_parse_until(v):
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        dt = v
+    else:
+        dt = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+def sanction_load_sync():
+    rows = supabase.table("user_sanctions").select("*").execute().data or []
+    now = time.time()
+    loaded, expired = {}, []
+    for r in rows:
+        until = _sanction_parse_until(r.get("until"))
+        if until is not None and until <= now:
+            expired.append(r["user_id"])
+            continue
+        loaded[int(r["user_id"])] = {"until": until, "reason": r.get("reason") or "", "by": int(r.get("by_id") or 0)}
+    for uid in expired:   # 이미 끝난 제재 기록은 정리
+        try:
+            supabase.table("user_sanctions").delete().eq("user_id", uid).execute()
+        except Exception as e:
+            print(f"Sanction cleanup error: {e}")
+    sanctions.clear()
+    sanctions.update(loaded)
+    sanction_state["loaded"] = True
+
+def sanction_save_sync(user_id: int, until, reason: str, by_id: int):
+    supabase.table("user_sanctions").upsert({
+        "user_id": str(user_id),
+        "until": datetime.fromtimestamp(until, timezone.utc).isoformat() if until is not None else None,
+        "reason": reason, "by_id": str(by_id),
+    }, on_conflict="user_id").execute()
+
+def sanction_delete_sync(user_id: int):
+    supabase.table("user_sanctions").delete().eq("user_id", str(user_id)).execute()
+
+@bot.listen("on_ready")
+async def _sanction_load_on_ready():
+    if sanction_state["loaded"] or not supabase:
+        return
+    try:
+        await asyncio.to_thread(sanction_load_sync)
+        print(f"제재 목록 불러옴: {len(sanctions)}명")
+    except Exception as e:
+        print(f"[경고] 제재 목록을 불러오지 못했습니다 (sanctions.sql 을 실행했는지 확인해 주세요): {e}")
+
+# ---------------------------------------------------------------- 차단 (GuardedTree.interaction_check 에서 호출)
+def _sanction_remaining(uid: int):
+    """제재 중이면 정보 dict, 아니면 None. 기간이 끝난 제재는 여기서 정리합니다."""
+    s = sanctions.get(uid)
+    if not s:
+        return None
+    if s["until"] is not None and time.time() >= s["until"]:
+        sanctions.pop(uid, None)
+        try:
+            asyncio.get_running_loop().create_task(asyncio.to_thread(sanction_delete_sync, uid))
+        except Exception:
+            pass
+        return None
+    return s
+
+def sanction_block_text(interaction: discord.Interaction) -> str:
+    """제재 중인 유저에게 보여줄 안내문 (제재 중이 아니거나 서버 관리자면 빈 문자열)"""
+    uid = interaction.user.id
+    s = _sanction_remaining(uid)
+    if not s:
+        return ""
+    perms = getattr(interaction.user, "guild_permissions", None)
+    if perms is not None and perms.administrator:
+        return ""
+    when = "제한 기간: **영구**" if s["until"] is None else f"해제 예정: <t:{int(s['until'])}:F> (<t:{int(s['until'])}:R>)"
+    return f"관리자에 의해 **봇 이용이 제한**되었습니다.\n{when}\n사유: {s['reason'] or '사유 없음'}\n문의가 있다면 서버 관리자에게 연락해 주세요."
+
+# ================================================================ /관리 제재
+@admin_group.command(name="제재", description="유저의 봇 명령어 사용을 막거나 풀어줍니다. (제재 중에는 모든 명령어 차단)")
+@app_commands.describe(동작="시작 / 해제 / 목록", 유저="대상 유저 (시작·해제할 때)",
+                       기간=f"제재 시간 (시간 단위 · 0 이면 영구 · 기본 24시간 · 시작할 때만)", 사유="제재 사유 (선택 · 시작할 때만)")
+@app_commands.choices(동작=[
+    app_commands.Choice(name="시작", value="start"),
+    app_commands.Choice(name="해제", value="stop"),
+    app_commands.Choice(name="목록", value="list"),
+])
+async def admin_sanction(interaction: discord.Interaction, 동작: app_commands.Choice[str], 유저: discord.Member = None,
+                         기간: app_commands.Range[float, 0, SANCTION_MAX_HOURS] = 24.0, 사유: str = None):
+    if not await admin_only(interaction): return
+    action = 동작.value
+    await interaction.response.defer(ephemeral=True)
+
+    if not sanction_state["loaded"]:   # 시작할 때 목록을 못 불러왔다면 다시 시도 (SQL 실행 후 재시작 없이 쓰도록)
+        try:
+            await asyncio.to_thread(sanction_load_sync)
+        except Exception as e:
+            print(f"Sanction load error: {e}")
+            await interaction.followup.send(SANCTION_DB_ERROR_MSG, ephemeral=True)
+            return
+
+    if action == "list":
+        now = time.time()
+        rows = [(uid, s) for uid, s in sanctions.items() if s["until"] is None or s["until"] > now]
+        if not rows:
+            await interaction.followup.send("제재 중인 유저가 없습니다.", ephemeral=True)
+            return
+        rows.sort(key=lambda r: (r[1]["until"] is None, r[1]["until"] or 0))
+        lines = []
+        for uid, s in rows[:25]:
+            end = "영구" if s["until"] is None else f"<t:{int(s['until'])}:R> 해제"
+            lines.append(f"• <@{uid}> — {end} — {s['reason'] or '사유 없음'} (담당 <@{s['by']}>)")
+        more = f"\n…외 {len(rows) - 25}명" if len(rows) > 25 else ""
+        await interaction.followup.send(embed=discord.Embed(title=f"[제재 목록] {len(rows)}명", description="\n".join(lines) + more, color=discord.Color.orange()), ephemeral=True)
+        return
+
+    if 유저 is None:
+        await interaction.followup.send("대상 유저를 선택해 주세요.", ephemeral=True)
+        return
+
+    if action == "stop":
+        if 유저.id not in sanctions:
+            await interaction.followup.send(f"**{유저.display_name}** 님은 제재 중이 아닙니다.", ephemeral=True)
+            return
+        try:
+            await asyncio.to_thread(sanction_delete_sync, 유저.id)
+        except Exception as e:
+            print(f"Sanction delete error: {e}")
+            await interaction.followup.send(SANCTION_DB_ERROR_MSG, ephemeral=True)
+            return
+        sanctions.pop(유저.id, None)
+        await admin_audit(interaction, "제재 해제", 유저, "")
+        await interaction.followup.send(f"**{유저.display_name}** 님의 제재를 해제했습니다.", ephemeral=True)
+        return
+
+    # --- 시작 ---
+    if 유저.bot or 유저.id == interaction.user.id:
+        await interaction.followup.send("봇이나 본인은 제재할 수 없습니다.", ephemeral=True)
+        return
+    if 유저.guild_permissions.administrator or (interaction.guild and 유저.id == interaction.guild.owner_id):
+        await interaction.followup.send("서버 관리자는 제재할 수 없습니다.", ephemeral=True)
+        return
+    reason = (사유 or "").strip()[:SANCTION_REASON_MAX]
+    until = None if 기간 <= 0 else time.time() + 기간 * 3600
+    try:
+        await asyncio.to_thread(sanction_save_sync, 유저.id, until, reason, interaction.user.id)
+    except Exception as e:
+        print(f"Sanction save error: {e}")
+        await interaction.followup.send(SANCTION_DB_ERROR_MSG, ephemeral=True)
+        return
+    sanctions[유저.id] = {"until": until, "reason": reason, "by": interaction.user.id}
+    span = "영구" if until is None else f"{기간:g}시간"
+    await admin_audit(interaction, "제재 시작", 유저, f"{span} / 사유: {reason or '없음'}")
+    end_txt = "영구 제재" if until is None else f"해제 예정 <t:{int(until)}:F> (<t:{int(until)}:R>)"
+    await interaction.followup.send(f"**{유저.display_name}** 님의 봇 명령어를 모두 차단했습니다.\n{end_txt}\n사유: {reason or '없음'}", ephemeral=True)
 
 
 # ########################## [실행] ##########################
