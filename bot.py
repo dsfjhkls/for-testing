@@ -3698,7 +3698,7 @@ class NPCBattleView(GuardedView):
 
         if outcome == "win":
             earned_money = random.randint(*self.npc_info["reward_money"])
-            earned_honor = self.npc_info["reward_honor"]
+            earned_honor = event_honor(self.npc_info["reward_honor"])
 
             new_money = current_money + earned_money
             new_honor = current_honor + earned_honor
@@ -4756,6 +4756,7 @@ async def corrupt_report_command(interaction: discord.Interaction, member: disco
         fine, loss = await asyncio.to_thread(corrupt_expose_sync, member.id)
         if is_police:
             money, honor = CORRUPT_REPORT_REWARD_POLICE
+            honor = event_honor(honor)
             await asyncio.to_thread(update_user_stats, user.id, money, honor)
             reward = f"포상금 `${money:,}` / 명예 `+{honor} pt`"
         else:
@@ -6261,7 +6262,7 @@ def _raid_settle_sync(s: RaidSession, win: bool):
             weight = RAID_BASE_SHARE / n + (1 - RAID_BASE_SHARE) * (p.dmg_done / total_dmg)
             if win:
                 money = int(t["money"] * n * weight)
-                honor = max(1, int(t["honor"] * n * weight))
+                honor = event_honor(max(1, int(t["honor"] * n * weight)))
             else:
                 money = int(t["money"] * n * weight * RAID_LOSE_MONEY_RATIO)
                 honor = 0
@@ -8641,7 +8642,7 @@ class MissionSelect(discord.ui.Select):
         if is_success:
             base_money = random.randint(*selected["reward"])
             earned_money = int(base_money * money_mult)
-            earned_honor = int(selected["honor"] * honor_mult)
+            earned_honor = event_honor(int(selected["honor"] * honor_mult))
             
             current_money += earned_money
             current_honor += earned_honor
@@ -9665,7 +9666,7 @@ async def finalize_mission(session: MissionSession, success: bool, reason: str, 
     if success:
         base_money = random.randint(*selected["reward"])
         earned_money = int(base_money * session.money_mult)
-        earned_honor = int(selected["honor"] * session.honor_mult)
+        earned_honor = event_honor(int(selected["honor"] * session.honor_mult))
 
         current_money += earned_money
         current_honor += earned_honor
@@ -10200,7 +10201,7 @@ def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n:
         earned_money = earned_honor = fine = 0
         if success:
             earned_money = random.randint(*op["reward"])
-            earned_honor = int(round(op["honor"] * police_bonuses(inv)["honor_mult"]))
+            earned_honor = event_honor(int(round(op["honor"] * police_bonuses(inv)["honor_mult"])))
             money += earned_money
             honor += earned_honor
             s["police_ops"] += 1
@@ -10548,7 +10549,7 @@ async def interrogate_trial(s: InterrogationSession, opinion: str):
             police_shift_record(s.police.id, "interrogate_match")
             try:
                 _pb = police_bonuses(get_user_data(s.police.id).get("inventory"))
-                reward_honor = int(round(INTERROGATE_MATCH_REWARD_HONOR * _pb["honor_mult"]))
+                reward_honor = event_honor(int(round(INTERROGATE_MATCH_REWARD_HONOR * _pb["honor_mult"])))
                 update_user_stats(s.police.id, INTERROGATE_MATCH_REWARD_MONEY, reward_honor)
                 info = get_user_data(s.police.id)
                 rank = get_user_rank(info["honor"], is_police=True)
@@ -10782,7 +10783,7 @@ async def arrest_member(interaction: discord.Interaction, member: discord.Member
     except Exception:
         _target_honor = 0
     arrest_extra = min(ARREST_HONOR_BONUS_MAX, _target_honor // ARREST_HONOR_PER_POINT)   # 거물 검거 보너스
-    arrest_honor = int(round((ARREST_BASE_HONOR + arrest_extra) * _pb["honor_mult"]))
+    arrest_honor = event_honor(int(round((ARREST_BASE_HONOR + arrest_extra) * _pb["honor_mult"])))
     money_note = f" (무전기 +{round(POLICE_RADIO_ARREST_BONUS * 100)}%)" if _pb["money_mult"] > 1 else ""
     honor_note = f" (황금 배지 +{round(POLICE_BADGE_HONOR_BONUS * 100)}%)" if _pb["honor_mult"] > 1 else ""
     if arrest_extra > 0:
@@ -10925,9 +10926,10 @@ class SmuggleView(discord.ui.View):
         missing_honor = SMUGGLE_REJECT_HONOR_LOSS - honor_loss
         fine = min(mafia_data["money"], SMUGGLE_REJECT_FINE + missing_honor * SMUGGLE_FINE_PER_MISSING_HONOR)
 
+        police_honor = event_honor(SMUGGLE_REJECT_POLICE_HONOR)
         try:
             update_user_stats(self.mafia.id, -fine, -honor_loss)
-            update_user_stats(self.police.id, 0, SMUGGLE_REJECT_POLICE_HONOR)
+            update_user_stats(self.police.id, 0, police_honor)
         except Exception as e:
             print(f"Smuggle reject DB error: {e}")
 
@@ -10940,7 +10942,7 @@ class SmuggleView(discord.ui.View):
                 f"**{self.police.mention}** 경관이 **{self.mafia.mention}** 님의 뇌물 제안을 단호히 거절했습니다!\n\n"
                 f"**마피아 패널티:** **{SMUGGLE_REJECT_WANTED_SEC}초간 지명수배** / 벌금 `-${fine:,}` / 명예 `-{honor_loss} pt`"
                 + (f" (명예 부족분 {missing_honor}pt는 벌금으로 환산)" if missing_honor > 0 else "") + "\n"
-                f"**경찰 포상:** 청렴 포상 `+{SMUGGLE_REJECT_POLICE_HONOR} pt`"
+                f"**경찰 포상:** 청렴 포상 `+{police_honor} pt`"
             ),
             color=discord.Color.red()
         )
@@ -11065,7 +11067,7 @@ async def patrol_location(interaction: discord.Interaction, 지역: app_commands
 
     # 4. 경찰 보상 지급 (자금 $400~800, 명예 PATROL_HONOR)
     earned_money = inc_money(random.randint(400, 800))
-    earned_honor = int(round(PATROL_HONOR * police_bonuses(get_user_data(user.id).get("inventory"))["honor_mult"]))
+    earned_honor = event_honor(int(round(PATROL_HONOR * police_bonuses(get_user_data(user.id).get("inventory"))["honor_mult"])))
 
     try:
         update_user_stats(user.id, earned_money, earned_honor)
@@ -12756,7 +12758,7 @@ async def run_police_op(session: PoliceOpSession):
         lab_mult = 1 + POLICE_UNIT_FACILITIES["lab"]["per"] / 100 * session.upgrades.get("lab", 0)   # 과학수사 연구소
         if succ > 0:
             money_each = int(tier["money"] * frac * lab_mult)
-            honor_each = int(round(tier["honor"] * frac))
+            honor_each = event_honor(int(round(tier["honor"] * frac)))
         else:
             money_each = int(tier["money"] * POLICE_OP_FAIL_MONEY_RATIO * lab_mult)
             honor_each = 0
@@ -13234,7 +13236,7 @@ async def settle_police_shift(s: PoliceShift):
         elif score > 0:
             info = await asyncio.to_thread(get_user_data, s.user_id)
             mult = police_bonuses(info.get("inventory"))["honor_mult"]
-            honor = int(round(POLICE_SALARY_BASE_HONOR * ratio * mult))
+            honor = event_honor(int(round(POLICE_SALARY_BASE_HONOR * ratio * mult)))
             await asyncio.to_thread(update_user_stats, s.user_id, money, honor)
             info = await asyncio.to_thread(get_user_data, s.user_id)
             rank = get_user_rank(info["honor"], is_police=True)
@@ -13914,7 +13916,7 @@ def _war_settle_sync(s: WarSession, atk_win: bool):
         share = (p.dmg_done / win_dmg) if win_dmg > 0 else (1 / max(1, len(winners)))
         money = int(s.prize * (WAR_BASE_SHARE / max(1, len(winners)) + (1 - WAR_BASE_SHARE) * share))
         police_atk = s.recapture and p.side == "A"
-        honor = (RECAPTURE_WIN_HONOR if police_atk else WAR_WIN_HONOR) if p.hits > 0 else 0
+        honor = event_honor((RECAPTURE_WIN_HONOR if police_atk else WAR_WIN_HONOR) if p.hits > 0 else 0)
         if p.hits <= 0:
             money = 0   # 한 번도 공격하지 않으면 받을 수 없음
         elif police_atk:   # 광역 수사망 단말기: 탈환 포상금 +25%
@@ -14856,6 +14858,7 @@ def trial_apply_win_sync(user_id: int, floor: int) -> dict:
     row = trial_get_sync(user_id)
     new_record = floor > row["best"]
     money, honor = trial_reward(floor, new_record)
+    honor = event_honor(honor)
     new_best = max(row["best"], floor)
     best_at = datetime.now(timezone.utc).isoformat() if new_record else row["best_at"]
     trial_save_sync(user_id, floor + 1, new_best, best_at, row["clears"] + 1)
@@ -14977,6 +14980,7 @@ async def trial_info_cmd(interaction: discord.Interaction):
     enemy = trial_enemy(floor)
     new_record = floor > row["best"]
     money, honor = trial_reward(floor, new_record)
+    honor = event_honor(honor)
     boss_floor = trial_next_boss_floor(floor)
     embed = discord.Embed(title=f"[시련] {user.display_name} 님의 진행 상황", color=discord.Color.dark_teal())
     embed.add_field(name="현재 도전 층", value=f"**{floor}층**", inline=True)
@@ -15092,6 +15096,115 @@ async def send_trial_ranking(interaction: discord.Interaction):
     embed = discord.Embed(title="시련 랭킹 (최고 도달 층)", description="\n".join(lines), color=discord.Color.dark_teal())
     embed.set_footer(text=footer + " · 같은 층이면 먼저 도달한 사람이 위")
     await interaction.followup.send(embed=embed)
+
+
+# ==========================================================================
+# [이벤트] 명예 배율 이벤트  —  /관리 이벤트 [시작 · 종료 · 상태]
+#   • 관리자가 이벤트를 시작하면, 정해진 시간 동안 '활동으로 얻는 명예'가 배율만큼 늘어납니다. (기본 2배 · 돈은 그대로)
+#   • 적용: 임무 · NPC/네임드/보스 전투 · 시련 · 레이드 · 구역전 ·
+#           경찰 활동(순찰 · 검거 · 심문 · /작전 · 월급 · 수사팀 작전 · 밀수 거절 포상 · 감찰 신고 포상)
+#   • 제외: 일일·주간·업적 보상 수령, 결투(명예 이동), 관리자 지급 — 이벤트 때문에 보상 수령을 미루는 일이 없도록
+#   • 이벤트 상태는 메모리에만 있어서 봇을 재시작하면 사라집니다. (/관리 점검 과 같은 방식)
+#   • 명예를 지급하는 코드는 event_honor(값) 로 감싸져 있습니다. 새 활동을 추가할 때도 이렇게 감싸면 이벤트가 적용돼요.
+# ==========================================================================
+EVENT_MAX_MULT = 5.0
+EVENT_MAX_HOURS = 72.0
+honor_event = {"mult": 1.0, "ends": 0.0, "name": "", "by": 0, "task": None}
+
+def honor_event_mult() -> float:
+    """지금 적용 중인 명예 배율 (이벤트가 없거나 끝났으면 1.0)"""
+    if honor_event["mult"] > 1.0 and time.time() < honor_event["ends"]:
+        return honor_event["mult"]
+    return 1.0
+
+def event_honor(n: int) -> int:
+    """이벤트 중이면 얻는 명예(양수)를 배율만큼 늘립니다. 0 이나 음수(패널티)는 그대로 둡니다."""
+    m = honor_event_mult()
+    return int(round(n * m)) if n > 0 and m > 1.0 else n
+
+def _honor_event_clear():
+    task = honor_event.get("task")
+    if task is not None and not task.done():
+        task.cancel()
+    honor_event.update(mult=1.0, ends=0.0, name="", by=0, task=None)
+
+async def _honor_event_end_notice(token: float, channel, delay: float):
+    try:
+        await asyncio.sleep(max(0.0, delay))
+    except asyncio.CancelledError:
+        return
+    if honor_event["ends"] != token or honor_event["mult"] <= 1.0:
+        return   # 그 사이 종료되었거나 다른 이벤트로 교체됨
+    name = honor_event["name"]
+    honor_event.update(mult=1.0, ends=0.0, name="", by=0, task=None)
+    if channel is None:
+        return
+    try:
+        await channel.send(embed=discord.Embed(
+            title="[이벤트 종료]", description=f"**{name}** 이(가) 끝났습니다. 참여해 주셔서 감사합니다!", color=discord.Color.dark_grey()))
+    except Exception as e:
+        print(f"Honor event end notice error: {e}")
+
+def _honor_event_scope_text() -> str:
+    return ("**적용:** 비밀 임무 · NPC/네임드/보스 전투 · 시련 · 레이드 · 구역전 ·\n"
+            "경찰 활동(순찰 · 검거 · 심문 · 작전 · 월급 · 수사팀 작전)\n"
+            "**제외:** 일일·주간·업적 보상, 결투, 자금(보상금)은 그대로")
+
+@admin_group.command(name="이벤트", description="명예 배율 이벤트를 시작하거나 끝냅니다. (활동으로 얻는 명예가 N배 · 봇을 재시작하면 사라집니다)")
+@app_commands.describe(동작="시작 / 종료 / 상태", 시간="이벤트 시간 (시간 단위 · 시작할 때만 · 기본 3시간)",
+                       배율="명예 배율 (시작할 때만 · 기본 2배)", 이름="이벤트 이름 (선택 · 시작할 때만)")
+@app_commands.choices(동작=[
+    app_commands.Choice(name="시작", value="start"),
+    app_commands.Choice(name="종료", value="stop"),
+    app_commands.Choice(name="상태", value="status"),
+])
+async def admin_event(interaction: discord.Interaction, 동작: app_commands.Choice[str],
+                      시간: app_commands.Range[float, 0.1, EVENT_MAX_HOURS] = 3.0,
+                      배율: app_commands.Range[float, 1.1, EVENT_MAX_MULT] = 2.0,
+                      이름: str = None):
+    if not await admin_only(interaction): return
+    action = 동작.value
+    active = honor_event_mult() > 1.0
+
+    if action == "status":
+        if not active:
+            await interaction.response.send_message("진행 중인 명예 이벤트가 없습니다.", ephemeral=True)
+            return
+        ends = int(honor_event["ends"])
+        await interaction.response.send_message(
+            f"**{honor_event['name']}** 진행 중 — 명예 **{honor_event['mult']:g}배**\n종료: <t:{ends}:F> (<t:{ends}:R>)\n시작한 관리자: <@{honor_event['by']}>", ephemeral=True)
+        return
+
+    if action == "stop":
+        if not active:
+            await interaction.response.send_message("진행 중인 명예 이벤트가 없습니다.", ephemeral=True)
+            return
+        name = honor_event["name"]
+        _honor_event_clear()
+        await admin_audit(interaction, "명예 이벤트 종료", None, name)
+        await interaction.response.send_message(embed=discord.Embed(
+            title="[이벤트 종료]", description=f"**{name}** 이(가) 관리자에 의해 종료되었습니다.", color=discord.Color.dark_grey()))
+        return
+
+    # --- 시작 (이미 진행 중이면 새 이벤트로 교체) ---
+    replaced = honor_event["name"] if active else None
+    _honor_event_clear()
+    name = (이름 or f"명예 {배율:g}배 이벤트").strip()[:40]
+    ends = time.time() + 시간 * 3600
+    honor_event.update(mult=float(배율), ends=ends, name=name, by=interaction.user.id)
+    token = ends
+    honor_event["task"] = asyncio.get_running_loop().create_task(
+        _honor_event_end_notice(token, interaction.channel, ends - time.time()))
+    ends_ts = int(ends)
+    await admin_audit(interaction, "명예 이벤트 시작", None, f"{name} / 명예 {배율:g}배 / {시간:g}시간" + (f" (기존 '{replaced}' 대체)" if replaced else ""))
+    embed = discord.Embed(
+        title=f"[이벤트] {name}",
+        description=(f"지금부터 활동으로 얻는 **명예가 {배율:g}배**가 됩니다!\n"
+                     f"종료: <t:{ends_ts}:F> (<t:{ends_ts}:R>)\n\n{_honor_event_scope_text()}"),
+        color=discord.Color.gold())
+    if replaced:
+        embed.set_footer(text=f"진행 중이던 '{replaced}' 이벤트는 이 이벤트로 교체되었습니다.")
+    await interaction.response.send_message(embed=embed)
 
 
 # ########################## [실행] ##########################
