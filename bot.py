@@ -11160,6 +11160,7 @@ async def info_command(interaction: discord.Interaction, keyword: str):
                      f"• **강화 적:** {TRIAL_BOSS_EVERY}층마다 등장해 같은 구간의 다른 적보다 눈에 띄게 강하고, 체력이 절반 아래가 되면 격노합니다.\n"
                      f"• **전투:** `/전투` 와 같은 방식입니다. ({TRIAL_MAX_TURNS}턴 제한, 스킬 사용) 패배해도 층은 내려가지 않고 패널티도 없습니다.\n"
                      f"• **보상:** 그 층을 처음 돌파할 때 보상금과 명예를 받습니다. 층이 오를수록 커지고, 강화 적 층은 {TRIAL_BOSS_REWARD_MULT}배입니다.\n"
+                     f"• **{TRIAL_WALL_FLOOR}층의 벽:** {TRIAL_WALL_FLOOR}층까지는 명예 약 2만 + 좋은 장비면 도달할 수 있게 맞춰져 있고, 그 위부터는 적이 급격히 강해집니다.\n"
                      "• **랭킹:** `/랭킹` 의 '시련 최고 층' 에서 확인합니다. 같은 층이면 먼저 도달한 사람이 위입니다.\n"
                      "• **초기화:** `/시련 초기화` 로 1층부터 다시 시작할 수 있습니다. (최고 기록 유지 / 기록까지 전부 삭제 선택)"),
         },
@@ -14755,9 +14756,17 @@ TRIAL_DB_ERROR_MSG = "시련 DB 처리 중 오류가 발생했습니다. (관리
 TRIAL_MAX_TURNS = 10                 # 한 층의 전투 제한 턴 (/전투 와 같음)
 
 # --- 적 능력치: 층마다 곱해지는 비율 (층 f 의 능력치 = 기본값 × 성장률^(f-1)) ---
-TRIAL_HP_BASE, TRIAL_HP_GROWTH = 3500, 1.2
-TRIAL_ATK_BASE, TRIAL_ATK_GROWTH = 350, 1.3
-TRIAL_DEF_BASE, TRIAL_DEF_GROWTH = 100, 1.085
+#   [밸런스 기준] 명예 약 2만 + 쓸만한 장비(상점 최고 무기 이상)면 50층까지 갈 수 있고, 그 위(51층~)는 못 넘도록 맞췄습니다.
+#   더 쉽게/어렵게 하려면 '성장률' 숫자를 조금씩(±0.005) 바꾸세요. 체력 성장률이 가장 큰 영향을 줍니다.
+TRIAL_HP_BASE, TRIAL_HP_GROWTH = 3500, 1.056
+TRIAL_ATK_BASE, TRIAL_ATK_GROWTH = 350, 1.065
+TRIAL_DEF_BASE, TRIAL_DEF_GROWTH = 100, 1.055
+# --- 50층의 벽: 이 층을 넘어서면 51층에서 한 번에 크게 강해지고, 그 뒤로도 층마다 더 빨리 강해집니다 ---
+#   (강화 적이 있는 50층보다 51층(일반 적)이 약해지는 일이 없도록, 50층 보스를 넘은 뒤의 적이 훨씬 세게 설계됨)
+#   명예가 훨씬 많은 사람(3만~6만)만 51층 이후로 조금씩 더 갈 수 있습니다. 벽을 없애려면 TRIAL_WALL_FLOOR 를 아주 큰 수(예: 9999)로.
+TRIAL_WALL_FLOOR = 50
+TRIAL_WALL_HP_STEP, TRIAL_WALL_ATK_STEP, TRIAL_WALL_DEF_STEP = 2.8, 1.6, 1.3     # 51층에서 한 번에 곱해지는 배율
+TRIAL_WALL_HP_GROWTH, TRIAL_WALL_ATK_GROWTH, TRIAL_WALL_DEF_GROWTH = 1.06, 1.04, 1.04   # 52층부터 층마다 추가로 곱해지는 배율
 # --- 강화 적 (10층마다) ---
 TRIAL_BOSS_EVERY = 10
 TRIAL_BOSS_HP_MULT = 1.9             # 체력 ×1.9
@@ -14809,7 +14818,14 @@ def trial_enemy(floor: int) -> dict:
     hp = TRIAL_HP_BASE * TRIAL_HP_GROWTH ** (floor - 1)
     atk = TRIAL_ATK_BASE * TRIAL_ATK_GROWTH ** (floor - 1)
     df = TRIAL_DEF_BASE * TRIAL_DEF_GROWTH ** (floor - 1)
+    if floor > TRIAL_WALL_FLOOR:   # 50층의 벽 너머: 51층에서 크게 강해지고, 이후 층마다 더 빠르게 강해짐
+        k = floor - TRIAL_WALL_FLOOR
+        hp *= TRIAL_WALL_HP_STEP * TRIAL_WALL_HP_GROWTH ** (k - 1)
+        atk *= TRIAL_WALL_ATK_STEP * TRIAL_WALL_ATK_GROWTH ** (k - 1)
+        df *= TRIAL_WALL_DEF_STEP * TRIAL_WALL_DEF_GROWTH ** (k - 1)
     desc = base_desc
+    if floor > TRIAL_WALL_FLOOR:
+        desc += "\n**50층의 벽 너머** — 지금까지와는 차원이 다른 적입니다."
     enemy = {"name": name, "trial_floor": floor, "is_boss": boss, "base_name": base_name}
     if boss:
         hp, atk, df = hp * TRIAL_BOSS_HP_MULT, atk * TRIAL_BOSS_ATK_MULT, df * TRIAL_BOSS_DEF_MULT
