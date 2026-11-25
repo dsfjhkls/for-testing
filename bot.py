@@ -1433,7 +1433,7 @@ ACHIEVEMENTS += _police_ach
 _MAFIA_ONLY_ACH = {
     "b_mission_1", "b_mission_10", "b_fight_5", "b_weapon_1", "b_duel_1", "b_raid_1", "b_attend_3",
     "s_mission_50", "s_streak_5", "s_hard_5", "s_fight_50", "s_named_2", "s_duel_10", "s_raid_10", "s_war_3",
-    "a_boss_1", "a_elite_1", "a_elite_all", "a_named_all", "a_mission_300", "a_attend_30", "a_streak_10", "a_boss_5", "a_raid_king", "a_duel_50", "a_war_conq_5",
+    "a_boss_1", "a_elite_1", "a_elite_all", "a_named_all", "a_mission_300", "a_attend_30", "a_streak_10", "a_boss_5", "a_raid_king", "a_duel_50", "a_war_conq_5", "a_parttime_mafia",
 }
 for _a in ACHIEVEMENTS:
     _a.setdefault("role", "mafia" if _a["id"] in _MAFIA_ONLY_ACH else None)   # None = 공통
@@ -7370,6 +7370,188 @@ async def stock_portfolio_cmd(interaction: discord.Interaction):
 #   봇 이벤트 (on_ready 등)
 # ==========================================================================
 
+# ==========================================================================
+# [DB 백업]  모든 테이블을 하나의 압축 파일(.json.gz)로 저장하고, 관리자 로그 채널에 첨부해 둡니다.
+#   • 자동: 봇이 켜진 뒤 10분 후 첫 백업, 그 뒤 BACKUP_INTERVAL_HOURS(기본 24)시간마다 반복
+#   • 수동: /관리 백업
+#   • 보관: ① 디스코드 채널에 파일 첨부(가장 확실한 보관처 — Render 같은 서버는 재시작하면 로컬 파일이 사라지므로)
+#           ② 봇 폴더의 backups/ 에 최근 BACKUP_KEEP_LOCAL개 (재시작에 사라질 수 있음)
+#   • 복구: 같이 드린 restore_backup.py 로 되돌립니다. (봇이 자동으로 덮어쓰는 기능은 사고 방지를 위해 일부러 넣지 않음)
+#   • 환경변수(모두 선택): BACKUP_ENABLED=0 (자동 백업 끄기) / BACKUP_INTERVAL_HOURS / BACKUP_CHANNEL_ID (비우면 로그 채널 사용)
+#                          BACKUP_KEEP_LOCAL / BACKUP_DIR
+#   • 백업 파일에는 전 유저의 자금·인벤토리가 들어 있으므로 파일을 받는 채널은 관리자만 볼 수 있어야 합니다.
+# ==========================================================================
+import glob as _glob
+import gzip as _gzip
+import json as _json
+
+BACKUP_TABLES = ["user_data", "trial_progress", "families", "companies", "territories", "police_units",
+                 "stocks", "stock_holdings", "boss_state", "user_status", "user_sanctions"]
+BACKUP_PAGE_SIZE = 1000                     # Supabase 는 한 번에 1000행까지만 주므로 나눠서 읽음
+BACKUP_FIRST_DELAY_SEC = 600
+BACKUP_ENABLED = str(os.getenv("BACKUP_ENABLED", "1")).strip().lower() not in ("0", "false", "off", "no")
+BACKUP_DIR = os.getenv("BACKUP_DIR", "backups")
+
+def _backup_env_float(name: str, default: float) -> float:
+    try:
+        return max(0.1, float(os.getenv(name, default)))
+    except Exception:
+        return default
+
+BACKUP_INTERVAL_HOURS = _backup_env_float("BACKUP_INTERVAL_HOURS", 24)
+BACKUP_KEEP_LOCAL = int(_backup_env_float("BACKUP_KEEP_LOCAL", 7))
+BACKUP_CHANNEL_ID = _env_int("BACKUP_CHANNEL_ID")
+
+_backup_lock = None            # 동시에 두 번 돌지 않게 (이벤트 루프 안에서 처음 쓸 때 만듦)
+_backup_last = {"ts": 0.0}
+_backup_loop_started = False
+
+
+def _backup_channel_id():
+    return BACKUP_CHANNEL_ID or _admin_log_channel()
+
+
+def backup_dump_sync():
+    """모든 테이블을 읽어 (압축된 바이트, {테이블: 행 수}, {테이블: 오류}) 를 돌려준다. (블로킹 — to_thread 로 호출)"""
+    _require_db()
+    tables, counts, errors = {}, {}, {}
+    for name in BACKUP_TABLES:
+        rows, start = [], 0
+        try:
+            for _ in range(2000):   # 무한 반복 방지 (최대 200만 행)
+                res = supabase.table(name).select("*").range(start, start + BACKUP_PAGE_SIZE - 1).execute()
+                page = res.data or []
+                rows.extend(page)
+                if len(page) < BACKUP_PAGE_SIZE:
+                    break
+                start += BACKUP_PAGE_SIZE
+        except Exception as e:   # 일부만 읽힌 표는 '백업됐다'고 착각하기 쉬우니 통째로 버리고 오류로 표시
+            errors[name] = f"{type(e).__name__}: {str(e)[:150]}"
+            continue
+        tables[name] = rows
+        counts[name] = len(rows)
+    meta = {"created_at": datetime.now(timezone.utc).isoformat(), "counts": counts, "errors": errors, "format": 1}
+    raw = _json.dumps({"meta": meta, "tables": tables}, ensure_ascii=False, default=str).encode("utf-8")
+    return _gzip.compress(raw, compresslevel=6), counts, errors
+
+
+def _backup_save_local_sync(data: bytes, filename: str):
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    path = os.path.join(BACKUP_DIR, filename)
+    with open(path, "wb") as f:
+        f.write(data)
+    olds = sorted(_glob.glob(os.path.join(BACKUP_DIR, "mafia_backup_*.json.gz")))
+    for old in olds[:-max(1, BACKUP_KEEP_LOCAL)]:
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+    return path
+
+
+def _backup_latest_local_ts() -> float:
+    try:
+        files = _glob.glob(os.path.join(BACKUP_DIR, "mafia_backup_*.json.gz"))
+        return max((os.path.getmtime(p) for p in files), default=0.0)
+    except Exception:
+        return 0.0
+
+
+async def run_backup(reason: str, requested_by=None) -> dict:
+    """백업 실행 → 로컬 저장 + 채널 첨부. 결과 dict(ok, data, filename, counts, errors, sent, local, note) 를 돌려줌. 예외는 던지지 않음."""
+    global _backup_lock
+    if _backup_lock is None:
+        _backup_lock = asyncio.Lock()
+    result = {"ok": False, "data": b"", "filename": "", "counts": {}, "errors": {}, "sent": False, "local": False, "note": ""}
+    async with _backup_lock:
+        try:
+            data, counts, errors = await asyncio.to_thread(backup_dump_sync)
+        except Exception as e:
+            result["note"] = f"{type(e).__name__}: {e}"
+            await report_error("DB 백업 (읽기)", e, print_tb=False)
+            await _backup_notify(result, reason, requested_by)
+            return result
+        filename = f"mafia_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json.gz"
+        result.update(data=data, filename=filename, counts=counts, errors=errors)
+        result["ok"] = "user_data" in counts and "user_data" not in errors   # 핵심 표가 빠졌으면 실패로 취급
+        try:
+            await asyncio.to_thread(_backup_save_local_sync, data, filename)
+            result["local"] = True
+        except Exception as e:
+            print(f"[DB 백업] 로컬 저장 실패: {type(e).__name__}: {e}")
+        _backup_last["ts"] = time.time()
+        await _backup_notify(result, reason, requested_by)
+    return result
+
+
+async def _backup_notify(result: dict, reason: str, requested_by):
+    """백업 결과를 로그 채널에 알리고 파일을 첨부 (실패해도 조용히 넘어감)"""
+    cid = _backup_channel_id()
+    total = sum(result["counts"].values())
+    size_kb = len(result["data"]) / 1024
+    ok = result["ok"]
+    embed = discord.Embed(title=f"[DB 백업] {'완료' if ok else '문제 있음'} ({reason})",
+                          color=discord.Color.green() if ok and not result["errors"] else discord.Color.red(),
+                          timestamp=discord.utils.utcnow())
+    if result["counts"] or result["errors"]:
+        embed.add_field(name="저장된 행", value=f"총 {total:,}행 · {size_kb:,.0f}KB(압축)", inline=False)
+        embed.add_field(name="표별", value="\n".join(f"`{k}` {v:,}" for k, v in result["counts"].items()) or "-", inline=True)
+    if result["errors"]:
+        embed.add_field(name="읽지 못한 표", value="\n".join(f"`{k}` {v}" for k, v in result["errors"].items())[:900], inline=False)
+    if result["note"]:
+        embed.add_field(name="오류", value=result["note"][:900], inline=False)
+    if requested_by is not None:
+        embed.add_field(name="실행자", value=f"{requested_by.mention}", inline=True)
+    if not cid:
+        print("[DB 백업] 로그 채널이 없어 파일을 채널에 보내지 못했습니다. (ERROR_LOG_CHANNEL_ID 또는 BACKUP_CHANNEL_ID 설정 필요)")
+        return
+    try:
+        channel = bot.get_channel(cid) or await bot.fetch_channel(cid)
+        limit = getattr(getattr(channel, "guild", None), "filesize_limit", None) or 10 * 1024 * 1024
+        files = []
+        if result["data"]:
+            if len(result["data"]) <= limit - 4096:
+                files = [discord.File(io.BytesIO(result["data"]), filename=result["filename"])]
+            else:
+                embed.add_field(name="주의", value="압축 파일이 채널 업로드 제한보다 커서 첨부하지 못했습니다. 봇 폴더의 backups/ 를 확인하세요.", inline=False)
+        await channel.send(embed=embed, files=files)
+        result["sent"] = bool(files)
+    except Exception as e:
+        print(f"[DB 백업] 채널 전송 실패: {type(e).__name__}: {e}")
+
+
+async def backup_loop():
+    await asyncio.sleep(BACKUP_FIRST_DELAY_SEC)
+    _backup_last["ts"] = max(_backup_last["ts"], _backup_latest_local_ts())   # 방금 재시작했다면 최근 백업이 있는지 확인
+    while True:
+        try:
+            if time.time() - _backup_last["ts"] >= BACKUP_INTERVAL_HOURS * 3600 - 60:
+                await run_backup("자동")
+        except Exception as e:
+            await report_error("DB 백업 루프", e, print_tb=False)
+        await asyncio.sleep(BACKUP_INTERVAL_HOURS * 3600)
+
+
+@admin_group.command(name="백업", description="DB 전체를 지금 백업합니다. (압축 파일을 로그 채널과 이 창에 올립니다)")
+async def admin_backup(interaction: discord.Interaction):
+    if not await admin_only(interaction): return
+    await interaction.response.defer(ephemeral=True)
+    res = await run_backup("수동", requested_by=interaction.user)
+    await admin_audit(interaction, "DB 백업", None, f"행 {sum(res['counts'].values()):,}개 / 오류 표 {len(res['errors'])}개")
+    if not res["data"]:
+        await interaction.followup.send(f"백업에 실패했습니다: {res['note'] or '알 수 없는 오류'}", ephemeral=True)
+        return
+    lines = [f"백업 {'완료' if res['ok'] else '**일부 문제 있음**'} — 총 {sum(res['counts'].values()):,}행 · {len(res['data']) / 1024:,.0f}KB"]
+    lines.append("• 로그 채널에 파일을 올렸습니다." if res["sent"] else "• 로그 채널에는 올리지 못했습니다. (채널 미설정/권한/용량) — 아래 파일을 직접 보관하세요.")
+    if res["errors"]:
+        lines.append("• 읽지 못한 표: " + ", ".join(f"`{k}`" for k in res["errors"]))
+    try:
+        await interaction.followup.send("\n".join(lines), file=discord.File(io.BytesIO(res["data"]), filename=res["filename"]), ephemeral=True)
+    except Exception as e:
+        print(f"[DB 백업] 수동 백업 파일 전송 실패: {type(e).__name__}: {e}")
+        await interaction.followup.send("\n".join(lines) + "\n(파일 첨부에 실패했습니다)", ephemeral=True)
+
+
 _status_loaded = False
 _tree_synced = False   # 명령어 동기화는 프로세스당 한 번만 (재연결 때마다 하면 API 제한에 걸릴 수 있음)
 
@@ -7390,6 +7572,10 @@ async def on_ready():
     if not _stock_loop_started:   # 주식 시세 변동 루프 (재연결 때 중복 실행 방지)
         _stock_loop_started = True
         keep_task(asyncio.create_task(stock_market_loop()))
+    global _backup_loop_started
+    if BACKUP_ENABLED and not _backup_loop_started:   # DB 자동 백업 루프 (재연결 때 중복 실행 방지)
+        _backup_loop_started = True
+        keep_task(asyncio.create_task(backup_loop()))
     try:
         n_boss = await asyncio.to_thread(load_boss_state_sync)
         if n_boss:
