@@ -1078,6 +1078,17 @@ DAILY_QUESTS = [
     {"key": "gamble", "name": "카지노 도박",      "target": 3, "hint": "/도박"},
     {"key": "parttime", "name": "아르바이트",       "target": 2, "hint": "/아르바이트"},
 ]
+# 경찰은 같은 의뢰를 경찰 활동 이름으로 봅니다. (조직원 /임무 와 경찰 /작전 은 같은 '비밀 임무 성공' 의뢰로 집계됩니다)
+#   NPC 전투 승리(/전투)는 경찰도 할 수 있어 그대로 두고, 도박·아르바이트도 공용입니다.
+DAILY_POLICE_VIEW = {
+    "mission": {"name": "수사 작전 성공", "hint": "/작전"},
+}
+def daily_quest_view(quest: dict, police: bool = False):
+    """(표시 이름, 사용 명령어 안내) — 경찰이면 경찰용 문구"""
+    if police and quest["key"] in DAILY_POLICE_VIEW:
+        v = DAILY_POLICE_VIEW[quest["key"]]
+        return v["name"], v["hint"]
+    return quest["name"], quest["hint"]
 DAILY_COOLDOWN_SEC = 24 * 60 * 60     # 1일 쿨타임 (완료 시각 기준)
 ATTENDANCE_TITLE_STACKS = 30          # 출석 스택이 이 값에 도달하면 칭호 획득 (한 달 = 30일)
 
@@ -1431,9 +1442,9 @@ ACHIEVEMENTS += _police_ach
 
 # 조직원 전용 명령(/임무 /전투 /보스 /네임드 /결투 /무기상점, 조직·레이드·구역, 일일 의뢰)으로만 달성되는 업적
 _MAFIA_ONLY_ACH = {
-    "b_mission_1", "b_mission_10", "b_fight_5", "b_weapon_1", "b_duel_1", "b_raid_1", "b_attend_3",
-    "s_mission_50", "s_streak_5", "s_hard_5", "s_fight_50", "s_named_2", "s_duel_10", "s_raid_10", "s_war_3",
-    "a_boss_1", "a_elite_1", "a_elite_all", "a_named_all", "a_mission_300", "a_attend_30", "a_streak_10", "a_boss_5", "a_raid_king", "a_duel_50", "a_war_conq_5", "a_parttime_mafia",
+    "b_mission_1", "b_mission_10", "b_weapon_1", "b_duel_1", "b_raid_1", 
+    "s_mission_50", "s_streak_5", "s_hard_5", "s_named_2", "s_duel_10", "s_raid_10", "s_war_3",
+    "a_named_all", "a_mission_300", "a_streak_10", "a_raid_king", "a_duel_50", "a_war_conq_5", "a_parttime_mafia",
 }
 for _a in ACHIEVEMENTS:
     _a.setdefault("role", "mafia" if _a["id"] in _MAFIA_ONLY_ACH else None)   # None = 공통
@@ -1570,7 +1581,7 @@ def get_daily_state(blob: dict, now: float = None) -> dict:
     blob["daily"] = d
     return d
 
-def daily_record(blob: dict, key: str, info: dict, now: float = None) -> str:
+def daily_record(blob: dict, key: str, info: dict, now: float = None, police: bool = False) -> str:
     """일일 의뢰 진행도를 1 올립니다. (blob 만 수정하므로 호출한 쪽에서 DB에 저장해야 합니다)
     의뢰 1개 완료 / 4개 전부 완료 시 안내 문구를, 아니면 빈 문자열을 돌려줍니다."""
     now = time.time() if now is None else now
@@ -1587,7 +1598,7 @@ def daily_record(blob: dict, key: str, info: dict, now: float = None) -> str:
 
     done = sum(1 for q in DAILY_QUESTS if d["progress"][q["key"]] >= q["target"])
     if done < len(DAILY_QUESTS):
-        return f"\n\n**[일일 의뢰]** {quest['name']} 완료! ({done}/{len(DAILY_QUESTS)})"
+        return f"\n\n**[일일 의뢰]** {daily_quest_view(quest, police)[0]} 완료! ({done}/{len(DAILY_QUESTS)})"
 
     # 4개 전부 완료 → 출석 1스택 + 1일 쿨타임
     s = blob["stats"]
@@ -1603,7 +1614,7 @@ _daily_notices = {}
 def take_daily_notice(user_id: int) -> str:
     return _daily_notices.pop(user_id, "")
 
-def build_daily_embed(user: discord.abc.User, blob: dict) -> discord.Embed:
+def build_daily_embed(user: discord.abc.User, blob: dict, is_police: bool = False) -> discord.Embed:
     now = time.time()
     d = get_daily_state(blob, now)
     stacks = blob["stats"]["attendance"]
@@ -1613,7 +1624,8 @@ def build_daily_embed(user: discord.abc.User, blob: dict) -> discord.Embed:
     for q in DAILY_QUESTS:
         cur = d["progress"][q["key"]]
         mark = "[완료]" if cur >= q["target"] else "[ ]"
-        lines.append(f"{mark} **{q['name']}** — `{cur}/{q['target']}`  ({q['hint']})")
+        q_name, q_hint = daily_quest_view(q, is_police)
+        lines.append(f"{mark} **{q_name}** — `{cur}/{q['target']}`  ({q_hint})")
 
     if cooling:
         status = (f"오늘의 의뢰를 모두 완료했습니다!\n"
@@ -1638,7 +1650,7 @@ def build_daily_embed(user: discord.abc.User, blob: dict) -> discord.Embed:
         embed.set_thumbnail(url=user.avatar.url)
     return embed
 
-@bot.tree.command(name="일퀘", description="[마피아 GM] 일일 의뢰 4개를 모두 완료하면 출석 1스택! (한 달 달성 시 칭호)")
+@bot.tree.command(name="일퀘", description="[조직원·경찰] 일일 의뢰 4개를 모두 완료하면 출석 1스택! (한 달 달성 시 칭호)")
 async def daily_quest_command(interaction: discord.Interaction):
     pass  # (한 파일 합본: 같은 파일 안에 있어 import 가 필요 없음)
     if not await check_maintenance(interaction): return
@@ -1647,7 +1659,7 @@ async def daily_quest_command(interaction: discord.Interaction):
 
     user = interaction.user
     blob = get_title_blob(get_user_data(user.id))
-    await interaction.response.send_message(embed=build_daily_embed(user, blob), ephemeral=True)
+    await interaction.response.send_message(embed=build_daily_embed(user, blob, is_police=_is_police(user)), ephemeral=True)
 
 # ==========================================
 # 주간 의뢰 (/주간)
@@ -10394,6 +10406,7 @@ def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n:
         s = blob["stats"]
 
         earned_money = earned_honor = fine = 0
+        daily_msg = ""
         if success:
             earned_money = random.randint(*op["reward"])
             earned_honor = event_honor(int(round(op["honor"] * police_bonuses(inv)["honor_mult"])))
@@ -10402,6 +10415,7 @@ def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n:
             s["police_ops"] += 1
             if op_key == "op_5":
                 s["police_ops_boss"] += 1
+            daily_msg = daily_record(blob, "mission", {**info, "money": money, "honor": honor}, police=True)   # 일일 의뢰(임무·작전)
         else:
             fine = min(money, op["fine"])
             money -= fine
@@ -10412,7 +10426,7 @@ def operation_resolve_sync(user_id: int, op_key: str, in_patrol: bool, wanted_n:
     return {"success": success, "rate": rate, "labels": labels, "money": money, "honor": honor,
             "earned_money": earned_money, "earned_honor": earned_honor, "fine": fine,
             "old_rank": old_rank, "new_rank": get_user_rank(honor, is_police=True),
-            "notice": format_new_titles(new_ids)}
+            "daily_msg": daily_msg, "notice": format_new_titles(new_ids)}
 
 class OperationSelect(discord.ui.Select):
     def __init__(self, owner: discord.Member):
@@ -10473,7 +10487,7 @@ class OperationSelect(discord.ui.Select):
                              f"**경찰 실적:** `+{res['earned_honor']} pt`\n\n"
                              f"**현재 직급:** `{res['new_rank']}`\n"
                              f"**보유 자금:** `${res['money']:,}`\n"
-                             f"**총 명예:** `{res['honor']} pt`{rank_up}{res['notice']}"),
+                             f"**총 명예:** `{res['honor']} pt`{rank_up}{res['daily_msg']}{res['notice']}"),
                 color=discord.Color.blue()
             )
         else:
@@ -11398,6 +11412,7 @@ async def info_command(interaction: discord.Interaction, keyword: str):
             "title": "시스템: /일퀘",
             "desc": "매일 주어지는 일일 의뢰 4개를 모두 완료하면 **출석 1스택**이 쌓입니다.\n"
                     + "".join(f"• {q['name']} {q['target']}회 ({q['hint']})\n" for q in DAILY_QUESTS)
+                    + "• **경찰:** 비밀 임무 의뢰는 `/작전` 성공으로 집계되고, NPC 전투(`/전투`)·도박·아르바이트는 조직원과 같습니다.\n"
                     + "• **쿨타임:** 4개를 모두 완료한 시각부터 24시간 뒤에 새 의뢰가 열립니다.\n"
                     f"• **보상:** 출석 {ATTENDANCE_TITLE_STACKS}스택 달성 시 {TITLES['attendance_month']['name']} 칭호",
         },
